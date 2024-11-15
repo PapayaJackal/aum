@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "aum"
+version = "0.1.0"
+description = "Tiny document full-text search engine"
+authors = ["Your Name <you@example.com>"]
+license = "WTFPL"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+tika-client = "^0.7.0"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+
+[tool.pytest.ini_options]
+addopts = "-v"
+testpaths = [
+    "tests"
+]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
