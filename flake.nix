@@ -39,9 +39,48 @@
         };
     in {
       checks = {
-        testPython311 = aum {pythonPkgs = pkgs.python311Packages;};
-        testPython312 = aum {pythonPkgs = pkgs.python312Packages;};
-        testPython313 = aum {pythonPkgs = pkgs.python312Packages;};
+        integration = let
+          guestSystem =
+            if pkgs.stdenv.hostPlatform.isLinux
+            then pkgs.stdenv.hostPlatform.system
+            else let
+              hostToGuest = {
+                "x86_64-darwin" = "x86_64-linux";
+                "aarch64-darwin" = "aarch64-linux";
+              };
+            in
+              hostToGuest.${pkgs.stdenv.hostPlatform.system};
+          integrationTest = pkgs.writeShellScript "aum-integration-test" ''
+            cd ${self.packages.${guestSystem}.default.src}
+            pytest -v
+          '';
+        in
+          pkgs.nixosTest {
+            name = "aum-integration-test";
+            nodes = {
+              machine = {
+                services.meilisearch.enable = true;
+                services.sonic-server.enable = true;
+
+                environment.systemPackages = with nixpkgs.legacyPackages.${guestSystem}; [
+                  (python3.withPackages (ps: [self.packages.${guestSystem}.default ps.pytest]))
+                  tika
+                ];
+              };
+            };
+            testScript = ''
+              with subtest("Wait for network"):
+                  machine.systemctl("start network-online.target")
+                  machine.wait_for_unit("network-online.target")
+
+              with subtest("Wait for search engine backend"):
+                  machine.wait_for_unit("meilisearch.service")
+                  machine.wait_for_unit("sonic-server.service")
+
+              with subtest("Run aum tests"):
+                  machine.succeed("${integrationTest}")
+            '';
+          };
         pre-commit-check = pre-commit-hooks.lib.${system}.run {
           src = ./.;
           hooks = {
@@ -51,6 +90,9 @@
             pylint.enable = true;
           };
         };
+        testPython311 = aum {pythonPkgs = pkgs.python311Packages;};
+        testPython312 = aum {pythonPkgs = pkgs.python312Packages;};
+        testPython313 = aum {pythonPkgs = pkgs.python312Packages;};
       };
 
       devShells.default = pkgs.mkShell {
