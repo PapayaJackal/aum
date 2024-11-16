@@ -9,6 +9,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.11"
 tika-client = "^0.7.0"
+meilisearch = "^0.31.6"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -18,6 +19,9 @@ pytest = "^8.3.3"
 addopts = "-v"
 testpaths = [
     "tests"
+]
+markers = [
+  "integration"
 ]
 
 [build-system]

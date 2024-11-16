@@ -20,6 +20,7 @@
           src = ./.;
 
           dependencies = with pythonPkgs; [
+            meilisearch
             poetry-core
             tika-client
           ];
@@ -27,6 +28,10 @@
           nativeCheckInputs = with pythonPkgs; [
             pytestCheckHook
             pkgs.tika
+          ];
+
+          disabledTests = [
+            "integration"
           ];
         };
     in {
