@@ -1,3 +1,4 @@
+# pylint: disable=W0621
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,7 +9,7 @@ from aum.meilisearch import MeilisearchBackend
 @pytest.fixture
 def meilisearch_backend():
     """Fixture to create an instance of MeilisearchBackend."""
-    with patch("meilisearch.Client") as mock_client:
+    with patch("meilisearch.Client") as _:
         yield MeilisearchBackend()
 
 

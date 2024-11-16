@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from aum.tika import TikaTextExtractor
 
 DATA_DIR = Path(__file__).parent / "data"

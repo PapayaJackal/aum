@@ -52,7 +52,8 @@ class SonicBackend(SearchEngineBackend):
             for document in documents:
                 send_command(
                     sock,
-                    f"PUSH documents {index_name} {document['id']} \"{escape_query(document['content'])}\"",
+                    "PUSH documents "
+                    + f"{index_name} {document['id']} \"{escape_query(document['content'])}\"",
                 )
                 read_line(sock)
 
@@ -67,7 +68,6 @@ class SonicBackend(SearchEngineBackend):
                 sock,
                 f'QUERY documents {index_name} "{escape_query(query)}" LIMIT({limit})',
             )
-            res = read_line(sock)
-            task_id = res.split(" ", 1)[1]
+            read_line(sock)
             event = read_line(sock)
             return event.split(" ")[3:]

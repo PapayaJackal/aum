@@ -2,7 +2,6 @@ import atexit
 import random
 import shutil
 import subprocess
-from pathlib import Path
 
 from tika_client import TikaClient
 
@@ -13,8 +12,8 @@ TIKA_PROCESSES = {}
 
 
 def __tika_cleanup():
-    for p in TIKA_PROCESSES:
-        TIKA_PROCESSES[p].kill()
+    for _, process in TIKA_PROCESSES.items():
+        process.kill()
 
 
 atexit.register(__tika_cleanup)
@@ -28,6 +27,7 @@ def tika_start_singleton(tika_host, tika_port):
     if f"{tika_host}:{tika_port}" in TIKA_PROCESSES:
         return TIKA_PROCESSES[f"{tika_host}:{tika_port}"]
 
+    # pylint: disable=R1732
     tika_process = subprocess.Popen(
         [__tika_resolve(), "-h", tika_host, "-p", str(tika_port)],
         stdout=subprocess.PIPE,
@@ -57,6 +57,6 @@ class TikaTextExtractor(TextExtractor):
         schema = "https" if use_tls else "http"
         self.tika_client = TikaClient(tika_url=f"{schema}://{tika_host}:{tika_port}")
 
-    def extract_text(self, file_path):
-        resp = self.tika_client.tika.as_text.from_file(file_path)
+    def extract_text(self, document_path):
+        resp = self.tika_client.tika.as_text.from_file(document_path)
         return (resp.data, resp.content)

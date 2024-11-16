@@ -14,22 +14,18 @@ class SearchEngineBackend(ABC):
     @abstractmethod
     def create_index(self, index_name):
         """Create a new index with the specified name."""
-        pass
 
     @abstractmethod
     def delete_index(self, index_name):
         """Delete the index with the specified name."""
-        pass
 
     @abstractmethod
     def index_documents(self, index_name, documents):
         """Index documents in the specified index."""
-        pass
 
     @abstractmethod
     def search(self, index_name, query, limit=10):
         """Search for documents in the specified index that match the given query."""
-        pass
 
 
 class TextExtractor(ABC):
@@ -37,4 +33,3 @@ class TextExtractor(ABC):
     @abstractmethod
     def extract_text(self, document_path):
         """Extract text from a document at the given path"""
-        pass
