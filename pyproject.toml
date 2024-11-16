@@ -15,6 +15,9 @@ meilisearch = "^0.31.6"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"
 
+[tool.poetry.scripts]
+aum = "aum:cli.main"
+
 [tool.pylint]
 disable = [
     "C0114",  # Missing module docstring
@@ -25,7 +28,6 @@ disable = [
 ]
 
 max-line-length = 100
-
 
 [tool.pytest.ini_options]
 addopts = "-v"

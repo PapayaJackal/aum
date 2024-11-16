@@ -1,10 +1,11 @@
+import json
 import socket
 
 from . import SearchEngineBackend
 
 
 def escape_query(query):
-    return query.replace('"', '\\"')
+    return json.dumps(str(query))
 
 
 def read_line(sock):
@@ -50,12 +51,11 @@ class SonicBackend(SearchEngineBackend):
             send_command(sock, f"START ingest {self.password}")
             read_line(sock)
             for document in documents:
-                send_command(
-                    sock,
+                msg = (
                     "PUSH documents "
-                    + f"{index_name} {document['id']} \"{escape_query(document['content'])}\"",
+                    + f"{index_name} {document['id']} {escape_query(document['content'])}"
                 )
-                read_line(sock)
+                send_command(sock, msg)
 
     def search(self, index_name, query, limit=20):
         query = query.replace('"', '\\"')
@@ -66,7 +66,7 @@ class SonicBackend(SearchEngineBackend):
             read_line(sock)
             send_command(
                 sock,
-                f'QUERY documents {index_name} "{escape_query(query)}" LIMIT({limit})',
+                f"QUERY documents {index_name} {escape_query(query)} LIMIT({limit})",
             )
             read_line(sock)
             event = read_line(sock)

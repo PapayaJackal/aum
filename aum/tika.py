@@ -45,18 +45,18 @@ def tika_start_singleton(tika_host, tika_port):
 
 class TikaTextExtractor(TextExtractor):
 
-    def __init__(
-        self, tika_start=True, tika_port=None, tika_host="127.0.0.1", use_tls=False
-    ):
-        if tika_port is None:
-            tika_port = RANDOM_PORT
-
-        if tika_start:
-            tika_start_singleton(tika_host, tika_port)
-
-        schema = "https" if use_tls else "http"
-        self.tika_client = TikaClient(tika_url=f"{schema}://{tika_host}:{tika_port}")
+    def __init__(self, tika_url=None):
+        if tika_url is None:
+            tika_start_singleton("127.0.0.1", RANDOM_PORT)
+            tika_url = f"http://127.0.0.1:{RANDOM_PORT}"
+        self.tika_client = TikaClient(tika_url=tika_url)
 
     def extract_text(self, document_path):
         resp = self.tika_client.tika.as_text.from_file(document_path)
-        return (resp.data, resp.content)
+
+        metadata = {}
+        for k, v in resp.data.items():
+            if not k.startswith("X-"):
+                metadata[k] = v
+
+        return (metadata, resp.content)

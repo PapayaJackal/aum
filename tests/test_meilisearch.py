@@ -10,7 +10,7 @@ from aum.meilisearch import MeilisearchBackend
 def meilisearch_backend():
     """Fixture to create an instance of MeilisearchBackend."""
     with patch("meilisearch.Client") as _:
-        yield MeilisearchBackend()
+        yield MeilisearchBackend("http://127.0.0.1:7700", "aMasterKey")
 
 
 def test_create_index(meilisearch_backend):

@@ -4,8 +4,8 @@ from . import SearchEngineBackend
 
 
 class MeilisearchBackend(SearchEngineBackend):
-    def __init__(self, *args, **kwargs):
-        self.meilisearch = meilisearch.Client(*args, **kwargs)
+    def __init__(self, host, master_key):
+        self.meilisearch = meilisearch.Client(host, master_key)
 
     def create_index(self, index_name):
         task = self.meilisearch.create_index(index_name, {"primaryKey": "id"})
