@@ -1,3 +1,4 @@
+import atexit
 import random
 import shutil
 import subprocess
@@ -9,6 +10,14 @@ from . import TextExtractor
 
 RANDOM_PORT = random.randint(1024, 65535)
 TIKA_PROCESSES = {}
+
+
+def __tika_cleanup():
+    for p in TIKA_PROCESSES:
+        TIKA_PROCESSES[p].kill()
+
+
+atexit.register(__tika_cleanup)
 
 
 def __tika_resolve():
