@@ -30,6 +30,8 @@
             uvicorn
           ];
 
+          propagatedBuildInputs = [pkgs.tika];
+
           nativeCheckInputs = with pythonPkgs; [
             pytestCheckHook
             pkgs.tika
