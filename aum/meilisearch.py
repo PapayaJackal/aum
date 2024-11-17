@@ -1,6 +1,7 @@
 import meilisearch
 
 from . import SearchEngineBackend
+from .util import decode_base64, encode_base64
 
 
 class MeilisearchBackend(SearchEngineBackend):
@@ -16,8 +17,14 @@ class MeilisearchBackend(SearchEngineBackend):
         self.meilisearch.wait_for_task(task.task_uid)
 
     def index_documents(self, index_name, documents):
+        for document in documents:
+            document["id"] = encode_base64(document["id"])
+
         task = self.meilisearch.index(index_name).add_documents(documents)
         self.meilisearch.wait_for_task(task.task_uid)
 
     def search(self, index_name, query, limit=20):
-        return self.meilisearch.index(index_name).search(query, {"limit": limit})
+        res = self.meilisearch.index(index_name).search(query, {"limit": limit})
+        for hit in res["hits"]:
+            hit["id"] = decode_base64(hit["id"])
+        return res

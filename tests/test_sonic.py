@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aum.sonic import SonicBackend
+from aum.util import encode_base64
 
 
 @patch("socket.socket")
@@ -41,7 +42,7 @@ def test_index_documents(mock_send_command, mock_read_line, mock_socket):
     ]
 
     backend = SonicBackend("localhost", 1491, "SecretPassword")
-    documents = [{"id": 1, "content": "test document"}]
+    documents = [{"id": "test/test.docx", "content": "test document"}]
 
     backend.index_documents("test_index", documents)
 
@@ -49,7 +50,8 @@ def test_index_documents(mock_send_command, mock_read_line, mock_socket):
     mock_instance.connect.assert_called_once_with(("localhost", 1491))
     mock_send_command.assert_any_call(mock_instance, "START ingest SecretPassword")
     mock_send_command.assert_any_call(
-        mock_instance, 'PUSH documents test_index 1 "test document"'
+        mock_instance,
+        f'PUSH documents test_index {encode_base64("test/test.docx")} "test document"',
     )
 
 
@@ -63,7 +65,7 @@ def test_search(mock_send_command, mock_read_line, mock_socket):
         "CONNECTED <sonic-server v1.0.0>",
         "STARTED search protocol(1) buffer(20000)",
         "PENDING Bt2m2gYa",
-        "EVENT QUERY Bt2m2gYa result1 result2",
+        f"EVENT QUERY Bt2m2gYa {encode_base64('result1')} {encode_base64('result2')}",
     ]
 
     backend = SonicBackend("localhost", 1491, "SecretPassword")
@@ -76,7 +78,8 @@ def test_search(mock_send_command, mock_read_line, mock_socket):
     mock_send_command.assert_any_call(
         mock_instance, 'QUERY documents test_index "test query" LIMIT(20)'
     )
-    assert results == ["result1", "result2"]
+    ids_in_results = [x["id"] for x in results["hits"]]
+    assert ids_in_results == ["result1", "result2"]
 
 
 @pytest.mark.integration
@@ -102,4 +105,4 @@ def test_integration_sonic_backend(request):
 
     # Check if the results contain the indexed document
     assert len(results) > 0
-    assert documents[0]["id"] in results
+    assert "document:1" == results["hits"][0]["id"]

@@ -1,7 +1,9 @@
 import json
 import socket
+import time
 
 from . import SearchEngineBackend
+from .util import decode_base64, encode_base64
 
 
 def escape_query(query):
@@ -51,14 +53,17 @@ class SonicBackend(SearchEngineBackend):
             send_command(sock, f"START ingest {self.password}")
             read_line(sock)
             for document in documents:
+                document["id"] = encode_base64(document["id"])
                 msg = (
                     "PUSH documents "
                     + f"{index_name} {document['id']} {escape_query(document['content'])}"
                 )
                 send_command(sock, msg)
+                read_line(sock)
 
     def search(self, index_name, query, limit=20):
         query = query.replace('"', '\\"')
+        start_time = time.time()
         with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
             sock.connect((self.host, self.port))
             read_line(sock)
@@ -70,4 +75,13 @@ class SonicBackend(SearchEngineBackend):
             )
             read_line(sock)
             event = read_line(sock)
-            return event.split(" ")[3:]
+        end_time = time.time()
+        results = [{"id": decode_base64(x)} for x in event.split(" ")[3:]]
+        return {
+            "hits": results,
+            "offset": 0,
+            "limit": limit,
+            "estimatedTotalHits": None,
+            "processingTimeMs": int((end_time - start_time) * 1000),
+            "query": query,
+        }

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aum.meilisearch import MeilisearchBackend
+from aum.util import encode_base64
 
 
 @pytest.fixture
@@ -48,7 +49,10 @@ def test_delete_index(meilisearch_backend):
 def test_index_documents(meilisearch_backend):
     """Test the index_documents method."""
     index_name = "test_index"
-    documents = [{"id": 1, "title": "Document 1"}, {"id": 2, "title": "Document 2"}]
+    documents = [
+        {"id": "test/test.docx", "title": "Document 1"},
+        {"id": "test/test2.docx", "title": "Document 2"},
+    ]
 
     mock_client_instance = meilisearch_backend.meilisearch
     mock_task = MagicMock()
@@ -58,7 +62,10 @@ def test_index_documents(meilisearch_backend):
     meilisearch_backend.index_documents(index_name, documents)
 
     mock_client_instance.index(index_name).add_documents.assert_called_once_with(
-        documents
+        [
+            {"id": encode_base64("test/test.docx"), "title": "Document 1"},
+            {"id": encode_base64("test/test2.docx"), "title": "Document 2"},
+        ]
     )
     mock_client_instance.wait_for_task.assert_called_once_with(mock_task.task_uid)
 
@@ -70,7 +77,10 @@ def test_search(meilisearch_backend):
     limit = 20
 
     mock_client_instance = meilisearch_backend.meilisearch
-    mock_search_result = {"hits": [{"id": 1, "title": "Document 1"}], "limit": limit}
+    mock_search_result = {
+        "hits": [{"id": encode_base64("test/test.docx"), "title": "Document 1"}],
+        "limit": limit,
+    }
     mock_client_instance.index(index_name).search.return_value = mock_search_result
 
     result = meilisearch_backend.search(index_name, query, limit)
@@ -78,7 +88,10 @@ def test_search(meilisearch_backend):
     mock_client_instance.index(index_name).search.assert_called_once_with(
         query, {"limit": limit}
     )
-    assert result == mock_search_result
+    assert result == {
+        "hits": [{"id": "test/test.docx", "title": "Document 1"}],
+        "limit": limit,
+    }
 
 
 @pytest.mark.integration
@@ -101,8 +114,8 @@ def test_integration_meilisearch_backend(request):
 
     # Index some documents
     documents = [
-        {"id": 1, "title": "First Document"},
-        {"id": 2, "title": "Second Document"},
+        {"id": "test/test.docx", "title": "First Document"},
+        {"id": "test/test2.docx", "title": "Second Document"},
     ]
     backend.index_documents(index_name, documents)
 
@@ -112,6 +125,7 @@ def test_integration_meilisearch_backend(request):
 
     # Assert that the search results contain the expected document
     assert len(results["hits"]) > 0
+    assert results["hits"][0]["id"] == "test/test.docx"
     assert results["hits"][0]["title"] == "First Document"
 
     backend.meilisearch.delete_index(index_name)

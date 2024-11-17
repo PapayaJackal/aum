@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aum.cli import create_index, decode_base64, encode_base64
+from aum.cli import create_index
 from aum.meilisearch import MeilisearchBackend
 from aum.sonic import SonicBackend
 from aum.tika import TikaTextExtractor
@@ -24,17 +24,17 @@ def test_create_index():
 
     mock_search_engine.index_documents.assert_any_call(
         "test_index",
-        [{"id": encode_base64("test.docx"), "metadata": {}, "content": TEST_STRING}],
+        [{"id": "test.docx", "metadata": {}, "content": TEST_STRING}],
     )
     mock_search_engine.index_documents.assert_any_call(
         "test_index",
-        [{"id": encode_base64("test.pdf"), "metadata": {}, "content": TEST_STRING}],
+        [{"id": "test.pdf", "metadata": {}, "content": TEST_STRING}],
     )
     mock_search_engine.index_documents.assert_any_call(
         "test_index",
         [
             {
-                "id": encode_base64("test/test.txt"),
+                "id": "test/test.txt",
                 "metadata": {},
                 "content": TEST_STRING,
             }
@@ -57,7 +57,7 @@ def test_create_index_integration_meilisearch(request):
     results = search_engine.search("test_index", TEST_STRING)["hits"]
     assert len(results) == 3
 
-    ids_in_results = [decode_base64(x["id"]) for x in results]
+    ids_in_results = [x["id"] for x in results]
     assert "test.docx" in ids_in_results
     assert "test.pdf" in ids_in_results
     assert "test/test.txt" in ids_in_results
@@ -75,10 +75,10 @@ def test_create_index_integration_sonic(request):
 
     create_index(search_engine, text_extractor, "test_index", TEST_DIRECTORY)
 
-    results = search_engine.search("test_index", TEST_STRING)
-    assert len(results) == 3
+    results = search_engine.search("test_index", TEST_STRING)["hits"]
+    ids_in_results = [x["id"] for x in results]
+    assert len(ids_in_results) == 3
 
-    ids_in_results = [decode_base64(x) for x in results]
     assert "test.docx" in ids_in_results
     assert "test.pdf" in ids_in_results
     assert "test/test.txt" in ids_in_results

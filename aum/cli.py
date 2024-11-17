@@ -1,9 +1,11 @@
 import argparse
-import base64
 import logging
 import os
 from pathlib import Path
 
+import uvicorn
+
+from .api import app_init
 from .dirwalk import dirwalk
 from .meilisearch import MeilisearchBackend
 from .sonic import SonicBackend
@@ -14,31 +16,14 @@ logging.basicConfig(
 )
 
 
-def encode_base64(input_string):
-    output_bytes = base64.urlsafe_b64encode(input_string.encode("utf-8"))
-    output_string = output_bytes.decode("ascii")
-    return output_string.rstrip("=")
-
-
-def decode_base64(input_string):
-    input_bytes = input_string.encode("ascii")
-    input_len = len(input_bytes)
-    padding = b"=" * (3 - ((input_len + 3) % 4))
-
-    # Passing altchars here allows decoding both standard and urlsafe base64
-    output_bytes = base64.b64decode(input_bytes + padding, altchars=b"-_")
-    return output_bytes.decode("utf-8")
-
-
 def create_index(search_engine, text_extractor, index_name, directory):
     search_engine.create_index(index_name)
 
     for file in dirwalk(directory):
         logging.info("indexing %s", file)
 
-        file_id = encode_base64(file)
         metadata, content = text_extractor.extract_text(directory / file)
-        document = {"id": file_id, "metadata": metadata, "content": content}
+        document = {"id": file, "metadata": metadata, "content": content}
         search_engine.index_documents(index_name, [document])
 
 
@@ -103,6 +88,21 @@ def main():
         "serve", help="Serve the search engine web interface"
     )
     serve_parser.add_argument("index_name", type=str, help="Name of the index to serve")
+    serve_parser.add_argument(
+        "--host",
+        type=str,
+        default=os.environ.get("AUM_HOST", "127.0.0.1"),
+        help="Host to listen on (default: 127.0.0.1)",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=os.environ.get("AUM_PORT", "8000"),
+        help="Port to listen on (default: 8000)",
+    )
+    serve_parser.add_argument(
+        "--debug", action="store_true", help="Enable debugging mode"
+    )
 
     args = parser.parse_args()
 
@@ -126,4 +126,10 @@ def main():
         text_extractor = TikaTextExtractor(args.tika_url)
         create_index(search_engine, text_extractor, args.index_name, args.directory)
     elif args.command == "serve":
-        raise NotImplementedError
+        app = app_init(search_engine, args.index_name, debug=args.debug)
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level="debug" if args.debug else "info",
+        )

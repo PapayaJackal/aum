@@ -174,6 +174,20 @@ files = [
 ]
 
 [[package]]
+name = "click"
+version = "8.1.7"
+description = "Composable command line interface toolkit"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "click-8.1.7-py3-none-any.whl", hash = "sha256:ae74fb96c20a0277a1d615f1e4d73c8414f5a98db8b799a7931d1582f3390c28"},
+    {file = "click-8.1.7.tar.gz", hash = "sha256:ca9853ad459e787e2192211578cc907e7594e294c7ccc834310722b41b9ca6de"},
+]
+
+[package.dependencies]
+colorama = {version = "*", markers = "platform_system == \"Windows\""}
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 description = "Cross-platform colored terminal text."
@@ -197,13 +211,13 @@ files = [
 
 [[package]]
 name = "httpcore"
-version = "1.0.6"
+version = "1.0.7"
 description = "A minimal low-level HTTP client."
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "httpcore-1.0.6-py3-none-any.whl", hash = "sha256:27b59625743b85577a8c0e10e55b50b5368a4f2cfe8cc7bcfa9cf00829c2682f"},
-    {file = "httpcore-1.0.6.tar.gz", hash = "sha256:73f6dbd6eb8c21bbf7ef8efad555481853f5f6acdeaff1edb0694289269ee17f"},
+    {file = "httpcore-1.0.7-py3-none-any.whl", hash = "sha256:a3fff8f43dc260d5bd363d9f9cf1830fa3a458b332856f34282de498ed420edd"},
+    {file = "httpcore-1.0.7.tar.gz", hash = "sha256:8551cb62a169ec7162ac7be8d4817d561f60e08eaa485234898414bb5a8a0b4c"},
 ]
 
 [package.dependencies]
@@ -484,6 +498,23 @@ files = [
 ]
 
 [[package]]
+name = "starlette"
+version = "0.39.2"
+description = "The little ASGI library that shines."
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "starlette-0.39.2-py3-none-any.whl", hash = "sha256:134dd6deb655a9775991d352312d53f1879775e5cc8a481f966e83416a2c3f71"},
+    {file = "starlette-0.39.2.tar.gz", hash = "sha256:caaa3b87ef8518ef913dac4f073dea44e85f73343ad2bdc17941931835b2a26a"},
+]
+
+[package.dependencies]
+anyio = ">=3.4.0,<5"
+
+[package.extras]
+full = ["httpx (>=0.22.0)", "itsdangerous", "jinja2", "python-multipart (>=0.0.7)", "pyyaml"]
+
+[[package]]
 name = "tika-client"
 version = "0.7.0"
 description = "A modern REST client for Apache Tika server"
@@ -525,7 +556,25 @@ h2 = ["h2 (>=4,<5)"]
 socks = ["pysocks (>=1.5.6,!=1.5.7,<2.0)"]
 zstd = ["zstandard (>=0.18.0)"]
 
+[[package]]
+name = "uvicorn"
+version = "0.31.1"
+description = "The lightning-fast ASGI server."
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "uvicorn-0.31.1-py3-none-any.whl", hash = "sha256:adc42d9cac80cf3e51af97c1851648066841e7cfb6993a4ca8de29ac1548ed41"},
+    {file = "uvicorn-0.31.1.tar.gz", hash = "sha256:f5167919867b161b7bcaf32646c6a94cdbd4c3aa2eb5c17d36bb9aa5cfd8c493"},
+]
+
+[package.dependencies]
+click = ">=7.0"
+h11 = ">=0.8"
+
+[package.extras]
+standard = ["colorama (>=0.4)", "httptools (>=0.5.0)", "python-dotenv (>=0.13)", "pyyaml (>=5.1)", "uvloop (>=0.14.0,!=0.15.0,!=0.15.1)", "watchfiles (>=0.13)", "websockets (>=10.4)"]
+
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "2a72f7473820947ac33526136ead866caadc835d073aa091fdc299a0c1e21346"
+content-hash = "c0233a0ae964cac1a85b757645701c8b9a115a3dc7239462deb499f80e63a11f"

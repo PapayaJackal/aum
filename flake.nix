@@ -25,7 +25,9 @@
           dependencies = with pythonPkgs; [
             meilisearch
             poetry-core
+            starlette
             tika-client
+            uvicorn
           ];
 
           nativeCheckInputs = with pythonPkgs; [
