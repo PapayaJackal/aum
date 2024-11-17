@@ -1,1 +1,1 @@
-Tiny document full-text search engine.
+# Tiny document full-text search engine
