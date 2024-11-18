@@ -44,6 +44,13 @@ def test_search_missing_query():
     assert response.json() == {"error": 'Query parameter "q" is required.'}
 
 
+def test_serves_static():
+    client = TestClient(app_init(MagicMock(), "test_index"))
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "<html" in response.text
+
+
 @pytest.mark.integration
 def test_search_meilisearch_integration(request):
     search_engine = MeilisearchBackend("http://127.0.0.1:7700", "aMasterKey")

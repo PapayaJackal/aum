@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ॐ</title>
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"
+    ></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f4f4f4;
+      }
+
+      .search-container {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0px;
+        width: 100%;
+        position: fixed; /* Make it fixed to the top */
+        top: 0;
+        left: 0;
+        right: 0;
+        background-color: white; /* Optional: background color */
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); /* Optional: shadow for better visibility */
+      }
+
+      .search-container h1 {
+        margin-left: 10px;
+      }
+
+      .search-container button {
+        padding: 10px 15px;
+        border: none;
+        background-color: #007bff;
+        color: white;
+        border-radius: 4px;
+        cursor: pointer;
+        margin: 10px;
+      }
+
+      .search-container button:hover {
+        background-color: #0056b3; /* Darker shade on hover */
+      }
+
+      .search-container input[type="search"] {
+        flex-grow: 1;
+        margin: 0 10px;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+
+      .result-container {
+        margin: 80px 50px;
+      }
+
+      .result h3 {
+        padding-bottom: 5px;
+      }
+
+      .result {
+        padding-bottom: 25px;
+      }
+    </style>
+  </head>
+  <body x-data="searchApp()">
+    <div class="search-container">
+      <h1>ॐ</h1>
+      <input
+        type="search"
+        x-model="query"
+        @keyup.enter="search"
+        @input="search"
+        placeholder="Type your search..."
+      />
+      <button @click="search">Search</button>
+    </div>
+
+    <div class="result-container">
+      <div class="results" x-show="results.length > 0">
+        <template x-for="result in results" :key="result.id">
+          <div class="result">
+            <h3 x-text="result.id"></h3>
+            <p x-text="result.content"></p>
+          </div>
+        </template>
+      </div>
+
+      <div x-show="error" style="color: red">
+        <p x-text="error"></p>
+      </div>
+    </div>
+
+    <script>
+      function searchApp() {
+        return {
+          query: "",
+          results: [],
+          error: "",
+          async search() {
+            this.results = [];
+            this.error = "";
+
+            if (this.query.trim() === "") {
+              return;
+            }
+
+            try {
+              const response = await fetch(
+                `/search?q=${encodeURIComponent(this.query)}`,
+              );
+              if (!response.ok) {
+                throw new Error("Network response was not ok");
+              }
+              const data = await response.json();
+              this.results = data.hits;
+            } catch (err) {
+              this.error = "An error occurred: " + err.message;
+            }
+          },
+        };
+      }
+    </script>
+  </body>
+</html>

@@ -51,10 +51,11 @@
         programs.black.enable = true;
         programs.isort.enable = true;
         programs.mdformat.enable = true;
-        settings.formatter.mdformat.options = [ "--wrap" "80" ];
         programs.nixpkgs-fmt.enable = true;
+        programs.prettier.enable = true;
         programs.toml-sort.enable = true;
         programs.yamlfmt.enable = true;
+        settings.formatter.mdformat.options = [ "--wrap" "80" ];
       });
     in
     {
