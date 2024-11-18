@@ -93,6 +93,41 @@ aum serve index_name
 After starting the server, you can access the web interface in your browser at
 [http://localhost:8000](http://localhost:8080).
 
+### Using docker-compose
+
+If you prefer to run the project using Docker, you can use the provided
+docker-compose.yml file. This method simplifies the setup process by
+containerizing the application and its dependencies.
+
+Clone the repository if you haven't already:
+
+```bash
+# Clone the repository
+git clone https://github.com/PapayaJackal/aum.git
+cd aum
+```
+
+Edit the docker-compose.yml file to mount your data directory. Open the
+docker-compose.yml file in your preferred text editor and locate the service
+definition for the application. You will need to add a volume mapping to mount
+your local data directory to the container.
+
+```yaml
+volumes:
+  - .:/app
+  # Change this path to the directory where your data is stored
+  - ./tests/data/:/data:ro
+```
+
+Build and run the containers using Docker Compose:
+
+```bash
+docker-compose up
+```
+
+Once the containers are up and running, you can access the web interface in your
+browser at [http://localhost:8000](http://localhost:8000).
+
 ## Contributing
 
 While ॐ is primarily a personal project, contributions are always welcome! If

@@ -1,0 +1,36 @@
+services:
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    environment:
+      MEILI_MASTER_KEY: aMasterKey
+  #sonic:
+  #  image: valeriansaliou/sonic:v1.4.9
+  #  volumes:
+  #    - ./tests/sonic.cfg:/etc/sonic.cfg
+  #  environment:
+  #    - SONIC_PASSWORD=SecretPassword
+  tika:
+    image: apache/tika:3.0.0.0
+  ### Our services
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      # Change this path to the directory where your data is stored
+      - ./tests/data/:/data:ro
+    environment:
+      - AUM_BACKEND=meilisearch
+      - AUM_HOST=0.0.0.0
+      - AUM_MEILISEARCH_URL=http://meilisearch:7700
+      - AUM_MEILISEARCH_MASTER_KEY=aMasterKey
+      - AUM_SONIC_HOST=sonic
+      - AUM_SONIC_PORT=1491
+      - AUM_SONIC_PASSWORD=SecretPassword
+      - AUM_TIKA_URL=http://tika:9998
+    ports:
+      - "8000:8000"
+    depends_on:
+      - meilisearch
+      #- sonic
