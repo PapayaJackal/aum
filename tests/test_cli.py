@@ -44,7 +44,7 @@ def test_create_index():
 
 @pytest.mark.integration
 def test_create_index_integration_meilisearch(request):
-    text_extractor = TikaTextExtractor()
+    text_extractor = TikaTextExtractor("test_index")
     search_engine = MeilisearchBackend("http://127.0.0.1:7700", "aMasterKey")
 
     def cleanup():
@@ -65,7 +65,7 @@ def test_create_index_integration_meilisearch(request):
 
 @pytest.mark.integration
 def test_create_index_integration_sonic(request):
-    text_extractor = TikaTextExtractor()
+    text_extractor = TikaTextExtractor("test_index")
     search_engine = SonicBackend("::1", 1491, "SecretPassword")
 
     def cleanup():

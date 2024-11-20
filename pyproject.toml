@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "aum"
-version = "0.1.0"
+version = "0.2.0"
 description = "Tiny document full-text search engine"
 authors = ["Your Name <you@example.com>"]
 license = "WTFPL"
@@ -16,6 +16,7 @@ meilisearch = "^0.31.6"
 starlette = "^0.39.2"
 tika-client = "^0.7.0"
 uvicorn = "^0.31.0"
+prometheus-client = "^0.21.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"

@@ -2,6 +2,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
+from prometheus_client import REGISTRY
 from starlette.testclient import TestClient
 
 from aum.api import app_init
@@ -25,6 +26,18 @@ def test_search_success():
         "processingTimeMs": 35,
         "query": query,
     }
+    request_count_before = (
+        REGISTRY.get_sample_value(
+            "http_request_total", {"method": "GET", "endpoint": "/search"}
+        )
+        or 0
+    )
+    search_count_before = (
+        REGISTRY.get_sample_value(
+            "http_request_total", {"method": "GET", "endpoint": "/search"}
+        )
+        or 0
+    )
     mock_search_engine = MagicMock()
     mock_search_engine.search.return_value = mock_result
     app = app_init(mock_search_engine, "test_index")
@@ -32,9 +45,62 @@ def test_search_success():
 
     response = client.get(f"/search?q={query}")
 
+    request_count_after = REGISTRY.get_sample_value(
+        "http_request_total", {"method": "GET", "endpoint": "/search"}
+    )
+    search_count_after = REGISTRY.get_sample_value(
+        "http_request_total", {"method": "GET", "endpoint": "/search"}
+    )
     assert response.status_code == 200
     assert mock_result == response.json()
     mock_search_engine.search.assert_called_once_with("test_index", query)
+    assert (request_count_after - request_count_before) == 1.0
+    assert (search_count_after - search_count_before) == 1.0
+
+
+def test_search_metrics():
+    query = "example"
+    mock_result = {
+        "hits": [
+            {
+                "id": 2742,
+                "title": "Naked Lunch",
+                "release_date": "1991-12-27",
+            },
+        ],
+        "offset": 0,
+        "limit": 20,
+        "estimatedTotalHits": 976,
+        "processingTimeMs": 35,
+        "query": query,
+    }
+    request_count_before = (
+        REGISTRY.get_sample_value(
+            "http_request_total", {"method": "GET", "endpoint": "/search"}
+        )
+        or 0
+    )
+    search_count_before = (
+        REGISTRY.get_sample_value(
+            "aum_search_query_total", {"index_name": "test_index"}
+        )
+        or 0
+    )
+    mock_search_engine = MagicMock()
+    mock_search_engine.search.return_value = mock_result
+    app = app_init(mock_search_engine, "test_index")
+    client = TestClient(app)
+
+    _ = client.get(f"/search?q={query}")
+
+    request_count_after = REGISTRY.get_sample_value(
+        "http_request_total", {"method": "GET", "endpoint": "/search"}
+    )
+    search_count_after = REGISTRY.get_sample_value(
+        "aum_search_query_total", {"index_name": "test_index"}
+    )
+    assert (request_count_after - request_count_before) == 1.0
+    assert (search_count_after - search_count_before) == 1.0
 
 
 def test_search_missing_query():
@@ -49,6 +115,16 @@ def test_serves_static():
     response = client.get("/")
     assert response.status_code == 200
     assert "<html" in response.text
+
+
+def test_metrics():
+    client = TestClient(app_init(MagicMock(), "test_index"))
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "aum_search_query_total" in response.text
+    assert "http_exception_total" in response.text
+    assert "http_request_latency_bucket" in response.text
+    assert "http_request_total" in response.text
 
 
 @pytest.mark.integration

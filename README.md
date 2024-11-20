@@ -128,6 +128,18 @@ docker-compose up
 Once the containers are up and running, you can access the web interface in your
 browser at [http://localhost:8000](http://localhost:8000).
 
+### Prometheus Integration
+
+ॐ integrates with [Prometheus](https://prometheus.io/) for monitoring and
+metrics collection. It exposes various metrics at the `/metrics` endpoint,
+allowing users to track performance and health in real-time. Key metrics include
+HTTP request counts, processing times, and error rates for components like
+Apache Tika, Meilisearch, and Sonic. Metrics can also be exposed on a
+configurable HTTP port during indexing documents.
+
+For more information, refer to the
+[Prometheus documentation](https://github.com/PapayaJackal/aum/blob/main/docs/PROMETHEUS.md).
+
 ## Contributing
 
 While ॐ is primarily a personal project, contributions are always welcome! If

@@ -1,9 +1,11 @@
 import argparse
 import logging
 import os
+import time
 from pathlib import Path
 
 import uvicorn
+from prometheus_client import start_http_server
 
 from .api import app_init
 from .dirwalk import dirwalk
@@ -83,6 +85,12 @@ def main():
         default=os.environ.get("AUM_TIKA_URL", None),
         help="URL of the Tika server (default: starts a local instance if not specified).",
     )
+    parser.add_argument(
+        "--metrics-port",
+        type=int,
+        default=os.environ.get("AUM_METRICS_PORT", None),
+        help="Port to serve Prometheus metrics (default: disabled)",
+    )
 
     serve_parser = subparsers.add_parser(
         "serve", help="Serve the search engine web interface"
@@ -123,8 +131,21 @@ def main():
 
     if args.command == "index":
         logging.info("I'm an indexing worker process using Apache Tika")
-        text_extractor = TikaTextExtractor(args.tika_url)
+        if args.metrics_port:
+            logging.info(
+                "Starting prometheus metrics port on port %d", args.metrics_port
+            )
+            start_http_server(args.metrics_port)
+        else:
+            logging.info(
+                "Prometheus metrics port disabled."
+                " Set --metrics-port or AUM_METRICS_PORT to monitor indexing progress."
+            )
+        text_extractor = TikaTextExtractor(args.index_name, args.tika_url)
         create_index(search_engine, text_extractor, args.index_name, args.directory)
+        if args.metrics_port:
+            logging.info("Done indexing. Waiting for prometheus before exiting.")
+            time.sleep(15)
     elif args.command == "serve":
         app = app_init(search_engine, args.index_name, debug=args.debug)
         uvicorn.run(

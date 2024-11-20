@@ -30,6 +30,7 @@
           dependencies = with pythonPkgs; [
             meilisearch
             poetry-core
+            prometheus-client
             starlette
             tika-client
             uvicorn
@@ -114,7 +115,7 @@
         };
         testPython311 = aum { pythonPkgs = pkgs.python311Packages; };
         testPython312 = aum { pythonPkgs = pkgs.python312Packages; };
-        testPython313 = aum { pythonPkgs = pkgs.python312Packages; };
+        #testPython313 = aum { pythonPkgs = pkgs.python313Packages; };
       };
 
       devShells.default = pkgs.mkShell {

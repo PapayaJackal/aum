@@ -2,6 +2,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from prometheus_client import REGISTRY
 
 from aum.meilisearch import MeilisearchBackend
 from aum.util import encode_base64
@@ -22,13 +23,23 @@ def test_create_index(meilisearch_backend):
     mock_task = MagicMock()
     mock_task.task_uid = 1
     mock_client_instance.create_index.return_value = mock_task
+    create_counter_before = (
+        REGISTRY.get_sample_value(
+            "meilisearch_index_create_total", {"index_name": index_name}
+        )
+        or 0.0
+    )
 
     meilisearch_backend.create_index(index_name)
 
+    create_counter_after = REGISTRY.get_sample_value(
+        "meilisearch_index_create_total", {"index_name": index_name}
+    )
     mock_client_instance.create_index.assert_called_once_with(
         index_name, {"primaryKey": "id"}
     )
     mock_client_instance.wait_for_task.assert_called_once_with(mock_task.task_uid)
+    assert (create_counter_after - create_counter_before) == 1.0
 
 
 def test_delete_index(meilisearch_backend):
@@ -39,11 +50,21 @@ def test_delete_index(meilisearch_backend):
     mock_task = MagicMock()
     mock_task.task_uid = 1
     mock_client_instance.delete_index.return_value = mock_task
+    delete_counter_before = (
+        REGISTRY.get_sample_value(
+            "meilisearch_index_delete_total", {"index_name": index_name}
+        )
+        or 0.0
+    )
 
     meilisearch_backend.delete_index(index_name)
 
+    delete_counter_after = REGISTRY.get_sample_value(
+        "meilisearch_index_delete_total", {"index_name": index_name}
+    )
     mock_client_instance.delete_index.assert_called_once_with(index_name)
     mock_client_instance.wait_for_task.assert_called_once_with(mock_task.task_uid)
+    assert (delete_counter_after - delete_counter_before) == 1.0
 
 
 def test_index_documents(meilisearch_backend):
@@ -58,9 +79,18 @@ def test_index_documents(meilisearch_backend):
     mock_task = MagicMock()
     mock_task.task_uid = 1
     mock_client_instance.index(index_name).add_documents.return_value = mock_task
+    index_counter_before = (
+        REGISTRY.get_sample_value(
+            "meilisearch_document_index_total", {"index_name": index_name}
+        )
+        or 0.0
+    )
 
     meilisearch_backend.index_documents(index_name, documents)
 
+    index_counter_after = REGISTRY.get_sample_value(
+        "meilisearch_document_index_total", {"index_name": index_name}
+    )
     mock_client_instance.index(index_name).add_documents.assert_called_once_with(
         [
             {"id": encode_base64("test/test.docx"), "title": "Document 1"},
@@ -68,6 +98,7 @@ def test_index_documents(meilisearch_backend):
         ]
     )
     mock_client_instance.wait_for_task.assert_called_once_with(mock_task.task_uid)
+    assert (index_counter_after - index_counter_before) == 2.0
 
 
 def test_search(meilisearch_backend):
@@ -80,18 +111,30 @@ def test_search(meilisearch_backend):
     mock_search_result = {
         "hits": [{"id": encode_base64("test/test.docx"), "title": "Document 1"}],
         "limit": limit,
+        "processingTimeMs": 23,
     }
     mock_client_instance.index(index_name).search.return_value = mock_search_result
+    search_counter_before = (
+        REGISTRY.get_sample_value(
+            "meilisearch_search_request_total", {"index_name": index_name}
+        )
+        or 0.0
+    )
 
     result = meilisearch_backend.search(index_name, query, limit)
 
+    search_counter_after = REGISTRY.get_sample_value(
+        "meilisearch_search_request_total", {"index_name": index_name}
+    )
     mock_client_instance.index(index_name).search.assert_called_once_with(
         query, {"limit": limit}
     )
     assert result == {
         "hits": [{"id": "test/test.docx", "title": "Document 1"}],
         "limit": limit,
+        "processingTimeMs": 23,
     }
+    assert (search_counter_after - search_counter_before) == 1.0
 
 
 @pytest.mark.integration
