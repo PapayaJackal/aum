@@ -1,84 +1,43 @@
-from pathlib import Path
-from unittest.mock import MagicMock
+from click.testing import CliRunner
 
-import pytest
-
-from aum.cli import create_index
-from aum.meilisearch import MeilisearchBackend
-from aum.sonic import SonicBackend
-from aum.tika import TikaTextExtractor
-
-TEST_DIRECTORY = Path(__file__).parent / "data"
-TEST_STRING = "Would it save you a lot of time if I just gave up and went mad now?"
+from aum.cli import main
 
 
-def test_create_index():
-    text_extractor = MagicMock()
-    mock_search_engine = MagicMock()
-    text_extractor.extract_text.return_value = ({}, TEST_STRING)
-
-    create_index(mock_search_engine, text_extractor, "test_index", TEST_DIRECTORY)
-
-    mock_search_engine.create_index.assert_called_once_with("test_index")
-    assert mock_search_engine.index_documents.call_count == 3
-
-    mock_search_engine.index_documents.assert_any_call(
-        "test_index",
-        [{"id": "test.docx", "metadata": {}, "content": TEST_STRING}],
-    )
-    mock_search_engine.index_documents.assert_any_call(
-        "test_index",
-        [{"id": "test.pdf", "metadata": {}, "content": TEST_STRING}],
-    )
-    mock_search_engine.index_documents.assert_any_call(
-        "test_index",
-        [
-            {
-                "id": "test/test.txt",
-                "metadata": {},
-                "content": TEST_STRING,
-            }
-        ],
-    )
+def test_version():
+    runner = CliRunner()
+    result = runner.invoke(main, ["--version"])
+    assert result.exit_code == 0
+    assert "0.2.0" in result.output
 
 
-@pytest.mark.integration
-def test_create_index_integration_meilisearch(request):
-    text_extractor = TikaTextExtractor("test_index")
-    search_engine = MeilisearchBackend("http://127.0.0.1:7700", "aMasterKey")
-
-    def cleanup():
-        search_engine.delete_index("test_index")
-
-    request.addfinalizer(cleanup)
-
-    create_index(search_engine, text_extractor, "test_index", TEST_DIRECTORY)
-
-    results = search_engine.search("test_index", TEST_STRING)["hits"]
-    assert len(results) == 3
-
-    ids_in_results = [x["id"] for x in results]
-    assert "test.docx" in ids_in_results
-    assert "test.pdf" in ids_in_results
-    assert "test/test.txt" in ids_in_results
+def test_config_command(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUM_DATA_DIR", str(tmp_path))
+    runner = CliRunner()
+    result = runner.invoke(main, ["config"])
+    assert result.exit_code == 0
+    assert "search_backend:" in result.output
+    assert "ocr_enabled:" in result.output
 
 
-@pytest.mark.integration
-def test_create_index_integration_sonic(request):
-    text_extractor = TikaTextExtractor("test_index")
-    search_engine = SonicBackend("::1", 1491, "SecretPassword")
+def test_jobs_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUM_DATA_DIR", str(tmp_path))
+    runner = CliRunner()
+    result = runner.invoke(main, ["jobs"])
+    assert result.exit_code == 0
+    assert "No jobs found" in result.output
 
-    def cleanup():
-        search_engine.delete_index("test_index")
 
-    request.addfinalizer(cleanup)
+def test_job_not_found(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUM_DATA_DIR", str(tmp_path))
+    runner = CliRunner()
+    result = runner.invoke(main, ["job", "nonexistent"])
+    assert result.exit_code == 1
+    assert "not found" in result.output
 
-    create_index(search_engine, text_extractor, "test_index", TEST_DIRECTORY)
 
-    results = search_engine.search("test_index", TEST_STRING)["hits"]
-    ids_in_results = [x["id"] for x in results]
-    assert len(ids_in_results) == 3
-
-    assert "test.docx" in ids_in_results
-    assert "test.pdf" in ids_in_results
-    assert "test/test.txt" in ids_in_results
+def test_user_list_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUM_DATA_DIR", str(tmp_path))
+    runner = CliRunner()
+    result = runner.invoke(main, ["user", "list"])
+    assert result.exit_code == 0
+    assert "No users found" in result.output

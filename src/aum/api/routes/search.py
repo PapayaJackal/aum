@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Annotated
+
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+from aum.api.deps import (
+    default_index_name,
+    get_config,
+    get_current_user,
+    get_permission_manager,
+    make_search_backend,
+)
+from aum.auth.models import User
+from aum.auth.permissions import PermissionDeniedError, PermissionManager
+from aum.search.base import SearchResult
+
+log = structlog.get_logger()
+router = APIRouter(prefix="/api", tags=["search"])
+
+
+class SearchResultResponse(BaseModel):
+    doc_id: str
+    source_path: str
+    score: float
+    snippet: str
+    metadata: dict[str, str | list[str]]
+
+
+class SearchResponse(BaseModel):
+    results: list[SearchResultResponse]
+    total: int
+
+
+class DocumentResponse(BaseModel):
+    doc_id: str
+    source_path: str
+    content: str
+    metadata: dict[str, str | list[str]]
+
+
+class IndicesResponse(BaseModel):
+    indices: list[str]
+
+
+@router.get("/indices", response_model=IndicesResponse)
+async def list_indices(
+    user: Annotated[User, Depends(get_current_user)],
+) -> IndicesResponse:
+    config = get_config()
+    backend = make_search_backend(config)
+    all_indices = backend.list_indices()
+    if user.is_admin:
+        return IndicesResponse(indices=all_indices)
+    perms = get_permission_manager()
+    accessible = [idx for idx in all_indices if perms.check(user, idx)]
+    return IndicesResponse(indices=accessible)
+
+
+def _check_index_access(user: User, index: str, perms: PermissionManager) -> None:
+    try:
+        perms.require(user, index)
+    except PermissionDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@router.get("/search", response_model=SearchResponse)
+async def search(
+    q: Annotated[str, Query(min_length=1)],
+    user: Annotated[User, Depends(get_current_user)],
+    index: str = "",
+    type: str = "text",
+    limit: int = 20,
+) -> SearchResponse:
+    config = get_config()
+    idx = index or default_index_name(config)
+
+    perms = get_permission_manager()
+    _check_index_access(user, idx, perms)
+
+    backend = make_search_backend(config, index=idx)
+
+    results: list[SearchResult]
+    if type == "text":
+        results = backend.search_text(q, limit=limit)
+    elif type == "vector":
+        embedder = _get_embedder()
+        if embedder is None:
+            raise HTTPException(status_code=400, detail="Embeddings not enabled")
+        vector = embedder.embed(q)
+        results = backend.search_vector(vector, limit=limit)
+    elif type == "hybrid":
+        embedder = _get_embedder()
+        if embedder is None:
+            raise HTTPException(status_code=400, detail="Embeddings not enabled")
+        vector = embedder.embed(q)
+        results = backend.search_hybrid(q, vector, limit=limit)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown search type: {type}")
+
+    return SearchResponse(
+        results=[
+            SearchResultResponse(
+                doc_id=r.doc_id,
+                source_path=r.source_path,
+                score=r.score,
+                snippet=r.snippet,
+                metadata=r.metadata,
+            )
+            for r in results
+        ],
+        total=len(results),
+    )
+
+
+@router.get("/documents/{doc_id}", response_model=DocumentResponse)
+async def get_document(
+    doc_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    index: str = "",
+) -> DocumentResponse:
+    config = get_config()
+    idx = index or default_index_name(config)
+
+    perms = get_permission_manager()
+    _check_index_access(user, idx, perms)
+
+    backend = make_search_backend(config, index=idx)
+    doc = backend.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    return DocumentResponse(
+        doc_id=doc.doc_id,
+        source_path=doc.source_path,
+        content=doc.snippet,
+        metadata=doc.metadata,
+    )
+
+
+def _safe_file_path(source_path: str) -> Path:
+    """Resolve stored source_path, rejecting symlinks to prevent path traversal."""
+    path = Path(source_path)
+    if path.is_symlink():
+        raise HTTPException(status_code=403, detail="Access to symlinked files is not permitted")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Source file not found on disk")
+    return path
+
+
+@router.get("/documents/{doc_id}/download")
+async def download_document(
+    doc_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    index: str = "",
+) -> FileResponse:
+    config = get_config()
+    idx = index or default_index_name(config)
+
+    perms = get_permission_manager()
+    _check_index_access(user, idx, perms)
+
+    backend = make_search_backend(config, index=idx)
+    doc = backend.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_path = _safe_file_path(doc.source_path)
+    return FileResponse(path=str(file_path), filename=file_path.name)
+
+
+def _get_embedder():  # noqa: ANN202
+    """Lazily load the embedder if configured."""
+    config = get_config()
+    if not config.embeddings_enabled:
+        return None
+    from aum.embeddings.sentence_transformers import SentenceTransformerEmbedder
+
+    return SentenceTransformerEmbedder(config.embeddings_model, config.embeddings_dimension)

@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+import sqlite3
+
+import structlog
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+
+from aum.auth.models import User, init_auth_tables
+from aum.metrics import AUTH_FAILURES, AUTH_REQUESTS
+
+log = structlog.get_logger()
+
+_hasher = PasswordHasher()
+
+
+class AuthError(Exception):
+    """Raised on authentication failure."""
+
+
+class LocalAuth:
+    """Local username/password authentication backed by SQLite."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        self._conn.row_factory = sqlite3.Row
+        init_auth_tables(self._conn)
+
+    def create_user(self, username: str, password: str, is_admin: bool = False) -> User:
+        password_hash = _hasher.hash(password)
+        cursor = self._conn.execute(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
+            (username, password_hash, int(is_admin)),
+        )
+        self._conn.commit()
+        log.info("user created", username=username, is_admin=is_admin)
+        return User(
+            id=cursor.lastrowid,  # type: ignore[arg-type]
+            username=username,
+            password_hash=password_hash,
+            is_admin=is_admin,
+        )
+
+    def authenticate(self, username: str, password: str) -> User:
+        AUTH_REQUESTS.labels(method="local").inc()
+        row = self._conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username,)
+        ).fetchone()
+
+        if row is None:
+            AUTH_FAILURES.labels(reason="user_not_found").inc()
+            raise AuthError("Invalid username or password")
+
+        if row["password_hash"] is None:
+            AUTH_FAILURES.labels(reason="no_local_password").inc()
+            raise AuthError("This account uses OAuth login only")
+
+        try:
+            _hasher.verify(row["password_hash"], password)
+        except VerifyMismatchError:
+            AUTH_FAILURES.labels(reason="bad_password").inc()
+            raise AuthError("Invalid username or password")
+
+        # Rehash if argon2 params have changed
+        if _hasher.check_needs_rehash(row["password_hash"]):
+            new_hash = _hasher.hash(password)
+            self._conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, row["id"])
+            )
+            self._conn.commit()
+
+        return self._row_to_user(row)
+
+    def get_user(self, user_id: int) -> User | None:
+        row = self._conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return self._row_to_user(row) if row else None
+
+    def get_user_by_username(self, username: str) -> User | None:
+        row = self._conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        return self._row_to_user(row) if row else None
+
+    def list_users(self) -> list[User]:
+        rows = self._conn.execute("SELECT * FROM users ORDER BY username").fetchall()
+        return [self._row_to_user(row) for row in rows]
+
+    def delete_user(self, username: str) -> bool:
+        cursor = self._conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        self._conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            log.info("user deleted", username=username)
+        return deleted
+
+    def set_password(self, username: str, new_password: str) -> bool:
+        new_hash = _hasher.hash(new_password)
+        cursor = self._conn.execute(
+            "UPDATE users SET password_hash = ? WHERE username = ?",
+            (new_hash, username),
+        )
+        self._conn.commit()
+        updated = cursor.rowcount > 0
+        if updated:
+            log.info("user password changed", username=username)
+        return updated
+
+    def set_admin(self, username: str, is_admin: bool) -> bool:
+        cursor = self._conn.execute(
+            "UPDATE users SET is_admin = ? WHERE username = ?",
+            (int(is_admin), username),
+        )
+        self._conn.commit()
+        updated = cursor.rowcount > 0
+        if updated:
+            log.info("user admin status changed", username=username, is_admin=is_admin)
+        return updated
+
+    def _row_to_user(self, row: sqlite3.Row) -> User:
+        return User(
+            id=row["id"],
+            username=row["username"],
+            password_hash=row["password_hash"],
+            is_admin=bool(row["is_admin"]),
+        )
