@@ -8,4 +8,7 @@ export const searchState = $state({
   total: 0,
   searched: false,
   activeFacets: {} as Record<string, string[]>,
+  facets: {} as Record<string, string[]>,
+  pageSize: 20,
+  currentPage: 1,
 });

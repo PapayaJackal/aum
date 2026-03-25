@@ -23,16 +23,21 @@
   let loading = $state(false);
   let error = $state("");
 
-  async function doSearch() {
+  async function doSearch(page: number = 1) {
     if (!searchState.query.trim()) return;
     loading = true;
     error = "";
     searchState.searched = true;
+    searchState.currentPage = page;
+    const offset = (page - 1) * searchState.pageSize;
     try {
-      const res = await search(searchState.query, searchState.searchType, 20, searchState.selectedIndex);
+      const res = await search(searchState.query, searchState.searchType, searchState.pageSize, searchState.selectedIndex, offset);
       searchState.results = res.results;
       searchState.total = res.total;
-      searchState.activeFacets = {};
+      if (res.facets !== null) {
+        searchState.facets = res.facets;
+        searchState.activeFacets = {};
+      }
     } catch (err: any) {
       error = err.message || "Search failed";
       searchState.results = [];
@@ -44,25 +49,16 @@
 
   function handleSubmit(e: Event) {
     e.preventDefault();
-    doSearch();
+    doSearch(1);
   }
 
-  let facets = $derived.by(() => {
-    const facetMap: Record<string, Set<string>> = {};
-    for (const r of searchState.results) {
-      for (const [key, value] of Object.entries(r.metadata)) {
-        if (["Content-Type", "Author", "dc:creator"].includes(key) && value) {
-          if (!facetMap[key]) facetMap[key] = new Set();
-          facetMap[key].add(value);
-        }
-      }
-    }
-    const out: Record<string, string[]> = {};
-    for (const [key, values] of Object.entries(facetMap)) {
-      out[key] = [...values].sort();
-    }
-    return out;
-  });
+  function handlePageSizeChange() {
+    if (searchState.searched) doSearch(1);
+  }
+
+  let totalPages = $derived(Math.max(1, Math.ceil(searchState.total / searchState.pageSize)));
+
+  let facets = $derived(searchState.facets);
 
   let filteredResults = $derived.by(() => {
     if (Object.keys(searchState.activeFacets).length === 0) return searchState.results;
@@ -72,6 +68,31 @@
       }
       return true;
     });
+  });
+
+  function pageNumbers(current: number, total: number): (number | "...")[] {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+    const pages: (number | "...")[] = [1];
+    if (current > 3) pages.push("...");
+    for (let p = Math.max(2, current - 1); p <= Math.min(total - 1, current + 1); p++) {
+      pages.push(p);
+    }
+    if (current < total - 2) pages.push("...");
+    pages.push(total);
+    return pages;
+  }
+
+  let toolbarStuck = $state(false);
+  let sentinel = $state<HTMLElement | null>(null);
+
+  $effect(() => {
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { toolbarStuck = !entry.isIntersecting; },
+      { threshold: 1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
   });
 </script>
 
@@ -116,12 +137,51 @@
         </aside>
       {/if}
       <div class="results-main">
-        <p class="result-count">
-          {filteredResults.length} result{filteredResults.length !== 1 ? "s" : ""}
-          {#if Object.keys(searchState.activeFacets).length > 0}
-            (filtered from {searchState.total})
-          {/if}
-        </p>
+        <div bind:this={sentinel} class="toolbar-sentinel"></div>
+        <div class="results-toolbar" class:stuck={toolbarStuck}>
+          <p class="result-count">
+            {searchState.total} result{searchState.total !== 1 ? "s" : ""}
+            {#if Object.keys(searchState.activeFacets).length > 0}
+              ({filteredResults.length} shown after filter)
+            {/if}
+          </p>
+          <div class="pagination-controls">
+            <button
+              class="page-btn"
+              disabled={searchState.currentPage <= 1 || loading}
+              onclick={() => doSearch(searchState.currentPage - 1)}
+            >&lsaquo; Prev</button>
+
+            {#each pageNumbers(searchState.currentPage, totalPages) as p}
+              {#if p === "..."}
+                <span class="page-ellipsis">…</span>
+              {:else}
+                <button
+                  class="page-btn"
+                  class:active={p === searchState.currentPage}
+                  disabled={loading}
+                  onclick={() => doSearch(p)}
+                >{p}</button>
+              {/if}
+            {/each}
+
+            <button
+              class="page-btn"
+              disabled={searchState.currentPage >= totalPages || loading}
+              onclick={() => doSearch(searchState.currentPage + 1)}
+            >Next &rsaquo;</button>
+
+            <select
+              class="page-size-select"
+              bind:value={searchState.pageSize}
+              onchange={handlePageSizeChange}
+            >
+              <option value={20}>20 / page</option>
+              <option value={50}>50 / page</option>
+              <option value={100}>100 / page</option>
+            </select>
+          </div>
+        </div>
         <ResultList results={filteredResults} index={searchState.selectedIndex} />
       </div>
     </div>
@@ -209,9 +269,86 @@
     min-width: 0;
   }
 
+  .toolbar-sentinel {
+    position: relative;
+    top: -2.5rem;
+    height: 0;
+    pointer-events: none;
+  }
+
+  .results-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 2.5rem;
+    background: #f5f5f5;
+    z-index: 10;
+    padding: 0.4rem 0;
+  }
+
+  .results-toolbar.stuck {
+    padding: 0.65rem 0.75rem;
+    margin: 0 -0.75rem 0.75rem;
+  }
+
   .result-count {
     color: #888;
     font-size: 0.9rem;
-    margin: 0 0 0.75rem;
+    margin: 0;
+  }
+
+  .pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+  }
+
+  .page-btn {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.85rem;
+    background: #f0f0f0;
+    color: #333;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .page-btn:hover:not(:disabled) {
+    background: #e0e8ff;
+    border-color: #4a7cf7;
+    color: #4a7cf7;
+  }
+
+  .page-btn.active {
+    background: #4a7cf7;
+    color: white;
+    border-color: #4a7cf7;
+  }
+
+  .page-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .page-ellipsis {
+    padding: 0.3rem 0.25rem;
+    color: #888;
+    font-size: 0.85rem;
+  }
+
+  .page-size-select {
+    padding: 0.3rem 0.4rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #f0f0f0;
+    font-size: 0.85rem;
+    margin-left: 0.5rem;
+    cursor: pointer;
   }
 </style>

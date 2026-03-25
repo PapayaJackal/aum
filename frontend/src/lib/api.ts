@@ -81,6 +81,7 @@ export interface SearchResult {
 export interface SearchResponse {
   results: SearchResult[];
   total: number;
+  facets: Record<string, string[]> | null;
 }
 
 export function search(
@@ -88,8 +89,9 @@ export function search(
   type: string = "text",
   limit: number = 20,
   index: string = "",
+  offset: number = 0,
 ): Promise<SearchResponse> {
-  const params = new URLSearchParams({ q: query, type, limit: String(limit) });
+  const params = new URLSearchParams({ q: query, type, limit: String(limit), offset: String(offset) });
   if (index) params.set("index", index);
   return request(`/search?${params}`);
 }

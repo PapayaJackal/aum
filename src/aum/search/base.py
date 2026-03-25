@@ -28,18 +28,18 @@ class SearchBackend(Protocol):
         """Index a batch of (doc_id, document) pairs. Returns list of (doc_id, error) for failures."""
         ...
 
-    def search_text(self, query: str, *, limit: int = 20) -> list[SearchResult]:
-        """Full-text keyword search."""
+    def search_text(self, query: str, *, limit: int = 20, offset: int = 0, include_facets: bool = False) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+        """Full-text keyword search. Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...
 
-    def search_vector(self, vector: list[float], *, limit: int = 20) -> list[SearchResult]:
-        """Vector similarity search (kNN)."""
+    def search_vector(self, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+        """Vector similarity search (kNN). Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...
 
     def search_hybrid(
-        self, query: str, vector: list[float], *, limit: int = 20
-    ) -> list[SearchResult]:
-        """Combined keyword + vector search."""
+        self, query: str, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False
+    ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+        """Combined keyword + vector search. Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...
 
     def delete_index(self) -> None:

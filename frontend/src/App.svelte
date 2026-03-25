@@ -73,6 +73,9 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    position: sticky;
+    top: 0;
+    z-index: 100;
   }
 
   nav {

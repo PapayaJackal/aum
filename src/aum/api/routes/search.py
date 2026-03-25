@@ -34,6 +34,7 @@ class SearchResultResponse(BaseModel):
 class SearchResponse(BaseModel):
     results: list[SearchResultResponse]
     total: int
+    facets: dict[str, list[str]] | None = None
 
 
 class DocumentResponse(BaseModel):
@@ -75,6 +76,7 @@ async def search(
     index: str = "",
     type: str = "text",
     limit: int = 20,
+    offset: int = 0,
 ) -> SearchResponse:
     config = get_config()
     idx = index or default_index_name(config)
@@ -84,23 +86,29 @@ async def search(
 
     backend = make_search_backend(config, index=idx)
 
+    include_facets = offset == 0
+
     results: list[SearchResult]
+    total: int
+    facets: dict[str, list[str]] | None
     if type == "text":
-        results = backend.search_text(q, limit=limit)
+        results, total, facets = backend.search_text(q, limit=limit, offset=offset, include_facets=include_facets)
     elif type == "vector":
         embedder = _get_embedder()
         if embedder is None:
             raise HTTPException(status_code=400, detail="Embeddings not enabled")
         vector = embedder.embed(q)
-        results = backend.search_vector(vector, limit=limit)
+        results, total, facets = backend.search_vector(vector, limit=limit, offset=offset, include_facets=include_facets)
     elif type == "hybrid":
         embedder = _get_embedder()
         if embedder is None:
             raise HTTPException(status_code=400, detail="Embeddings not enabled")
         vector = embedder.embed(q)
-        results = backend.search_hybrid(q, vector, limit=limit)
+        results, total, facets = backend.search_hybrid(q, vector, limit=limit, offset=offset, include_facets=include_facets)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown search type: {type}")
+
+    log.info("search completed", query=q, type=type, index=idx, limit=limit, offset=offset, results=len(results), total=total, facets_included=include_facets)
 
     return SearchResponse(
         results=[
@@ -113,7 +121,8 @@ async def search(
             )
             for r in results
         ],
-        total=len(results),
+        total=total,
+        facets=facets,
     )
 
 

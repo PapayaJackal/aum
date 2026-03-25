@@ -8,6 +8,22 @@ from aum.search.base import SearchResult
 
 log = structlog.get_logger()
 
+_FACET_FIELDS = ["Content-Type", "Author", "dc:creator"]
+_FACET_AGGS = {
+    field: {"terms": {"field": f"metadata.{field}.keyword", "size": 100}}
+    for field in _FACET_FIELDS
+}
+
+
+def _parse_facets(resp: dict) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for field in _FACET_FIELDS:
+        buckets = resp.get("aggregations", {}).get(field, {}).get("buckets", [])
+        values = sorted(b["key"] for b in buckets if b.get("key"))
+        if values:
+            result[field] = values
+    return result
+
 
 class ElasticsearchBackend:
     """Search backend using Elasticsearch with optional kNN vector search."""
@@ -28,7 +44,7 @@ class ElasticsearchBackend:
             "properties": {
                 "source_path": {"type": "keyword"},
                 "content": {"type": "text", "analyzer": "standard"},
-                "metadata": {"type": "object", "dynamic": False},
+                "metadata": {"type": "object", "dynamic": True},
             }
         }
 
@@ -89,49 +105,58 @@ class ElasticsearchBackend:
         log.warning("elasticsearch bulk indexing had errors", failed_count=len(failures))
         return failures
 
-    def search_text(self, query: str, *, limit: int = 20) -> list[SearchResult]:
-        resp = self._client.search(
-            index=self._index,
-            body={
-                "query": {"match": {"content": query}},
-                "size": limit,
-                "highlight": {"fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}}},
-            },
-        )
-        return self._parse_hits(resp)
+    def search_text(self, query: str, *, limit: int = 20, offset: int = 0, include_facets: bool = False) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+        body: dict = {
+            "query": {"match": {"content": query}},
+            "size": limit,
+            "from": offset,
+            "highlight": {"fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}}},
+        }
+        if include_facets:
+            body["aggs"] = _FACET_AGGS
+        resp = self._client.search(index=self._index, body=body)
+        results, total = self._parse_hits(resp)
+        facets = _parse_facets(resp) if include_facets else None
+        return results, total, facets
 
-    def search_vector(self, vector: list[float], *, limit: int = 20) -> list[SearchResult]:
-        resp = self._client.search(
-            index=self._index,
-            body={
-                "knn": {
-                    "field": "embedding",
-                    "query_vector": vector,
-                    "k": limit,
-                    "num_candidates": limit * 5,
-                },
-                "size": limit,
+    def search_vector(self, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+        body: dict = {
+            "knn": {
+                "field": "embedding",
+                "query_vector": vector,
+                "k": limit,
+                "num_candidates": limit * 5,
             },
-        )
-        return self._parse_hits(resp)
+            "size": limit,
+            "from": offset,
+        }
+        if include_facets:
+            body["aggs"] = _FACET_AGGS
+        resp = self._client.search(index=self._index, body=body)
+        results, total = self._parse_hits(resp)
+        facets = _parse_facets(resp) if include_facets else None
+        return results, total, facets
 
     def search_hybrid(
-        self, query: str, vector: list[float], *, limit: int = 20
-    ) -> list[SearchResult]:
-        resp = self._client.search(
-            index=self._index,
-            body={
-                "query": {"match": {"content": query}},
-                "knn": {
-                    "field": "embedding",
-                    "query_vector": vector,
-                    "k": limit,
-                    "num_candidates": limit * 5,
-                },
-                "size": limit,
+        self, query: str, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False
+    ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+        body: dict = {
+            "query": {"match": {"content": query}},
+            "knn": {
+                "field": "embedding",
+                "query_vector": vector,
+                "k": limit,
+                "num_candidates": limit * 5,
             },
-        )
-        return self._parse_hits(resp)
+            "size": limit,
+            "from": offset,
+        }
+        if include_facets:
+            body["aggs"] = _FACET_AGGS
+        resp = self._client.search(index=self._index, body=body)
+        results, total = self._parse_hits(resp)
+        facets = _parse_facets(resp) if include_facets else None
+        return results, total, facets
 
     def delete_index(self) -> None:
         try:
@@ -168,9 +193,12 @@ class ElasticsearchBackend:
         except Exception:
             return []
 
-    def _parse_hits(self, resp: dict) -> list[SearchResult]:
+    def _parse_hits(self, resp: dict) -> tuple[list[SearchResult], int]:
+        hits = resp.get("hits", {})
+        total_obj = hits.get("total", {})
+        total = total_obj.get("value", 0) if isinstance(total_obj, dict) else int(total_obj)
         results: list[SearchResult] = []
-        for hit in resp.get("hits", {}).get("hits", []):
+        for hit in hits.get("hits", []):
             source = hit["_source"]
             highlight = hit.get("highlight", {}).get("content", [])
             snippet = highlight[0] if highlight else source.get("content", "")[:200]
@@ -183,4 +211,4 @@ class ElasticsearchBackend:
                     metadata=source.get("metadata", {}),
                 )
             )
-        return results
+        return results, total
