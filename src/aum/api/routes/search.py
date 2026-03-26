@@ -108,8 +108,8 @@ async def search(
     user: Annotated[User, Depends(get_current_user)],
     index: str = "",
     type: str = "text",
-    limit: int = 20,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
     filters: Annotated[str | None, Query()] = None,
 ) -> SearchResponse:
     config = get_config()
