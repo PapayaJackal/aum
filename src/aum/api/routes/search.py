@@ -267,7 +267,8 @@ def _get_embedder_for_indices(idx_list: list[str]):  # noqa: ANN202
                     ),
                 )
 
-    assert model_info is not None
+    if model_info is None:
+        raise HTTPException(status_code=400, detail="No indices provided for embedding lookup.")
     idx_model, idx_backend, _ = model_info
     # Use a shallow copy to avoid mutating the @lru_cache'd config singleton
     embed_config = config.model_copy(update={

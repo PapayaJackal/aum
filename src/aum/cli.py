@@ -596,7 +596,9 @@ def search(
                     )
                     sys.exit(1)
 
-        assert model_info is not None
+        if model_info is None:
+            click.echo("Error: no indices provided for embedding lookup.", err=True)
+            sys.exit(1)
         prev_model, prev_backend, _ = model_info
         config.embeddings_model = prev_model
         config.embeddings_backend = prev_backend
