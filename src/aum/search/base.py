@@ -56,7 +56,7 @@ MIMETYPE_ALIASES: dict[str, str] = {
     "application/zip": "ZIP",
     "application/x-tar": "TAR",
     "application/gzip": "GZIP",
-    "message/rfc822": "Email (EML)",
+    "message/rfc822": "Email",
     "image/jpeg": "JPEG Image",
     "image/png": "PNG Image",
     "image/tiff": "TIFF Image",
@@ -68,6 +68,12 @@ def alias_mimetype(raw: str) -> str:
     """Return a human-friendly label for a MIME type, stripping parameters."""
     base = raw.split(";")[0].strip()
     return MIMETYPE_ALIASES.get(base, base)
+
+
+# Reverse mapping: alias → list of raw MIME types that produce that alias.
+REVERSE_MIMETYPE_ALIASES: dict[str, list[str]] = {}
+for _raw, _alias in MIMETYPE_ALIASES.items():
+    REVERSE_MIMETYPE_ALIASES.setdefault(_alias, []).append(_raw)
 
 
 # ---------------------------------------------------------------------------
@@ -173,16 +179,20 @@ class SearchBackend(Protocol):
         """Index a batch of (doc_id, document) pairs. Returns list of (doc_id, error) for failures."""
         ...
 
-    def search_text(self, query: str, *, limit: int = 20, offset: int = 0, include_facets: bool = False) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+    def search_text(
+        self, query: str, *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None
+    ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         """Full-text keyword search. Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...
 
-    def search_vector(self, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+    def search_vector(
+        self, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None
+    ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         """Vector similarity search (kNN). Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...
 
     def search_hybrid(
-        self, query: str, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False
+        self, query: str, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         """Combined keyword + vector search. Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...

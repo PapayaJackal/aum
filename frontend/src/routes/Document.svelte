@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getDocument, downloadDocument, type DocumentDetail } from "../lib/api";
+  import { searchState } from "../lib/searchState.svelte";
 
   let {
     docId,
@@ -115,7 +116,7 @@
     const facets: Record<string, string[]> = {};
     facets[label] = [value];
     const params = new URLSearchParams();
-    params.set("q", "*");
+    params.set("q", searchState.query || "*");
     params.set("facets", JSON.stringify(facets));
     return `#/?${params.toString()}`;
   }
@@ -136,7 +137,7 @@
   };
 
   let isEmailDoc = $derived(
-    doc?.metadata["File Type"] === "Email (EML)"
+    doc?.metadata["File Type"] === "Email"
       || doc?.metadata["Content-Type"]?.toString().startsWith("message/rfc822")
   );
 

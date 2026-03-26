@@ -30,12 +30,19 @@
     history.replaceState(null, "", qs ? `#/?${qs}` : "#/");
   }
 
-  // Sync URL when active facets change (client-side filter, no re-search needed)
+  // Re-search when active facets change (server-side filtering)
+  let prevFacetsJson = $state("");
   $effect(() => {
-    const _ = JSON.stringify(searchState.activeFacets); // track
-    untrack(() => {
-      if (searchState.searched) updateSearchUrl();
-    });
+    const json = JSON.stringify(searchState.activeFacets);
+    if (json !== prevFacetsJson) {
+      const isInitial = prevFacetsJson === "";
+      prevFacetsJson = json;
+      untrack(() => {
+        if (searchState.searched && !isInitial) {
+          doSearch(1, false);
+        }
+      });
+    }
   });
 
   // Sync URL when selected document changes
@@ -54,12 +61,16 @@
     searchState.currentPage = page;
     const offset = (page - 1) * searchState.pageSize;
     try {
-      const res = await search(searchState.query, searchState.searchType, searchState.pageSize, searchState.selectedIndex, offset);
+      const activeFilters = resetFacets ? {} : searchState.activeFacets;
+      if (resetFacets) {
+        searchState.activeFacets = {};
+        prevFacetsJson = "{}";
+      }
+      const res = await search(searchState.query, searchState.searchType, searchState.pageSize, searchState.selectedIndex, offset, activeFilters);
       searchState.results = res.results;
       searchState.total = res.total;
       if (res.facets !== null) {
         searchState.facets = res.facets;
-        if (resetFacets) searchState.activeFacets = {};
       }
     } catch (err: any) {
       error = err.message || "Search failed";
@@ -141,7 +152,7 @@
 
   function handlePageSizeChange() {
     savePrefs();
-    if (searchState.searched) doSearch(1);
+    if (searchState.searched) doSearch(1, false);
   }
 
   function handleIndexChange() {
@@ -169,30 +180,6 @@
   let totalPages = $derived(Math.max(1, Math.ceil(searchState.total / searchState.pageSize)));
 
   let facets = $derived(searchState.facets);
-
-  const DATE_FACET_KEYS = new Set(["Created"]);
-
-  let filteredResults = $derived.by(() => {
-    if (Object.keys(searchState.activeFacets).length === 0) return searchState.results;
-    return searchState.results.filter((r) => {
-      for (const [key, filterValues] of Object.entries(searchState.activeFacets)) {
-        if (filterValues.length === 0) continue;
-        const meta = r.metadata[key];
-        if (DATE_FACET_KEYS.has(key)) {
-          // Date range: filterValues is [minYear, maxYear]
-          const year = Number(meta);
-          const lo = Number(filterValues[0]);
-          const hi = Number(filterValues[1] ?? filterValues[0]);
-          if (isNaN(year) || year < lo || year > hi) return false;
-        } else if (Array.isArray(meta)) {
-          if (!meta.some((v) => filterValues.includes(v))) return false;
-        } else {
-          if (!filterValues.includes(meta ?? "")) return false;
-        }
-      }
-      return true;
-    });
-  });
 
   function pageNumbers(current: number, total: number): (number | "...")[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
@@ -271,15 +258,12 @@
         <div class="results-toolbar" class:stuck={toolbarStuck}>
           <p class="result-count">
             {searchState.total} result{searchState.total !== 1 ? "s" : ""}
-            {#if Object.keys(searchState.activeFacets).length > 0}
-              ({filteredResults.length} shown after filter)
-            {/if}
           </p>
           <div class="pagination-controls">
             <button
               class="page-btn"
               disabled={searchState.currentPage <= 1 || loading}
-              onclick={() => doSearch(searchState.currentPage - 1)}
+              onclick={() => doSearch(searchState.currentPage - 1, false)}
             >&lsaquo; Prev</button>
 
             {#each pageNumbers(searchState.currentPage, totalPages) as p}
@@ -290,7 +274,7 @@
                   class="page-btn"
                   class:active={p === searchState.currentPage}
                   disabled={loading}
-                  onclick={() => doSearch(p)}
+                  onclick={() => doSearch(p, false)}
                 >{p}</button>
               {/if}
             {/each}
@@ -298,7 +282,7 @@
             <button
               class="page-btn"
               disabled={searchState.currentPage >= totalPages || loading}
-              onclick={() => doSearch(searchState.currentPage + 1)}
+              onclick={() => doSearch(searchState.currentPage + 1, false)}
             >Next &rsaquo;</button>
 
             <select
@@ -312,7 +296,7 @@
             </select>
           </div>
         </div>
-        <ResultList results={filteredResults} index={searchState.selectedIndex} />
+        <ResultList results={searchState.results} index={searchState.selectedIndex} />
       </div>
 
       {#if sidebarOpen}

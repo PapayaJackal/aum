@@ -90,9 +90,13 @@ export function search(
   limit: number = 20,
   index: string = "",
   offset: number = 0,
+  filters: Record<string, string[]> = {},
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q: query, type, limit: String(limit), offset: String(offset) });
   if (index) params.set("index", index);
+  if (Object.keys(filters).length > 0) {
+    params.set("filters", JSON.stringify(filters));
+  }
   return request(`/search?${params}`);
 }
 

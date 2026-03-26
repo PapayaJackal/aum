@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -94,6 +95,7 @@ async def search(
     type: str = "text",
     limit: int = 20,
     offset: int = 0,
+    filters: Annotated[str | None, Query()] = None,
 ) -> SearchResponse:
     config = get_config()
     idx = index or default_index_name(config)
@@ -103,26 +105,33 @@ async def search(
 
     backend = make_search_backend(config, index=idx)
 
-    include_facets = offset == 0
+    parsed_filters: dict[str, list[str]] | None = None
+    if filters:
+        try:
+            parsed_filters = json.loads(filters)
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid filters JSON")
+
+    include_facets = offset == 0 or bool(parsed_filters)
 
     if type == "text":
-        results, total, facets = backend.search_text(q, limit=limit, offset=offset, include_facets=include_facets)
+        results, total, facets = backend.search_text(q, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
     elif type == "vector":
         embedder = _get_embedder()
         if embedder is None:
             raise HTTPException(status_code=400, detail="Embeddings not enabled")
         vector = embedder.embed(q)
-        results, total, facets = backend.search_vector(vector, limit=limit, offset=offset, include_facets=include_facets)
+        results, total, facets = backend.search_vector(vector, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
     elif type == "hybrid":
         embedder = _get_embedder()
         if embedder is None:
             raise HTTPException(status_code=400, detail="Embeddings not enabled")
         vector = embedder.embed(q)
-        results, total, facets = backend.search_hybrid(q, vector, limit=limit, offset=offset, include_facets=include_facets)
+        results, total, facets = backend.search_hybrid(q, vector, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown search type: {type}")
 
-    log.info("search completed", query=q, type=type, index=idx, limit=limit, offset=offset, results=len(results), total=total, facets_included=include_facets)
+    log.info("search completed", query=q, type=type, index=idx, limit=limit, offset=offset, results=len(results), total=total, facets_included=include_facets, filters=parsed_filters)
 
     return SearchResponse(
         results=[

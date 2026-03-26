@@ -140,8 +140,29 @@ def reset_index(index: str | None) -> None:
 @click.option("--index", default=None, help="Index name (default: from config)")
 @click.option("--type", "search_type", type=click.Choice(["text", "vector", "hybrid"]), default="text")
 @click.option("--limit", default=20, type=int, help="Max results")
-def search(query: str, index: str | None, search_type: str, limit: int) -> None:
+@click.option("--offset", default=0, type=int, help="Offset for pagination")
+@click.option("--file-type", multiple=True, help="Filter by file type (e.g. PDF, Word)")
+@click.option("--creator", multiple=True, help="Filter by creator/author")
+@click.option("--email", multiple=True, help="Filter by email address")
+@click.option("--created-from", default=None, help="Filter by creation year (from)")
+@click.option("--created-to", default=None, help="Filter by creation year (to)")
+@click.option("--show-facets", is_flag=True, help="Display available facet values")
+def search(
+    query: str,
+    index: str | None,
+    search_type: str,
+    limit: int,
+    offset: int,
+    file_type: tuple[str, ...],
+    creator: tuple[str, ...],
+    email: tuple[str, ...],
+    created_from: str | None,
+    created_to: str | None,
+    show_facets: bool,
+) -> None:
     """Search indexed documents."""
+    import re
+
     config = _load_config()
     _setup(config)
 
@@ -151,9 +172,25 @@ def search(query: str, index: str | None, search_type: str, limit: int) -> None:
     idx = index or default_index_name(config)
     backend = make_search_backend(config, index=idx)
 
+    # Build filters from CLI options
+    filters: dict[str, list[str]] = {}
+    if file_type:
+        filters["File Type"] = list(file_type)
+    if creator:
+        filters["Creator"] = list(creator)
+    if email:
+        filters["Email Addresses"] = list(email)
+    if created_from or created_to:
+        filters["Created"] = [created_from or "1900", created_to or "2099"]
+
+    include_facets = show_facets
+    search_filters = filters or None
+
     results: list[SearchResult]
+    total: int
+    facets: dict[str, list[str]] | None
     if search_type == "text":
-        results = backend.search_text(query, limit=limit)
+        results, total, facets = backend.search_text(query, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
     elif search_type in ("vector", "hybrid"):
         if not config.embeddings_enabled:
             click.echo("Error: embeddings not enabled. Set TINYALEPH_EMBEDDINGS_ENABLED=true", err=True)
@@ -163,22 +200,45 @@ def search(query: str, index: str | None, search_type: str, limit: int) -> None:
         embedder = SentenceTransformerEmbedder(config.embeddings_model, config.embeddings_dimension)
         vector = embedder.embed(query)
         if search_type == "vector":
-            results = backend.search_vector(vector, limit=limit)
+            results, total, facets = backend.search_vector(vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
         else:
-            results = backend.search_hybrid(query, vector, limit=limit)
+            results, total, facets = backend.search_hybrid(query, vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
     else:
-        results = []
+        results, total, facets = [], 0, None
 
     if not results:
         click.echo("No results found.")
         return
 
-    for i, r in enumerate(results, 1):
-        click.echo(f"\n{i}. [{r.score:.3f}] {r.source_path}")
-        snippet = r.snippet.replace("\n", " ").strip()
+    if show_facets and facets:
+        click.echo("--- Available Facets ---")
+        for label, values in facets.items():
+            click.echo(f"\n  {label}:")
+            for v in values:
+                click.echo(f"    - {v}")
+        click.echo("")
+
+    click.echo(f"Showing {offset + 1}-{offset + len(results)} of {total} results\n")
+
+    for i, r in enumerate(results, offset + 1):
+        click.echo(f"{i}. [{r.score:.3f}] {r.display_path or r.source_path}")
+        # Show key metadata inline
+        meta_parts = []
+        for key in ("File Type", "Creator", "Created"):
+            val = r.metadata.get(key)
+            if val:
+                if isinstance(val, list):
+                    val = ", ".join(val)
+                meta_parts.append(f"{key}: {val}")
+        if meta_parts:
+            click.echo(f"   [{' | '.join(meta_parts)}]")
+        # Strip HTML highlight tags for terminal display
+        snippet = re.sub(r"</?mark>", "", r.snippet)
+        snippet = snippet.replace("\n", " ").strip()
         if len(snippet) > 200:
             snippet = snippet[:200] + "..."
         click.echo(f"   {snippet}")
+        click.echo("")
 
 
 # --- Index management ---
