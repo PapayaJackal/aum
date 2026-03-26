@@ -18,6 +18,7 @@
   let doc = $state<DocumentDetail | null>(null);
   let loading = $state(true);
   let error = $state("");
+  let downloadError = $state("");
   let showAllMeta = $state(false);
 
   // Human-readable aliases for common Tika metadata keys.
@@ -221,7 +222,7 @@
       {:else}
         <p class="m-0 text-xs text-gray-400 break-all flex-1 min-w-0">{index}/{doc.display_path}</p>
       {/if}
-      <button class="shrink-0 text-xs font-[inherit] text-(--color-accent) bg-transparent cursor-pointer border border-(--color-accent) px-2 py-1 rounded hover:bg-(--color-accent) hover:text-white" onclick={() => downloadDocument(docId, index)}>Download original</button>
+      <button class="shrink-0 text-xs font-[inherit] text-(--color-accent) bg-transparent cursor-pointer border border-(--color-accent) px-2 py-1 rounded hover:bg-(--color-accent) hover:text-white" onclick={() => { downloadError = ""; downloadDocument(docId, index).catch((err) => { downloadError = err.message || "Download failed"; }); }}>Download original</button>
     </div>
 
     {#snippet metaValue(entry: MetaEntry)}
@@ -249,6 +250,10 @@
         {displayValue(entry.value)}
       {/if}
     {/snippet}
+
+    {#if downloadError}
+      <div class="bg-red-50 text-red-600 p-3 rounded my-3 text-sm">{downloadError}</div>
+    {/if}
 
     <div class="bg-white rounded-md p-3 my-3 shadow-sm">
       <h3 class="m-0 mb-2 text-sm text-gray-500">Metadata</h3>
