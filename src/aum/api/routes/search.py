@@ -268,7 +268,10 @@ def _get_embedder_for_indices(idx_list: list[str]):  # noqa: ANN202
                 )
 
     assert model_info is not None
-    prev_model, prev_backend, _ = model_info
-    config.embeddings_model = prev_model
-    config.embeddings_backend = prev_backend
-    return make_embedder(config)
+    idx_model, idx_backend, _ = model_info
+    # Use a shallow copy to avoid mutating the @lru_cache'd config singleton
+    embed_config = config.model_copy(update={
+        "embeddings_model": idx_model,
+        "embeddings_backend": idx_backend,
+    })
+    return make_embedder(embed_config)

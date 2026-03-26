@@ -68,10 +68,14 @@ class TestGetEmbedderForIndices:
 
         with patch("aum.api.routes.search.get_config") as mock_config, \
              patch("aum.api.deps.make_tracker", return_value=mock_tracker), \
-             patch("aum.api.deps.make_embedder", return_value=mock_embedder):
+             patch("aum.api.deps.make_embedder", return_value=mock_embedder) as mock_make_embedder:
             cfg = MagicMock()
+            cfg.model_copy.return_value = cfg
             mock_config.return_value = cfg
             result = _get_embedder_for_indices(["idx1", "idx2"])
             assert result is mock_embedder
-            assert cfg.embeddings_model == "model-a"
-            assert cfg.embeddings_backend == "ollama"
+            # Verify config was copied with correct model info, not mutated
+            cfg.model_copy.assert_called_once_with(update={
+                "embeddings_model": "model-a",
+                "embeddings_backend": "ollama",
+            })
