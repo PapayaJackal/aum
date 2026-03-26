@@ -27,3 +27,12 @@ export function highlightTerms(text: string, query: string): string {
 export function sanitizeHighlight(html: string): string {
   return DOMPurify.sanitize(html, MARK_ONLY);
 }
+
+/**
+ * Escape a plain string so it is safe to concatenate into an
+ * {@html ...} expression.  Uses DOMPurify with no allowed tags
+ * so every HTML character is escaped.
+ */
+export function escapeHtml(text: string): string {
+  return DOMPurify.sanitize(text, { ALLOWED_TAGS: [] });
+}

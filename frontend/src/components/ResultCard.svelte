@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { SearchResult } from "../lib/api";
   import { searchState } from "../lib/searchState.svelte";
-  import { sanitizeHighlight } from "../lib/highlight";
+  import { sanitizeHighlight, escapeHtml } from "../lib/highlight";
 
   let { result, multiIndex = false }: { result: SearchResult; multiIndex: boolean } = $props();
 
   let index = $derived(result.index);
+  let safeIndex = $derived(escapeHtml(index));
 
   let parts = $derived(result.display_path.split("/"));
   let filename = $derived(parts[parts.length - 1] || result.display_path);
@@ -49,7 +50,7 @@
 
   <div class="card-footer">
     {#if hasPathHighlight}
-      <span class="path" title={index + "/" + result.display_path}>{@html index + "/" + hlDirPart + hlFilename}</span>
+      <span class="path" title={index + "/" + result.display_path}>{@html safeIndex + "/" + hlDirPart + hlFilename}</span>
     {:else}
       <span class="path" title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span>
     {/if}
