@@ -10,8 +10,8 @@
 
   let { header }: { header: Snippet<[() => ReturnType<Snippet>]> } = $props();
 
-  // Load available indices on mount, set default if not yet chosen
-  $effect(() => {
+  // Load available indices once on mount, set default if not yet chosen
+  onMount(() => {
     listIndices()
       .then((res) => {
         indices = res.indices;

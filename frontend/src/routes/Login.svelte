@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { login, getProviders } from "../lib/api";
   import { setAuth } from "../lib/auth";
 
@@ -8,7 +9,7 @@
   let loading = $state(false);
   let providers = $state<string[]>([]);
 
-  $effect(() => {
+  onMount(() => {
     getProviders()
       .then((res) => (providers = res.providers))
       .catch(() => {});
