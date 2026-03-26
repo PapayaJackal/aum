@@ -45,10 +45,15 @@ def _normalize_metadata(raw: dict) -> dict[str, str | list[str]]:
     return metadata
 
 
-def _container_dir(extract_dir: Path, file_path: Path) -> Path:
-    """Return a stable subdirectory for attachments extracted from a container file."""
+def _container_dir(extract_dir: Path, index_name: str, file_path: Path) -> Path:
+    """Return a stable subdirectory for attachments extracted from a container file.
+
+    Shards by the first two pairs of hex digits to avoid too many entries in a
+    single directory, and namespaces under the index so extractions from
+    different indices don't collide.
+    """
     file_hash = hashlib.sha256(str(file_path.resolve()).encode()).hexdigest()[:16]
-    return extract_dir / file_hash
+    return extract_dir / index_name / file_hash[:2] / file_hash[2:4] / file_hash
 
 
 class TikaExtractor:
@@ -61,15 +66,17 @@ class TikaExtractor:
     def __init__(
         self,
         server_url: str = "http://localhost:9998",
-        ocr_enabled: bool = True,
+        ocr_enabled: bool = False,
         ocr_language: str = "eng",
         extract_dir: str = "data/extracted",
+        index_name: str = "default",
         max_depth: int = 5,
     ) -> None:
         self._server_url = server_url
         self._ocr_enabled = ocr_enabled
         self._ocr_language = ocr_language
         self._extract_dir = Path(extract_dir)
+        self._index_name = index_name
         self._max_depth = max_depth
 
     def extract(
@@ -226,7 +233,7 @@ class TikaExtractor:
         attachment_paths: list[Path] = []
 
         if attachments:
-            dest_dir = _container_dir(self._extract_dir, file_path)
+            dest_dir = _container_dir(self._extract_dir, self._index_name, file_path)
             dest_dir.mkdir(parents=True, exist_ok=True)
 
             for name, data in attachments.items():

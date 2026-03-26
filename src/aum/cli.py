@@ -51,6 +51,7 @@ def _make_ingest_pipeline(
         ocr_enabled=ocr if ocr is not None else config.ocr_enabled,
         ocr_language=ocr_language or config.ocr_language,
         extract_dir=config.extract_dir,
+        index_name=idx,
         max_depth=config.ingest_max_extract_depth,
     )
     backend = make_search_backend(config, index=idx)

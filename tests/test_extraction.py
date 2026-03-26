@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aum.extraction.base import ExtractionError
-from aum.extraction.tika import TikaExtractor, _condense_whitespace
+from aum.extraction.tika import TikaExtractor, _condense_whitespace, _container_dir
 
 
 class TestCondenseWhitespace:
@@ -61,6 +61,35 @@ class TestCondenseWhitespace:
         """Blank lines with a mix of regular and non-breaking spaces."""
         text = "A\n \xa0 \n\t\xa0\n \nB"
         assert _condense_whitespace(text) == "A\n\nB"
+
+
+class TestContainerDir:
+    """Tests for the sharded extraction directory path."""
+
+    def test_path_structure(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "doc.pdf"
+        result = _container_dir(Path("/data/extracted"), "myindex", file_path)
+        parts = result.parts
+        # structure: /data/extracted / myindex / XX / XX / XXXXXXXXXXXXXXXX
+        assert parts[-5] == "extracted"
+        assert parts[-4] == "myindex"
+        assert len(parts[-3]) == 2   # first shard
+        assert len(parts[-2]) == 2   # second shard
+        assert len(parts[-1]) == 16  # full hash prefix
+        assert parts[-1].startswith(parts[-3])
+        assert parts[-1][2:4] == parts[-2]
+
+    def test_different_indices_dont_collide(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "doc.pdf"
+        a = _container_dir(Path("/ex"), "index-a", file_path)
+        b = _container_dir(Path("/ex"), "index-b", file_path)
+        assert a != b
+        assert a.parts[-4] == "index-a"
+        assert b.parts[-4] == "index-b"
+
+    def test_stable_across_calls(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "doc.pdf"
+        assert _container_dir(Path("/ex"), "idx", file_path) == _container_dir(Path("/ex"), "idx", file_path)
 
 
 class TestTikaHeaders:
