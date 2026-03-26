@@ -21,6 +21,10 @@
   });
 </script>
 
+<svelte:head>
+  <title>{doc ? `aum - ${doc.display_path.split("/").pop()}` : "aum"}</title>
+</svelte:head>
+
 {#if loading}
   <p class="loading">Loading document...</p>
 {:else if error}

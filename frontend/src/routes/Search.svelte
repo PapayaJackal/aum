@@ -132,6 +132,10 @@
   });
 </script>
 
+<svelte:head>
+  <title>{searchState.searched && searchState.query ? `aum - ${searchState.query}` : "aum"}</title>
+</svelte:head>
+
 {#snippet searchForm()}
   <form class="search-form" onsubmit={handleSubmit}>
     <input

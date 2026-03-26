@@ -27,7 +27,7 @@ def _setup(config: AumConfig) -> None:
 @click.group()
 @click.version_option(version=__version__)
 def main() -> None:
-    """aum - eDiscovery search engine."""
+    """aum - document search engine."""
 
 
 # --- Ingest & Index ---

@@ -36,8 +36,8 @@
 </script>
 
 <div class="login-container">
-  <h1>aum</h1>
-  <p class="subtitle">eDiscovery Search</p>
+  <h1>ॐ</h1>
+  <p class="subtitle">seek and ye shall find</p>
 
   <form onsubmit={handleLogin}>
     {#if error}
@@ -85,6 +85,7 @@
     margin: 0 0 0.25rem;
     text-align: center;
     color: #1a1a2e;
+    font-size: 3.5rem;
   }
 
   .subtitle {

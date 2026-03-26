@@ -27,7 +27,7 @@
 {#if hash.startsWith("#/login")}
   <header>
     <nav>
-      <a href="#/" class="brand">aum</a>
+      <a href="#/" class="brand">ॐ</a>
     </nav>
   </header>
   <main><Login /></main>
@@ -42,7 +42,7 @@
   {@const docId = slashIdx >= 0 ? restPath.slice(slashIdx + 1) : restPath}
   <header>
     <nav>
-      <a href="#/" class="brand">aum</a>
+      <a href="#/" class="brand">ॐ</a>
       <a href={"#/" + restQs} class="back-link">← Back to search</a>
       <button class="logout-btn" onclick={logout}>Logout</button>
     </nav>
@@ -53,7 +53,7 @@
   <Search>
     {#snippet header(form)}
       <header>
-        <a href="#/" class="brand">aum</a>
+        <a href="#/" class="brand">ॐ</a>
         {@render form()}
         <button class="logout-btn" onclick={logout}>Logout</button>
       </header>
@@ -90,7 +90,8 @@
 
   .brand {
     font-weight: 700;
-    font-size: 1.1rem;
+    font-size: 1.4rem;
+    line-height: 1;
     color: white;
     text-decoration: none;
     flex-shrink: 0;

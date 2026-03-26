@@ -1,7 +1,7 @@
 [project]
 name = "aum"
 version = "0.2.0"
-description = "eDiscovery search engine with pluggable backends"
+description = "Document search engine with pluggable backends"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.1",
