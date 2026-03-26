@@ -917,6 +917,29 @@ def user_set_admin(username: str, revoke: bool) -> None:
         sys.exit(1)
 
 
+@user.command("token")
+@click.argument("username")
+@click.option("--days", default=365, type=int, help="Token lifetime in days (default: 365)")
+def user_token(username: str, days: int) -> None:
+    """Generate a long-lived API token for a user."""
+    config = _load_config()
+    _setup(config)
+    _ensure_jwt_secret(config)
+
+    from aum.api.deps import make_local_auth, make_token_manager
+
+    auth = make_local_auth(config)
+    user_obj = auth.get_user_by_username(username)
+    if user_obj is None:
+        click.echo(f"User not found: {username}", err=True)
+        sys.exit(1)
+
+    token_mgr = make_token_manager(config)
+    token = token_mgr.create_api_token(user_obj, expire_days=days)
+    click.echo(f"API token for {username} (expires in {days} days):")
+    click.echo(token)
+
+
 # --- Config ---
 
 

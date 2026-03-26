@@ -48,6 +48,19 @@ class TokenManager:
         }
         return jwt.encode(payload, self._secret, algorithm=self._algorithm)
 
+    def create_api_token(self, user: User, expire_days: int = 365) -> str:
+        """Create a long-lived API token for programmatic access."""
+        now = datetime.now(UTC)
+        payload = {
+            "sub": str(user.id),
+            "username": user.username,
+            "is_admin": user.is_admin,
+            "type": "access",
+            "iat": now,
+            "exp": now + timedelta(days=expire_days),
+        }
+        return jwt.encode(payload, self._secret, algorithm=self._algorithm)
+
     def verify_access_token(self, token: str) -> dict:
         """Verify and decode an access token. Returns the payload dict.
 
