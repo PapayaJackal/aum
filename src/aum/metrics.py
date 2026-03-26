@@ -91,5 +91,10 @@ AUTH_FAILURES = Counter(
     ["reason"],
 )
 
+AUTH_RATE_LIMITED = Counter(
+    "aum_auth_rate_limited_total",
+    "Login attempts rejected by rate limiter",
+)
+
 # Build info
 BUILD_INFO = Info("aum_build", "Build and version info")

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
+import time
+from collections import defaultdict
+from threading import Lock
 from typing import Annotated
 
 import structlog
@@ -14,9 +18,63 @@ from aum.api.deps import (
 from aum.auth.local import AuthError, LocalAuth
 from aum.auth.oauth import OAuthManager
 from aum.auth.tokens import TokenError, TokenManager
+from aum.metrics import AUTH_RATE_LIMITED
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# ---------------------------------------------------------------------------
+# Login rate limiter — per-IP sliding window
+# ---------------------------------------------------------------------------
+
+_MAX_FAILURES = 5
+_WINDOW_SECONDS = 900  # 15 minutes
+
+_login_failures: dict[str, list[float]] = defaultdict(list)
+_login_lock = Lock()
+
+
+def _rate_limit_key(client_ip: str) -> str:
+    """Return the rate-limit bucket key for an IP address.
+
+    IPv4 addresses are keyed individually.  IPv6 addresses are keyed by
+    their /64 prefix since a single host typically owns the entire /64.
+    """
+    try:
+        addr = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return client_ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        return str(ipaddress.IPv6Network((addr, 64), strict=False))
+    return client_ip
+
+
+def _check_rate_limit(client_ip: str) -> None:
+    """Raise 429 if the IP has exceeded the failed-login threshold."""
+    key = _rate_limit_key(client_ip)
+    now = time.monotonic()
+    cutoff = now - _WINDOW_SECONDS
+
+    with _login_lock:
+        timestamps = _login_failures[key]
+        # Prune old entries
+        _login_failures[key] = [t for t in timestamps if t > cutoff]
+        if len(_login_failures[key]) >= _MAX_FAILURES:
+            AUTH_RATE_LIMITED.inc()
+            log.warning("login rate limited", client_ip=client_ip, rate_key=key)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed login attempts. Try again later.",
+            )
+
+
+def _record_failure(client_ip: str) -> None:
+    key = _rate_limit_key(client_ip)
+    with _login_lock:
+        _login_failures[key].append(time.monotonic())
+
+
+# ---------------------------------------------------------------------------
 
 
 class LoginRequest(BaseModel):
@@ -40,13 +98,18 @@ class ProvidersResponse(BaseModel):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
+    request: Request,
     credentials: LoginRequest,
     auth: Annotated[LocalAuth, Depends(get_local_auth)],
     tokens: Annotated[TokenManager, Depends(get_token_manager)],
 ) -> TokenResponse:
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(client_ip)
+
     try:
         user = auth.authenticate(credentials.username, credentials.password)
     except AuthError as exc:
+        _record_failure(client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
     return TokenResponse(
