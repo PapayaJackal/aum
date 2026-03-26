@@ -72,18 +72,18 @@ class TestEmbeddingModelTracking:
         assert tracker.get_embedding_model("myindex") is None
 
     def test_set_and_get(self, tracker: JobTracker):
-        tracker.set_embedding_model("myindex", "snowflake-arctic-embed2", 1024)
+        tracker.set_embedding_model("myindex", "snowflake-arctic-embed2", "ollama", 1024)
         result = tracker.get_embedding_model("myindex")
-        assert result == ("snowflake-arctic-embed2", 1024)
+        assert result == ("snowflake-arctic-embed2", "ollama", 1024)
 
     def test_upsert_overwrites(self, tracker: JobTracker):
-        tracker.set_embedding_model("myindex", "model-a", 768)
-        tracker.set_embedding_model("myindex", "model-b", 1024)
+        tracker.set_embedding_model("myindex", "model-a", "ollama", 768)
+        tracker.set_embedding_model("myindex", "model-b", "openai", 1024)
         result = tracker.get_embedding_model("myindex")
-        assert result == ("model-b", 1024)
+        assert result == ("model-b", "openai", 1024)
 
     def test_separate_indices(self, tracker: JobTracker):
-        tracker.set_embedding_model("idx1", "model-a", 768)
-        tracker.set_embedding_model("idx2", "model-b", 1024)
-        assert tracker.get_embedding_model("idx1") == ("model-a", 768)
-        assert tracker.get_embedding_model("idx2") == ("model-b", 1024)
+        tracker.set_embedding_model("idx1", "model-a", "ollama", 768)
+        tracker.set_embedding_model("idx2", "model-b", "openai", 1024)
+        assert tracker.get_embedding_model("idx1") == ("model-a", "ollama", 768)
+        assert tracker.get_embedding_model("idx2") == ("model-b", "openai", 1024)

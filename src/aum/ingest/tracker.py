@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS job_errors (
 CREATE TABLE IF NOT EXISTS index_embeddings (
     index_name TEXT PRIMARY KEY,
     model TEXT NOT NULL,
+    backend TEXT NOT NULL DEFAULT 'ollama',
     dimension INTEGER NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -162,24 +163,24 @@ class JobTracker:
 
     # --- Embedding model tracking ---
 
-    def get_embedding_model(self, index_name: str) -> tuple[str, int] | None:
-        """Return (model, dimension) for the given index, or None if not set."""
+    def get_embedding_model(self, index_name: str) -> tuple[str, str, int] | None:
+        """Return (model, backend, dimension) for the given index, or None if not set."""
         row = self._conn.execute(
-            "SELECT model, dimension FROM index_embeddings WHERE index_name = ?",
+            "SELECT model, backend, dimension FROM index_embeddings WHERE index_name = ?",
             (index_name,),
         ).fetchone()
         if row is None:
             return None
-        return row["model"], row["dimension"]
+        return row["model"], row["backend"], row["dimension"]
 
-    def set_embedding_model(self, index_name: str, model: str, dimension: int) -> None:
-        """Record the embedding model used for an index (upsert)."""
+    def set_embedding_model(self, index_name: str, model: str, backend: str, dimension: int) -> None:
+        """Record the embedding model and backend used for an index (upsert)."""
         now = datetime.now(UTC).isoformat()
         self._conn.execute(
-            "INSERT INTO index_embeddings (index_name, model, dimension, updated_at)"
-            " VALUES (?, ?, ?, ?)"
-            " ON CONFLICT(index_name) DO UPDATE SET model = ?, dimension = ?, updated_at = ?",
-            (index_name, model, dimension, now, model, dimension, now),
+            "INSERT INTO index_embeddings (index_name, model, backend, dimension, updated_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(index_name) DO UPDATE SET model = ?, backend = ?, dimension = ?, updated_at = ?",
+            (index_name, model, backend, dimension, now, model, backend, dimension, now),
         )
         self._conn.commit()
-        log.info("stored embedding model for index", index_name=index_name, model=model, dimension=dimension)
+        log.info("stored embedding model for index", index_name=index_name, model=model, backend=backend, dimension=dimension)

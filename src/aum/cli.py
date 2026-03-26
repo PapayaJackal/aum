@@ -178,7 +178,7 @@ def embed(
     # Check for embedding model mismatch
     prev = tracker.get_embedding_model(idx)
     if prev is not None:
-        prev_model, prev_dim = prev
+        prev_model, prev_backend, prev_dim = prev
         if prev_model != config.embeddings_model:
             click.echo(
                 f"WARNING: index '{idx}' was previously embedded with '{prev_model}' "
@@ -295,7 +295,7 @@ def embed(
     click.echo(f"Time:      {elapsed:.1f}s ({rate:.1f} docs/s)")
 
     if embedded > 0:
-        tracker.set_embedding_model(idx, config.embeddings_model, embedder.dimension)
+        tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, embedder.dimension)
 
 
 # --- Search ---
@@ -366,9 +366,10 @@ def search(
             click.echo(f"Error: no embeddings found for index '{idx}'. Run 'aum embed' first.", err=True)
             sys.exit(1)
 
-        # Use the model that was actually used to embed this index
-        prev_model, _ = prev
+        # Use the model and backend that were actually used to embed this index
+        prev_model, prev_backend, _ = prev
         config.embeddings_model = prev_model
+        config.embeddings_backend = prev_backend
         embedder = make_embedder(config)
         vector = embedder.embed_query(query)
         results, total, facets = backend.search_hybrid(query, vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)

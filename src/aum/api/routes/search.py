@@ -235,6 +235,7 @@ def _get_embedder(index_name: str):  # noqa: ANN202
     if prev is None:
         return None
 
-    prev_model, _ = prev
+    prev_model, prev_backend, _ = prev
     config.embeddings_model = prev_model
+    config.embeddings_backend = prev_backend
     return make_embedder(config)
