@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getDocument, downloadDocument, type DocumentDetail } from "../lib/api";
   import { searchState } from "../lib/searchState.svelte";
+  import { highlightTerms } from "../lib/highlight";
 
   let {
     docId,
@@ -191,6 +192,10 @@
       .catch((err) => (error = err.message))
       .finally(() => (loading = false));
   });
+
+  let contentHtml = $derived(
+    doc ? highlightTerms(doc.content, searchState.query) : "",
+  );
 </script>
 
 <div class="sidebar-header">
@@ -280,7 +285,7 @@
 
     <div class="content-section">
       <h3>Content</h3>
-      <pre>{doc.content}</pre>
+      <pre>{@html contentHtml}</pre>
     </div>
 
     {#if doc.attachments.length > 0}
@@ -510,5 +515,11 @@
     font-size: 0.85rem;
     line-height: 1.5;
     margin: 0;
+  }
+
+  pre :global(mark) {
+    background: #fff3b0;
+    padding: 0.1em;
+    border-radius: 2px;
   }
 </style>

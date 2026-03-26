@@ -1,5 +1,7 @@
 <script lang="ts">
   import { getDocument, type DocumentDetail } from "../lib/api";
+  import { searchState } from "../lib/searchState.svelte";
+  import { highlightTerms } from "../lib/highlight";
 
   let { docId }: { docId: string } = $props();
 
@@ -14,6 +16,15 @@
       .catch((err) => (error = err.message))
       .finally(() => (loading = false));
   });
+
+  let previewHtml = $derived(
+    doc
+      ? highlightTerms(
+          doc.content.slice(0, 2000) + (doc.content.length > 2000 ? "..." : ""),
+          searchState.query,
+        )
+      : "",
+  );
 </script>
 
 <div class="preview">
@@ -26,7 +37,7 @@
       <strong>{doc.display_path}</strong>
       <a href="#/document/{doc.doc_id}" class="expand-link">Full view &rarr;</a>
     </div>
-    <pre class="preview-content">{doc.content.slice(0, 2000)}{doc.content.length > 2000 ? "..." : ""}</pre>
+    <pre class="preview-content">{@html previewHtml}</pre>
   {/if}
 </div>
 
@@ -74,5 +85,11 @@
     overflow-y: auto;
     margin: 0;
     color: #555;
+  }
+
+  .preview-content :global(mark) {
+    background: #fff3b0;
+    padding: 0.1em;
+    border-radius: 2px;
   }
 </style>

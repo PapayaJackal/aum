@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SearchResult } from "../lib/api";
   import { searchState } from "../lib/searchState.svelte";
+  import { sanitizeHighlight } from "../lib/highlight";
 
   let { result, index = "" }: { result: SearchResult; index: string } = $props();
 
@@ -8,14 +9,16 @@
   let filename = $derived(parts[parts.length - 1] || result.display_path);
   let dirPart = $derived(parts.length > 1 ? parts.slice(0, -1).join("/") + "/" : "");
 
+  let snippet = $derived(sanitizeHighlight(result.snippet));
+
   let hasPathHighlight = $derived(!!result.display_path_highlighted);
   // Protect </mark> closing tags from being split on their "/"
   let hlParts = $derived(
     result.display_path_highlighted
-      ? result.display_path_highlighted
+      ? sanitizeHighlight(result.display_path_highlighted)
           .replaceAll("</mark>", "\x00mark\x01")
           .split("/")
-          .map((s) => s.replaceAll("\x00mark\x01", "</mark>"))
+          .map((s: string) => s.replaceAll("\x00mark\x01", "</mark>"))
       : [],
   );
   let hlFilename = $derived(hlParts.length > 0 ? hlParts[hlParts.length - 1] : "");
@@ -40,7 +43,7 @@
     <span class="score">{result.score.toFixed(3)}</span>
   </div>
 
-  <p class="snippet">{@html result.snippet}</p>
+  <p class="snippet">{@html snippet}</p>
 
   <div class="card-footer">
     {#if hasPathHighlight}
