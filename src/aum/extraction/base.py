@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from aum.models import Document
+
+RecordErrorFn = Callable[[Path, str, str], None]
 
 
 class ExtractionError(Exception):
@@ -15,11 +17,17 @@ class ExtractionDepthError(ExtractionError):
 
 
 class Extractor(Protocol):
-    def extract(self, file_path: Path) -> list[Document]:
+    def extract(
+        self,
+        file_path: Path,
+        record_error: RecordErrorFn | None = None,
+    ) -> list[Document]:
         """Extract text and metadata from a file, including embedded documents.
 
         Returns one Document per content part (e.g. email body + each attachment).
-        Raises ExtractionError on failure.
+        ``record_error``, if provided, is called for each non-fatal sub-error
+        (e.g. a failed attachment) with (path, error_type, message).
+        Raises ExtractionError on failure of the top-level file.
         """
         ...
 

@@ -83,11 +83,12 @@ def ingest(
     click.echo(f"  Files:      {job.total_files}")
     click.echo(f"  Extracted:  {job.extracted}")
     click.echo(f"  Indexed:    {job.processed}")
+    click.echo(f"  Empty:      {job.empty}")
     click.echo(f"  Failed:     {job.failed}")
     click.echo(f"  Time:       {elapsed:.1f}s  ({throughput:.1f} files/s)")
     if avg_extraction > 0:
         click.echo(f"  Avg/file:   {avg_extraction:.3f}s")
-    if job.failed > 0:
+    if job.failed > 0 or job.empty > 0:
         click.echo(f"  Run 'aum job {job.job_id} --errors' for details")
 
 
@@ -459,12 +460,12 @@ def list_jobs(status: str | None) -> None:
         click.echo("No jobs found.")
         return
 
-    click.echo(f"{'JOB ID':<14} {'INDEX':<16} {'STATUS':<12} {'FILES':<8} {'EXTRACTED':<11} {'INDEXED':<9} {'FAILED':<8} {'CREATED'}")
-    click.echo("-" * 100)
+    click.echo(f"{'JOB ID':<14} {'INDEX':<16} {'STATUS':<12} {'FILES':<8} {'EXTRACTED':<11} {'INDEXED':<9} {'EMPTY':<7} {'FAILED':<8} {'CREATED'}")
+    click.echo("-" * 108)
     for j in jobs:
         files = str(j.total_files) if j.total_files else "?"
         created = f"{j.created_at:%Y-%m-%d %H:%M}"
-        click.echo(f"{j.job_id:<14} {j.index_name:<16} {j.status.value:<12} {files:<8} {j.extracted:<11} {j.processed:<9} {j.failed:<8} {created}")
+        click.echo(f"{j.job_id:<14} {j.index_name:<16} {j.status.value:<12} {files:<8} {j.extracted:<11} {j.processed:<9} {j.empty:<7} {j.failed:<8} {created}")
 
 
 @main.command("job")
@@ -491,6 +492,7 @@ def show_job(job_id: str, errors: bool) -> None:
     click.echo(f"Files:      {job.total_files}")
     click.echo(f"Extracted:  {job.extracted}")
     click.echo(f"Indexed:    {job.processed}")
+    click.echo(f"Empty:      {job.empty}")
     click.echo(f"Failed:     {job.failed}")
     click.echo(f"Created:    {job.created_at:%Y-%m-%d %H:%M:%S}")
     if job.finished_at:

@@ -9,7 +9,7 @@ from tika import parser as tika_parser
 from tika import unpack as tika_unpack
 from tika.tika import parse1 as tika_parse1
 
-from aum.extraction.base import ExtractionDepthError, ExtractionError
+from aum.extraction.base import ExtractionDepthError, ExtractionError, RecordErrorFn
 from aum.metrics import EXTRACTION_DURATION, EXTRACTION_ERRORS
 from aum.models import Document
 
@@ -72,8 +72,12 @@ class TikaExtractor:
         self._extract_dir = Path(extract_dir)
         self._max_depth = max_depth
 
-    def extract(self, file_path: Path) -> list[Document]:
-        return self._extract_recursive(file_path, depth=0)
+    def extract(
+        self,
+        file_path: Path,
+        record_error: RecordErrorFn | None = None,
+    ) -> list[Document]:
+        return self._extract_recursive(file_path, depth=0, record_error=record_error)
 
     def _extract_recursive(
         self,
@@ -81,6 +85,7 @@ class TikaExtractor:
         depth: int,
         _display_path: Path | None = None,
         _extracted_from: str | None = None,
+        record_error: RecordErrorFn | None = None,
     ) -> list[Document]:
         if depth > self._max_depth:
             raise ExtractionDepthError(
@@ -147,10 +152,12 @@ class TikaExtractor:
                     att_path, depth=depth + 1,
                     _display_path=att_display,
                     _extracted_from=str(container_display),
+                    record_error=record_error,
                 ))
             except ExtractionDepthError:
                 raise
             except ExtractionError as exc:
+                error_type = type(exc).__name__
                 log.warning(
                     "failed to extract attachment",
                     attachment=str(att_path),
@@ -159,10 +166,23 @@ class TikaExtractor:
                     error=str(exc),
                 )
                 EXTRACTION_ERRORS.labels(error_type="AttachmentError").inc()
+                if record_error is not None:
+                    record_error(att_path, error_type, str(exc))
 
         if not documents:
-            # File parsed but produced no text — keep a placeholder so it's
-            # tracked as processed rather than silently dropped
+            try:
+                file_size = file_path.stat().st_size
+            except OSError:
+                file_size = 0
+            if file_size > 0:
+                # Tika parsed the file but extracted no text — record as a
+                # failure (e.g. for later re-indexing with OCR) but still index
+                # the document so its metadata is searchable.
+                EXTRACTION_ERRORS.labels(error_type="EmptyExtraction").inc()
+                msg = f"Tika produced no text for {file_path} ({file_size} bytes)"
+                log.warning("empty extraction", file_path=str(file_path), file_size=file_size)
+                if record_error is not None:
+                    record_error(file_path, "EmptyExtraction", msg)
             documents.append(Document(source_path=file_path, content="", metadata=metadata))
 
         log.info(

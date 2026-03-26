@@ -47,6 +47,7 @@ def _make_progress_line(
     in_flight: int,
     indexed: int,
     failed: int,
+    empty: int,
     timing_count: int,
     total_extraction_time: float,
 ) -> Text:
@@ -80,8 +81,10 @@ def _make_progress_line(
     avg = total_extraction_time / timing_count if timing_count > 0 else 0.0
     t.append(f"  {avg:.3f}s/file", style="yellow")
 
-    # Indexed and failed counts
+    # Indexed, empty, and failed counts
     t.append(f"  idx:{indexed}", style="green")
+    if empty > 0:
+        t.append(f"  empty:{empty}", style="yellow")
     if failed > 0:
         t.append(f"  fail:{failed}", style="bold red")
 
@@ -189,6 +192,7 @@ class IngestPipeline:
         extracted = 0
         processed = 0
         failed = 0
+        empty = 0
         extraction_time = 0.0
         timing_count = 0
         files_done = 0     # all completed futures, including failures (for progress bar)
@@ -211,7 +215,7 @@ class IngestPipeline:
 
         ctx: Live | nullcontext = (  # type: ignore[type-arg]
             Live(
-                _make_progress_line(job_start, 0, False, 0, 0, 0, 0, 0, 0.0),
+                _make_progress_line(job_start, 0, False, 0, 0, 0, 0, 0, 0, 0.0),
                 console=console,
                 refresh_per_second=4,
                 transient=True,
@@ -225,7 +229,7 @@ class IngestPipeline:
 
             with ctx as live:
                 with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
-                    pending_futures: dict[Future[tuple[list[Document], float]], Path] = {}
+                    pending_futures: dict[Future[tuple[list[Document], float, int]], Path] = {}
                     walker_done = False
 
                     while True:
@@ -247,9 +251,10 @@ class IngestPipeline:
                             file_path = pending_futures.pop(future)
                             files_done += 1
                             try:
-                                docs, ext_time = future.result()
+                                docs, ext_time, n_empty = future.result()
                                 extraction_time += ext_time
                                 timing_count += 1
+                                empty += n_empty
                                 extracted += max(0, len(docs) - 1)
                                 for i, doc in enumerate(docs):
                                     self._set_display_path(doc, source_dir)
@@ -281,14 +286,14 @@ class IngestPipeline:
                             processed += n_processed
                             failed += n_failed
                             batch = []
-                            self._tracker.update_progress(job_id, extracted, processed, failed)
-                            log.info("batch complete", job_id=job_id, extracted=extracted, processed=processed, failed=failed)
+                            self._tracker.update_progress(job_id, extracted, processed, failed, empty)
+                            log.info("batch complete", job_id=job_id, extracted=extracted, processed=processed, failed=failed, empty=empty)
 
                         # Update live display
                         if live is not None:
                             live.update(_make_progress_line(
                                 job_start, discovered[0], walker_done, files_done,
-                                in_flight_count[0], processed, failed,
+                                in_flight_count[0], processed, failed, empty,
                                 timing_count, extraction_time,
                             ))
 
@@ -301,12 +306,12 @@ class IngestPipeline:
                         n_processed, n_failed, _, _ = self._flush_batch(job_id, batch)
                         processed += n_processed
                         failed += n_failed
-                        self._tracker.update_progress(job_id, extracted, processed, failed)
+                        self._tracker.update_progress(job_id, extracted, processed, failed, empty)
 
             walker.join(timeout=5)
             elapsed = time.monotonic() - job_start
             self._tracker.complete_job(job_id, JobStatus.COMPLETED)
-            log.info("ingest complete", job_id=job_id, extracted=extracted, processed=processed, failed=failed)
+            log.info("ingest complete", job_id=job_id, extracted=extracted, processed=processed, failed=failed, empty=empty)
 
         except Exception:
             elapsed = time.monotonic() - job_start
@@ -356,16 +361,25 @@ class IngestPipeline:
         job_id: str,
         in_flight_lock: Lock,
         in_flight_count: list[int],
-    ) -> tuple[list[Document], float]:
+    ) -> tuple[list[Document], float, int]:
+        """Extract documents from a file. Returns (docs, elapsed, empty_count)."""
         structlog.contextvars.bind_contextvars(job_id=job_id)
         with in_flight_lock:
             in_flight_count[0] += 1
         try:
             start = time.monotonic()
-            docs = self._extractor.extract(file_path)
+            empty_count: list[int] = [0]
+
+            def _record_sub_error(path: Path, etype: str, msg: str) -> None:
+                DOCS_FAILED.labels(error_type=etype).inc()
+                self._tracker.record_error(job_id, path, etype, msg)
+                if etype == "EmptyExtraction":
+                    empty_count[0] += 1
+
+            docs = self._extractor.extract(file_path, record_error=_record_sub_error)
             elapsed = time.monotonic() - start
             INGEST_DURATION.labels(stage="extraction").observe(elapsed)
-            return docs, elapsed
+            return docs, elapsed, empty_count[0]
         finally:
             with in_flight_lock:
                 in_flight_count[0] -= 1
