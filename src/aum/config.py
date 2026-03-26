@@ -46,7 +46,7 @@ class AumConfig(BaseSettings):
 
     # Tika
     tika_server_url: str = "http://localhost:9998"
-    ocr_enabled: bool = True
+    ocr_enabled: bool = False
     ocr_language: str = "eng"
 
     # Embeddings
