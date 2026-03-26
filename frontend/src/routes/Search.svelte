@@ -25,7 +25,7 @@
         }
         _syncSearchType();
       })
-      .catch(() => { indices = []; });
+      .catch(() => { indices = []; error = "Failed to load indices"; });
   });
 
   let indices = $state<IndexInfo[]>([]);
