@@ -283,11 +283,6 @@
       </div>
     </div>
 
-    <div class="content-section">
-      <h3>Content</h3>
-      <pre>{@html contentHtml}</pre>
-    </div>
-
     {#if doc.attachments.length > 0}
       <div class="attachments-section">
         <h3>Attachments</h3>
@@ -298,6 +293,11 @@
         </ul>
       </div>
     {/if}
+
+    <div class="content-section">
+      <h3>Content</h3>
+      <pre>{@html contentHtml}</pre>
+    </div>
   {/if}
 </div>
 
