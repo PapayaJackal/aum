@@ -17,6 +17,7 @@ dependencies = [
     "authlib>=1.6",
     "httpx>=0.28",
     "rich>=14.3",
+    "itsdangerous>=2.2.0",
 ]
 
 [project.optional-dependencies]
