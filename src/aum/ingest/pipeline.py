@@ -17,7 +17,6 @@ from rich.console import Console as RichConsole
 from rich.live import Live
 from rich.text import Text
 
-from aum.embeddings.base import Embedder
 from aum.extraction.base import ExtractionDepthError, ExtractionError, Extractor
 from aum.ingest.tracker import JobTracker
 from aum.metrics import (
@@ -154,7 +153,6 @@ class IngestPipeline:
         extractor: Extractor,
         search_backend: SearchBackend,
         tracker: JobTracker,
-        embedder: Embedder | None = None,
         index_name: str = "aum",
         batch_size: int = 50,
         max_workers: int = 4,
@@ -162,7 +160,6 @@ class IngestPipeline:
         self._extractor = extractor
         self._backend = search_backend
         self._tracker = tracker
-        self._embedder = embedder
         self._index_name = index_name
         self._batch_size = batch_size
         self._max_workers = max_workers
@@ -175,8 +172,7 @@ class IngestPipeline:
         # Ensure the search index exists with the correct mapping before
         # ingesting any documents.  This is a no-op when the index already
         # exists and the mapping is up to date.
-        vector_dim = self._embedder.dimension if self._embedder else None
-        self._backend.initialize(vector_dimension=vector_dim)
+        self._backend.initialize()
 
         source_dir = source_dir.resolve()
         job_id = uuid.uuid4().hex[:12]
@@ -375,31 +371,15 @@ class IngestPipeline:
                 in_flight_count[0] -= 1
 
     def _flush_batch(self, job_id: str, batch: list[tuple[str, Document]]) -> tuple[int, int, float, float]:
-        """Embed (if configured) and index a batch. Returns (processed, failed, embed_time, index_time)."""
+        """Index a batch. Returns (processed, failed, embed_time, index_time)."""
         if not batch:
             return 0, 0, 0.0, 0.0
-
-        emb_time = 0.0
-        if self._embedder is not None:
-            t0 = time.monotonic()
-            self._embed_batch(batch)
-            emb_time = time.monotonic() - t0
 
         t0 = time.monotonic()
         n_processed, n_failed = self._index_batch(job_id, batch)
         idx_time = time.monotonic() - t0
 
-        return n_processed, n_failed, emb_time, idx_time
-
-    def _embed_batch(self, docs: list[tuple[str, Document]]) -> None:
-        assert self._embedder is not None
-        texts = [doc.content for _, doc in docs]
-        start = time.monotonic()
-        embeddings = self._embedder.embed_batch(texts)
-        INGEST_DURATION.labels(stage="embedding").observe(time.monotonic() - start)
-
-        for (_, doc), emb in zip(docs, embeddings):
-            doc.embedding = emb
+        return n_processed, n_failed, 0.0, idx_time
 
     def _index_batch(self, job_id: str, docs: list[tuple[str, Document]]) -> tuple[int, int]:
         """Index a batch. Returns (processed, failed) counts."""

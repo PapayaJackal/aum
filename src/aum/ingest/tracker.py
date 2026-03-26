@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS job_errors (
     timestamp TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS index_embeddings (
+    index_name TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 """
 
 
@@ -152,3 +159,27 @@ class JobTracker:
             created_at=datetime.fromisoformat(row["created_at"]),
             finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
         )
+
+    # --- Embedding model tracking ---
+
+    def get_embedding_model(self, index_name: str) -> tuple[str, int] | None:
+        """Return (model, dimension) for the given index, or None if not set."""
+        row = self._conn.execute(
+            "SELECT model, dimension FROM index_embeddings WHERE index_name = ?",
+            (index_name,),
+        ).fetchone()
+        if row is None:
+            return None
+        return row["model"], row["dimension"]
+
+    def set_embedding_model(self, index_name: str, model: str, dimension: int) -> None:
+        """Record the embedding model used for an index (upsert)."""
+        now = datetime.now(UTC).isoformat()
+        self._conn.execute(
+            "INSERT INTO index_embeddings (index_name, model, dimension, updated_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(index_name) DO UPDATE SET model = ?, dimension = ?, updated_at = ?",
+            (index_name, model, dimension, now, model, dimension, now),
+        )
+        self._conn.commit()
+        log.info("stored embedding model for index", index_name=index_name, model=model, dimension=dimension)

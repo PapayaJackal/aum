@@ -14,5 +14,15 @@ services:
     ports:
       - "9998:9998"
 
+  # Run Ollama on the host for GPU acceleration (`ollama serve`).
+  # ollama:
+  #   image: docker.io/ollama/ollama:latest
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   environment:
+  #     - OLLAMA_NUM_PARALLEL=8
+
 volumes:
   es-data:

@@ -68,17 +68,10 @@ def ingest(
     backend = make_search_backend(config, index=idx)
     tracker = make_tracker(config)
 
-    embedder = None
-    if config.embeddings_enabled:
-        from aum.embeddings.sentence_transformers import SentenceTransformerEmbedder
-
-        embedder = SentenceTransformerEmbedder(config.embeddings_model, config.embeddings_dimension)
-
     pipeline = IngestPipeline(
         extractor=extractor,
         search_backend=backend,
         tracker=tracker,
-        embedder=embedder,
         index_name=idx,
         batch_size=batch_size or config.ingest_batch_size,
         max_workers=workers or config.ingest_max_workers,
@@ -130,6 +123,179 @@ def reset_index(index: str | None) -> None:
     vector_dim = config.embeddings_dimension if config.embeddings_enabled else None
     backend.initialize(vector_dimension=vector_dim)
     click.echo(f"Index '{idx}' reset.")
+
+
+# --- Embedding ---
+
+
+@main.command()
+@click.option("--index", default=None, help="Target index name (default: from config)")
+@click.option("--batch-size", default=None, type=int, help="Batch size for embedding")
+@click.option("--backend", default=None, type=click.Choice(["ollama", "openai"]), help="Embedding backend")
+@click.option("--model", default=None, help="Embedding model name")
+@click.option("--pull/--no-pull", default=True, help="Auto-pull model in Ollama (default: yes)")
+def embed(
+    index: str | None,
+    batch_size: int | None,
+    backend: str | None,
+    model: str | None,
+    pull: bool,
+) -> None:
+    """Generate embeddings for documents that don't have them yet.
+
+    Runs as a separate job from ingest — queries the search index for
+    un-embedded documents, generates embeddings via the configured backend
+    (Ollama or OpenAI-compatible API), and updates them in place.
+    """
+    import time
+    from contextlib import nullcontext
+
+    from rich.console import Console as RichConsole
+    from rich.live import Live
+    from rich.text import Text
+
+    from aum.api.deps import default_index_name, make_embedder, make_search_backend
+    from aum.metrics import EMBEDDING_DOCS_FAILED, EMBEDDING_DOCS_PROCESSED, EMBEDDING_JOBS_ACTIVE
+
+    config = _load_config()
+    _setup(config)
+
+    if backend:
+        config.embeddings_backend = backend
+    if model:
+        config.embeddings_model = model
+
+    from aum.api.deps import make_tracker
+
+    idx = index or default_index_name(config)
+    search = make_search_backend(config, index=idx)
+    tracker = make_tracker(config)
+    embedder = make_embedder(config)
+
+    # Ensure the index has a vector field
+    search.initialize(vector_dimension=embedder.dimension)
+
+    # Check for embedding model mismatch
+    prev = tracker.get_embedding_model(idx)
+    if prev is not None:
+        prev_model, prev_dim = prev
+        if prev_model != config.embeddings_model:
+            click.echo(
+                f"WARNING: index '{idx}' was previously embedded with '{prev_model}' "
+                f"but current model is '{config.embeddings_model}'.\n"
+                f"Mixing models in one index will produce bad search results.\n"
+                f"Run 'aum reset --index {idx}' and re-ingest to switch models.",
+                err=True,
+            )
+            sys.exit(1)
+
+    # Auto-pull for Ollama
+    if pull and config.embeddings_backend == "ollama":
+        from aum.embeddings.ollama import OllamaEmbedder
+
+        if isinstance(embedder, OllamaEmbedder):
+            click.echo(f"Pulling model '{config.embeddings_model}' (if needed)...")
+            embedder.ensure_model()
+
+    total_unembedded = search.count_unembedded()
+    if total_unembedded == 0:
+        click.echo(f"All documents in '{idx}' already have embeddings.")
+        return
+
+    bs = batch_size or config.embeddings_batch_size
+    click.echo(
+        f"Embedding {total_unembedded} documents in '{idx}'"
+        f" using {config.embeddings_backend}/{config.embeddings_model}"
+        f" (batch_size={bs}, num_ctx={config.embeddings_context_length})"
+    )
+
+    EMBEDDING_JOBS_ACTIVE.inc()
+    embedded = 0
+    failed = 0
+    job_start = time.monotonic()
+    show_progress = sys.stderr.isatty()
+
+    def _make_progress(total: int, done: int, n_failed: int, start: float) -> Text:
+        elapsed = time.monotonic() - start
+        pct = min(done / total * 100, 100) if total else 0
+        rate = done / elapsed if elapsed > 0 else 0
+        filled = int(20 * pct / 100)
+
+        t = Text(no_wrap=True, overflow="crop")
+        t.append("[", style="dim")
+        t.append("█" * filled, style="blue")
+        t.append("░" * (20 - filled), style="dim blue")
+        t.append("] ", style="dim")
+        t.append(f"{done}/{total} ({pct:.0f}%)", style="white")
+        t.append(f"  {rate:.1f} docs/s", style="yellow")
+        if n_failed:
+            t.append(f"  fail:{n_failed}", style="bold red")
+        m, s = divmod(int(elapsed), 60)
+        t.append(f"  {m:02d}:{s:02d}", style="dim")
+        return t
+
+    try:
+        console = RichConsole(stderr=True) if show_progress else None
+        ctx: Live | nullcontext = (
+            Live(
+                _make_progress(total_unembedded, 0, 0, job_start),
+                console=console,
+                refresh_per_second=4,
+                transient=True,
+            )
+            if show_progress
+            else nullcontext()
+        )
+
+        from aum.embeddings.chunking import chunk_text
+
+        max_chunk_chars = config.embeddings_context_length * 4  # ~4 chars/token
+        overlap_chars = config.embeddings_chunk_overlap
+
+        with ctx as live:
+            for scroll_batch in search.scroll_unembedded(batch_size=bs):
+                # Process each document: chunk, embed all chunks, store as nested array
+                updates: list[tuple[str, list[list[float]]]] = []
+                batch_failed = False
+
+                for doc_id, content in scroll_batch:
+                    chunks = chunk_text(content, max_chars=max_chunk_chars, overlap_chars=overlap_chars)
+
+                    try:
+                        chunk_vectors = embedder.embed_documents(chunks)
+                    except Exception as exc:
+                        log.error("embedding failed", doc_id=doc_id, error=str(exc), n_chunks=len(chunks))
+                        failed += 1
+                        EMBEDDING_DOCS_FAILED.inc()
+                        continue
+
+                    updates.append((doc_id, chunk_vectors))
+
+                if updates:
+                    n_failed = search.update_embeddings(updates)
+                    batch_ok = len(updates) - n_failed
+                    embedded += batch_ok
+                    failed += n_failed
+                    EMBEDDING_DOCS_PROCESSED.inc(batch_ok)
+                    if n_failed:
+                        EMBEDDING_DOCS_FAILED.inc(n_failed)
+
+                if live is not None:
+                    live.update(_make_progress(total_unembedded, embedded, failed, job_start))
+                else:
+                    log.info("embedding progress", embedded=embedded, failed=failed, total=total_unembedded)
+
+    finally:
+        EMBEDDING_JOBS_ACTIVE.dec()
+
+    elapsed = time.monotonic() - job_start
+    rate = embedded / elapsed if elapsed > 0 else 0
+    click.echo(f"Embedded:  {embedded}")
+    click.echo(f"Failed:    {failed}")
+    click.echo(f"Time:      {elapsed:.1f}s ({rate:.1f} docs/s)")
+
+    if embedded > 0:
+        tracker.set_embedding_model(idx, config.embeddings_model, embedder.dimension)
 
 
 # --- Search ---
@@ -192,13 +358,19 @@ def search(
     if search_type == "text":
         results, total, facets = backend.search_text(query, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
     elif search_type in ("vector", "hybrid"):
-        if not config.embeddings_enabled:
-            click.echo("Error: embeddings not enabled. Set TINYALEPH_EMBEDDINGS_ENABLED=true", err=True)
-            sys.exit(1)
-        from aum.embeddings.sentence_transformers import SentenceTransformerEmbedder
+        from aum.api.deps import make_embedder, make_tracker
 
-        embedder = SentenceTransformerEmbedder(config.embeddings_model, config.embeddings_dimension)
-        vector = embedder.embed(query)
+        tracker = make_tracker(config)
+        prev = tracker.get_embedding_model(idx)
+        if prev is None:
+            click.echo(f"Error: no embeddings found for index '{idx}'. Run 'aum embed' first.", err=True)
+            sys.exit(1)
+
+        # Use the model that was actually used to embed this index
+        prev_model, _ = prev
+        config.embeddings_model = prev_model
+        embedder = make_embedder(config)
+        vector = embedder.embed_query(query)
         if search_type == "vector":
             results, total, facets = backend.search_vector(vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
         else:

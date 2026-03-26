@@ -41,6 +41,7 @@ class AumConfig(BaseSettings):
     # Elasticsearch
     es_url: str = "http://localhost:9200"
     es_index: str = "aum"
+    es_rrf: bool = False
 
     # Tika
     tika_server_url: str = "http://localhost:9998"
@@ -49,8 +50,20 @@ class AumConfig(BaseSettings):
 
     # Embeddings
     embeddings_enabled: bool = False
-    embeddings_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    embeddings_dimension: int = 384
+    embeddings_backend: str = "ollama"  # "ollama" or "openai"
+    embeddings_model: str = "snowflake-arctic-embed2"
+    embeddings_dimension: int = 1024
+    embeddings_batch_size: int = 8
+    embeddings_context_length: int = 8192
+    embeddings_chunk_overlap: int = 200
+    embeddings_query_prefix: str = "query: "
+
+    # Ollama
+    ollama_url: str = "http://localhost:11434"
+
+    # OpenAI-compatible embedding API
+    embeddings_api_url: str = ""
+    embeddings_api_key: str = ""
 
     # Data directory — stores DB, extracted attachments, converted PDFs, caches, etc.
     data_dir: str = "data"

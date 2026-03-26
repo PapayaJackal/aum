@@ -58,7 +58,25 @@ EXTRACTION_ERRORS = Counter(
 EMBEDDING_DURATION = Histogram(
     "aum_embedding_duration_seconds",
     "Time to embed a batch",
+    ["backend"],
     buckets=[0.1, 0.5, 1, 2, 5, 10],
+)
+EMBEDDING_REQUESTS = Counter(
+    "aum_embedding_requests_total",
+    "Total embedding API requests",
+    ["backend"],
+)
+EMBEDDING_DOCS_PROCESSED = Counter(
+    "aum_embedding_docs_processed_total",
+    "Total documents successfully embedded",
+)
+EMBEDDING_DOCS_FAILED = Counter(
+    "aum_embedding_docs_failed_total",
+    "Total documents that failed embedding",
+)
+EMBEDDING_JOBS_ACTIVE = Gauge(
+    "aum_embedding_jobs_active",
+    "Number of currently running embedding jobs",
 )
 
 # Auth

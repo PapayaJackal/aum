@@ -44,9 +44,39 @@ def _get_db(config: AumConfig) -> sqlite3.Connection:
     return _db_cache[config.db_path]
 
 
+def make_embedder(config: AumConfig):
+    """Create an embedder instance based on config."""
+    from aum.embeddings.base import Embedder
+
+    if config.embeddings_backend == "ollama":
+        from aum.embeddings.ollama import OllamaEmbedder
+
+        return OllamaEmbedder(
+            model=config.embeddings_model,
+            base_url=config.ollama_url,
+            expected_dimension=config.embeddings_dimension,
+            context_length=config.embeddings_context_length,
+            query_prefix=config.embeddings_query_prefix,
+        )
+    elif config.embeddings_backend == "openai":
+        from aum.embeddings.openai import OpenAIEmbedder
+
+        if not config.embeddings_api_url:
+            raise ValueError("embeddings_api_url must be set when using openai backend")
+        return OpenAIEmbedder(
+            model=config.embeddings_model,
+            api_url=config.embeddings_api_url,
+            api_key=config.embeddings_api_key,
+            expected_dimension=config.embeddings_dimension,
+            query_prefix=config.embeddings_query_prefix,
+        )
+    else:
+        raise ValueError(f"Unsupported embeddings backend: {config.embeddings_backend!r}")
+
+
 def make_search_backend(config: AumConfig, index: str | None = None) -> SearchBackend:
     if config.search_backend == "elasticsearch":
-        return ElasticsearchBackend(url=config.es_url, index=index or config.es_index)
+        return ElasticsearchBackend(url=config.es_url, index=index or config.es_index, rrf=config.es_rrf)
     raise ValueError(f"Unsupported search backend: {config.search_backend!r}")
 
 

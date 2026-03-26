@@ -20,7 +20,6 @@ class Document:
     source_path: Path
     content: str
     metadata: dict[str, str | list[str]]
-    embedding: list[float] | None = None
 
 
 @dataclass

@@ -117,16 +117,16 @@ async def search(
     if type == "text":
         results, total, facets = backend.search_text(q, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
     elif type == "vector":
-        embedder = _get_embedder()
+        embedder = _get_embedder(idx)
         if embedder is None:
-            raise HTTPException(status_code=400, detail="Embeddings not enabled")
-        vector = embedder.embed(q)
+            raise HTTPException(status_code=400, detail=f"No embeddings found for index '{idx}'. Run 'aum embed' first.")
+        vector = embedder.embed_query(q)
         results, total, facets = backend.search_vector(vector, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
     elif type == "hybrid":
-        embedder = _get_embedder()
+        embedder = _get_embedder(idx)
         if embedder is None:
-            raise HTTPException(status_code=400, detail="Embeddings not enabled")
-        vector = embedder.embed(q)
+            raise HTTPException(status_code=400, detail=f"No embeddings found for index '{idx}'. Run 'aum embed' first.")
+        vector = embedder.embed_query(q)
         results, total, facets = backend.search_hybrid(q, vector, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown search type: {type}")
@@ -220,11 +220,16 @@ async def download_document(
     return FileResponse(path=str(file_path), filename=file_path.name)
 
 
-def _get_embedder():  # noqa: ANN202
-    """Lazily load the embedder if configured."""
+def _get_embedder(index_name: str):  # noqa: ANN202
+    """Load the embedder for a given index, using the model it was embedded with."""
     config = get_config()
-    if not config.embeddings_enabled:
-        return None
-    from aum.embeddings.sentence_transformers import SentenceTransformerEmbedder
+    from aum.api.deps import make_embedder, make_tracker
 
-    return SentenceTransformerEmbedder(config.embeddings_model, config.embeddings_dimension)
+    tracker = make_tracker(config)
+    prev = tracker.get_embedding_model(index_name)
+    if prev is None:
+        return None
+
+    prev_model, _ = prev
+    config.embeddings_model = prev_model
+    return make_embedder(config)

@@ -156,10 +156,11 @@ def _build_filter_clauses(filters: dict[str, list[str]]) -> list[dict]:
 class ElasticsearchBackend:
     """Search backend using Elasticsearch with optional kNN vector search."""
 
-    def __init__(self, url: str = "http://localhost:9200", index: str = "aum") -> None:
+    def __init__(self, url: str = "http://localhost:9200", index: str = "aum", rrf: bool = False) -> None:
         self._client = Elasticsearch(url)
         self._index = index
         self._vector_dimension: int | None = None
+        self._rrf = rrf
 
     def _build_mappings(self, vector_dimension: int | None) -> dict:
         mappings: dict = {
@@ -178,11 +179,16 @@ class ElasticsearchBackend:
         }
 
         if vector_dimension:
-            mappings["properties"]["embedding"] = {
-                "type": "dense_vector",
-                "dims": vector_dimension,
-                "index": True,
-                "similarity": "cosine",
+            mappings["properties"]["chunks"] = {
+                "type": "nested",
+                "properties": {
+                    "embedding": {
+                        "type": "dense_vector",
+                        "dims": vector_dimension,
+                        "index": True,
+                        "similarity": "cosine",
+                    },
+                },
             }
 
         return mappings
@@ -239,8 +245,6 @@ class ElasticsearchBackend:
             "metadata": document.metadata,
             "meta": _extract_indexed_meta(document.metadata),
         }
-        if document.embedding is not None:
-            body["embedding"] = document.embedding
 
         self._client.index(index=self._index, id=doc_id, body=body)
 
@@ -260,8 +264,6 @@ class ElasticsearchBackend:
                 "metadata": document.metadata,
                 "meta": _extract_indexed_meta(document.metadata),
             }
-            if document.embedding is not None:
-                body["embedding"] = document.embedding
             operations.append(body)
 
         resp = self._client.bulk(operations=operations)
@@ -307,7 +309,7 @@ class ElasticsearchBackend:
     def search_vector(self, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         filter_clauses = _build_filter_clauses(filters) if filters else []
         knn_body: dict = {
-            "field": "embedding",
+            "field": "chunks.embedding",
             "query_vector": vector,
             "k": limit,
             "num_candidates": limit * 5,
@@ -332,22 +334,46 @@ class ElasticsearchBackend:
         match_clause: dict = {"match": {"content": {"query": query, "operator": "and"}}}
         filter_clauses = _build_filter_clauses(filters) if filters else []
         if filter_clauses:
-            query_body: dict = {"bool": {"must": [match_clause], "filter": filter_clauses}}
+            text_query: dict = {"bool": {"must": [match_clause], "filter": filter_clauses}}
         else:
-            query_body = match_clause
+            text_query = match_clause
+
         knn_body: dict = {
-            "field": "embedding",
+            "field": "chunks.embedding",
             "query_vector": vector,
             "k": limit,
             "num_candidates": limit * 5,
         }
         if filter_clauses:
             knn_body["filter"] = {"bool": {"filter": filter_clauses}}
-        body: dict = {
-            "query": query_body,
-            "knn": knn_body,
-            "size": limit,
-            "from": offset,
+
+        if self._rrf:
+            body: dict = {
+                "retriever": {
+                    "rrf": {
+                        "retrievers": [
+                            {"standard": {"query": text_query}},
+                            {"knn": knn_body},
+                        ],
+                        "rank_window_size": limit * 5,
+                    }
+                },
+                "size": limit,
+                "from": offset,
+            }
+        else:
+            body = {
+                "query": text_query,
+                "knn": knn_body,
+                "size": limit,
+                "from": offset,
+            }
+
+        body["highlight"] = {
+            "pre_tags": ["<mark>"],
+            "post_tags": ["</mark>"],
+            "max_analyzed_offset": 999_999,
+            "fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}},
         }
         if include_facets:
             body["aggs"] = _FACET_AGGS
@@ -430,6 +456,80 @@ class ElasticsearchBackend:
             return sorted(name for name in indices if not name.startswith("."))
         except Exception:
             return []
+
+    _UNEMBEDDED_QUERY: dict = {"bool": {"must_not": [{"exists": {"field": "chunks"}}]}}
+
+    def count_unembedded(self) -> int:
+        """Return the number of documents without chunk embeddings."""
+        try:
+            resp = self._client.count(index=self._index, body={"query": self._UNEMBEDDED_QUERY})
+            return resp["count"]
+        except NotFoundError:
+            return 0
+
+    def scroll_unembedded(self, batch_size: int = 64):
+        """Yield batches of (doc_id, content) for documents without chunk embeddings.
+
+        Uses the scroll API to iterate efficiently over large result sets
+        without holding all document content in memory.
+        """
+        body: dict = {
+            "query": self._UNEMBEDDED_QUERY,
+            "_source": ["content"],
+            "size": batch_size,
+        }
+        resp = self._client.search(index=self._index, body=body, scroll="5m")
+        scroll_id = resp.get("_scroll_id")
+
+        try:
+            while True:
+                hits = resp.get("hits", {}).get("hits", [])
+                if not hits:
+                    break
+                batch: list[tuple[str, str]] = []
+                for hit in hits:
+                    doc_id = hit["_id"]
+                    content = hit["_source"].get("content", "")
+                    batch.append((doc_id, content))
+                yield batch
+                resp = self._client.scroll(scroll_id=scroll_id, scroll="5m")
+        finally:
+            if scroll_id:
+                try:
+                    self._client.clear_scroll(scroll_id=scroll_id)
+                except Exception:
+                    pass
+
+    def update_embeddings(self, updates: list[tuple[str, list[list[float]]]]) -> int:
+        """Bulk-update chunk embeddings on existing documents.
+
+        Each update is (doc_id, list_of_chunk_vectors). Stores as nested
+        objects in the ``chunks`` field. Returns failure count.
+        """
+        if not updates:
+            return 0
+
+        operations: list[dict] = []
+        for doc_id, chunk_vectors in updates:
+            chunks = [{"embedding": vec} for vec in chunk_vectors]
+            operations.append({"update": {"_index": self._index, "_id": doc_id}})
+            operations.append({"doc": {"chunks": chunks}})
+
+        resp = self._client.bulk(operations=operations)
+        if not resp.get("errors"):
+            return 0
+
+        failures = 0
+        for item in resp["items"]:
+            update_result = item.get("update", {})
+            if "error" in update_result:
+                failures += 1
+                log.warning(
+                    "embedding update failed",
+                    doc_id=update_result.get("_id"),
+                    error=update_result["error"],
+                )
+        return failures
 
     def _parse_hits(self, resp: dict) -> tuple[list[SearchResult], int]:
         hits = resp.get("hits", {})

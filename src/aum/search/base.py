@@ -212,3 +212,15 @@ class SearchBackend(Protocol):
     def list_indices(self) -> list[str]:
         """Return a list of available index names."""
         ...
+
+    def count_unembedded(self) -> int:
+        """Return the number of documents without embeddings."""
+        ...
+
+    def scroll_unembedded(self, batch_size: int = 64) -> ...:
+        """Yield batches of (doc_id, content) for documents without embeddings."""
+        ...
+
+    def update_embeddings(self, updates: list[tuple[str, list[list[float]]]]) -> int:
+        """Bulk-update chunk embedding vectors. Returns number of failures."""
+        ...
