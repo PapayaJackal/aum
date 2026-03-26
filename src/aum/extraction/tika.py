@@ -56,7 +56,7 @@ class TikaExtractor:
     def extract(self, file_path: Path) -> list[Document]:
         return self._extract_recursive(file_path, depth=0)
 
-    def _extract_recursive(self, file_path: Path, depth: int) -> list[Document]:
+    def _extract_recursive(self, file_path: Path, depth: int, _display_path: Path | None = None) -> list[Document]:
         if depth > self._max_depth:
             raise ExtractionDepthError(
                 f"extraction depth limit ({self._max_depth}) exceeded at {file_path}"
@@ -99,19 +99,24 @@ class TikaExtractor:
         EXTRACTION_DURATION.observe(time.monotonic() - start)
 
         documents: list[Document] = []
+        metadata = _normalize_metadata(raw_metadata) if isinstance(raw_metadata, dict) else raw_metadata
+        if _display_path is not None:
+            metadata = {**metadata, "_aum_display_path": str(_display_path)}
         if content:
             documents.append(Document(
                 source_path=file_path,
                 content=content,
-                metadata=_normalize_metadata(raw_metadata) if isinstance(raw_metadata, dict) else raw_metadata,
+                metadata=metadata,
             ))
 
         # Recursively extract each attachment.
         # ExtractionDepthError is not caught here — it propagates to the pipeline
         # so it's recorded as a job failure rather than silently swallowed.
+        container_display = _display_path or file_path
         for att_path in attachment_paths:
+            att_display = container_display / att_path.name
             try:
-                documents.extend(self._extract_recursive(att_path, depth=depth + 1))
+                documents.extend(self._extract_recursive(att_path, depth=depth + 1, _display_path=att_display))
             except ExtractionDepthError:
                 raise
             except ExtractionError as exc:
@@ -127,7 +132,7 @@ class TikaExtractor:
         if not documents:
             # File parsed but produced no text — keep a placeholder so it's
             # tracked as processed rather than silently dropped
-            documents.append(Document(source_path=file_path, content="", metadata={}))
+            documents.append(Document(source_path=file_path, content="", metadata=metadata))
 
         log.info(
             "extracted document",

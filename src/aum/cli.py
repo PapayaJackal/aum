@@ -84,17 +84,18 @@ def ingest(
         max_workers=workers or config.ingest_max_workers,
     )
 
-    job = pipeline.run(directory)
-    # When stderr is a TTY the pipeline already printed a rich summary table.
-    # Fall back to plain text for non-interactive use (pipes, cron, CI, etc.).
-    if not sys.stderr.isatty():
-        click.echo(f"Job {job.job_id} [{idx}]: {job.status.value}")
-        click.echo(f"  Files:     {job.total_files}")
-        click.echo(f"  Extracted: {job.extracted}")
-        click.echo(f"  Indexed:   {job.processed}")
-        click.echo(f"  Failed:    {job.failed}")
-        if job.failed > 0:
-            click.echo(f"  Run 'aum job {job.job_id} --errors' for details")
+    job, elapsed, avg_extraction = pipeline.run(directory)
+    throughput = job.total_files / elapsed if elapsed > 0 else 0.0
+    click.echo(f"Job {job.job_id} [{job.index_name}]: {job.status.value}")
+    click.echo(f"  Files:      {job.total_files}")
+    click.echo(f"  Extracted:  {job.extracted}")
+    click.echo(f"  Indexed:    {job.processed}")
+    click.echo(f"  Failed:     {job.failed}")
+    click.echo(f"  Time:       {elapsed:.1f}s  ({throughput:.1f} files/s)")
+    if avg_extraction > 0:
+        click.echo(f"  Avg/file:   {avg_extraction:.3f}s")
+    if job.failed > 0:
+        click.echo(f"  Run 'aum job {job.job_id} --errors' for details")
 
 
 @main.command("init")

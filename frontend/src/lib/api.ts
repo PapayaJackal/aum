@@ -72,7 +72,7 @@ export function listIndices(): Promise<{ indices: string[] }> {
 
 export interface SearchResult {
   doc_id: string;
-  source_path: string;
+  display_path: string;
   score: number;
   snippet: string;
   metadata: Record<string, string>;
@@ -100,7 +100,7 @@ export function search(
 
 export interface DocumentDetail {
   doc_id: string;
-  source_path: string;
+  display_path: string;
   content: string;
   metadata: Record<string, string>;
 }

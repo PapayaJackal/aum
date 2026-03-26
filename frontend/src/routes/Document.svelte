@@ -23,7 +23,10 @@
   <div class="error">{error}</div>
 {:else if doc}
   <div class="doc-header">
-    <h2>{doc.source_path.split("/").pop()}</h2>
+    <div class="doc-title">
+      <h2>{doc.display_path.split("/").pop()}</h2>
+      <p class="doc-path">{index}/{doc.display_path}</p>
+    </div>
     <a class="download-btn" href={downloadUrl(docId, index)} download>Download original</a>
   </div>
 
@@ -50,13 +53,25 @@
 <style>
   .doc-header {
     display: flex;
-    align-items: baseline;
+    align-items: flex-start;
     gap: 1rem;
     margin: 1rem 0 0.5rem;
   }
 
+  .doc-title {
+    flex: 1;
+    min-width: 0;
+  }
+
   h2 {
     margin: 0;
+    word-break: break-all;
+  }
+
+  .doc-path {
+    margin: 0.2rem 0 0;
+    font-size: 0.85rem;
+    color: #888;
     word-break: break-all;
   }
 

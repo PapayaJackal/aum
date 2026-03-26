@@ -23,7 +23,7 @@
     <p class="status error">{error}</p>
   {:else if doc}
     <div class="preview-header">
-      <strong>{doc.source_path}</strong>
+      <strong>{doc.display_path}</strong>
       <a href="#/document/{doc.doc_id}" class="expand-link">Full view &rarr;</a>
     </div>
     <pre class="preview-content">{doc.content.slice(0, 2000)}{doc.content.length > 2000 ? "..." : ""}</pre>

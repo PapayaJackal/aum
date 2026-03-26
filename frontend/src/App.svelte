@@ -34,13 +34,16 @@
 
 {:else if hash.startsWith("#/document/")}
   {@const rest = hash.slice("#/document/".length)}
-  {@const slashIdx = rest.indexOf("/")}
-  {@const docIndex = slashIdx >= 0 ? decodeURIComponent(rest.slice(0, slashIdx)) : ""}
-  {@const docId = slashIdx >= 0 ? rest.slice(slashIdx + 1) : rest}
+  {@const restQIdx = rest.indexOf("?")}
+  {@const restPath = restQIdx >= 0 ? rest.slice(0, restQIdx) : rest}
+  {@const restQs = restQIdx >= 0 ? rest.slice(restQIdx) : ""}
+  {@const slashIdx = restPath.indexOf("/")}
+  {@const docIndex = slashIdx >= 0 ? decodeURIComponent(restPath.slice(0, slashIdx)) : ""}
+  {@const docId = slashIdx >= 0 ? restPath.slice(slashIdx + 1) : restPath}
   <header>
     <nav>
       <a href="#/" class="brand">aum</a>
-      <a href="#/" class="back-link">← Back to search</a>
+      <a href={"#/" + restQs} class="back-link">← Back to search</a>
       <button class="logout-btn" onclick={logout}>Logout</button>
     </nav>
   </header>

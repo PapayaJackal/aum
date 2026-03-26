@@ -15,7 +15,6 @@ import structlog
 import structlog.contextvars
 from rich.console import Console as RichConsole
 from rich.live import Live
-from rich.table import Table as RichTable
 from rich.text import Text
 
 from aum.embeddings.base import Embedder
@@ -39,6 +38,59 @@ def _file_doc_id(file_path: Path, index: int = 0) -> str:
     """Generate a stable document ID from a file path and part index."""
     key = f"{file_path.resolve()}:{index}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def _make_progress_line(
+    start: float,
+    discovered: int,
+    walker_done: bool,
+    files_done: int,
+    in_flight: int,
+    indexed: int,
+    failed: int,
+    timing_count: int,
+    total_extraction_time: float,
+) -> Text:
+    """Build a single-line rich Text for the live progress display."""
+    elapsed = time.monotonic() - start
+
+    t = Text(no_wrap=True, overflow="crop")
+
+    # Progress bar — shown once we know total; scan indicator while still walking
+    if discovered > 0:
+        pct = min(files_done / discovered * 100, 100)
+        filled = int(20 * pct / 100)
+        t.append("[", style="dim")
+        t.append("█" * filled, style="blue")
+        t.append("░" * (20 - filled), style="dim blue")
+        t.append("] ", style="dim")
+        t.append(f"{files_done:,}/{discovered:,} ({pct:.0f}%)", style="white")
+    else:
+        t.append(f"{files_done:,} files", style="white")
+
+    # Directory scan status
+    if walker_done:
+        t.append("  scan:done", style="dim green")
+    else:
+        t.append(f"  scan:{discovered:,}", style="dim yellow")
+
+    # In-flight Tika requests
+    t.append(f"  tika:{in_flight}", style="cyan")
+
+    # Average extraction time per file
+    avg = total_extraction_time / timing_count if timing_count > 0 else 0.0
+    t.append(f"  {avg:.3f}s/file", style="yellow")
+
+    # Indexed and failed counts
+    t.append(f"  idx:{indexed}", style="green")
+    if failed > 0:
+        t.append(f"  fail:{failed}", style="bold red")
+
+    # Elapsed wall-clock time
+    m, s = divmod(int(elapsed), 60)
+    t.append(f"  {m:02d}:{s:02d}", style="dim")
+
+    return t
 
 
 def _walk_files(
@@ -87,87 +139,6 @@ def _walk_files(
     return count
 
 
-def _make_progress_line(state: dict) -> Text:
-    """Build a single-line rich Text for the live progress display."""
-    elapsed = time.monotonic() - state["start"]
-    discovered = state["discovered"]
-    done = state["done"]
-    walker_done = state["walker_done"]
-
-    t = Text(no_wrap=True, overflow="crop")
-
-    # Progress bar — shown once we know total; scan indicator while still walking
-    if discovered > 0:
-        pct = min(done / discovered * 100, 100)
-        filled = int(20 * pct / 100)
-        t.append("[", style="dim")
-        t.append("█" * filled, style="blue")
-        t.append("░" * (20 - filled), style="dim blue")
-        t.append("] ", style="dim")
-        t.append(f"{done:,}/{discovered:,} ({pct:.0f}%)", style="white")
-    else:
-        t.append(f"{done:,} files", style="white")
-
-    # Directory scan status
-    if walker_done:
-        t.append("  scan:done", style="dim green")
-    else:
-        t.append(f"  scan:{discovered:,}", style="dim yellow")
-
-    # In-flight Tika requests
-    t.append(f"  tika:{state['in_flight']}", style="cyan")
-
-    # Average extraction time per file
-    tc = state["timing_count"]
-    avg = state["total_extraction_time"] / tc if tc > 0 else 0.0
-    t.append(f"  {avg:.3f}s/file", style="yellow")
-
-    # Indexed and failed counts
-    t.append(f"  idx:{state['indexed']}", style="green")
-    if state["failed"] > 0:
-        t.append(f"  fail:{state['failed']}", style="bold red")
-
-    # Elapsed wall-clock time
-    m, s = divmod(int(elapsed), 60)
-    t.append(f"  {m:02d}:{s:02d}", style="dim")
-
-    return t
-
-
-def _print_final_stats(
-    job: IngestJob,
-    elapsed: float,
-    files_done: int,
-    avg_extraction: float,
-    console: RichConsole,
-) -> None:
-    """Print a rich summary table after the ingest job completes."""
-    t = RichTable(
-        title=f"Ingest Complete  —  {job.job_id}",
-        show_header=False,
-        padding=(0, 2),
-        border_style="green" if job.status == JobStatus.COMPLETED else "red",
-    )
-    t.add_column("", style="bold", min_width=14)
-    t.add_column("")
-
-    status_style = "green" if job.status == JobStatus.COMPLETED else "red"
-    t.add_row("Status", f"[{status_style}]{job.status.value}[/{status_style}]")
-    t.add_row("Index", job.index_name)
-    t.add_section()
-    t.add_row("Files", f"{job.total_files:,}")
-    t.add_row("Extracted", f"{job.extracted:,}")
-    t.add_row("Indexed", f"{job.processed:,}")
-    failed_style = "red" if job.failed > 0 else "green"
-    t.add_row("Failed", f"[{failed_style}]{job.failed:,}[/{failed_style}]")
-    t.add_section()
-    throughput = files_done / elapsed if elapsed > 0 else 0.0
-    t.add_row("Total time", f"{elapsed:.1f}s  ({throughput:.1f} files/s)")
-    if avg_extraction > 0:
-        t.add_row("Average time", f"{avg_extraction:.3f}s/file")
-
-    console.print(t)
-
 
 class IngestPipeline:
     """Orchestrates document ingestion with streaming file discovery.
@@ -196,8 +167,12 @@ class IngestPipeline:
         self._batch_size = batch_size
         self._max_workers = max_workers
 
-    def run(self, source_dir: Path) -> IngestJob:
-        """Run a full ingest job on a directory."""
+    def run(self, source_dir: Path) -> tuple[IngestJob, float, float]:
+        """Run a full ingest job on a directory.
+
+        Returns (job, elapsed_seconds, avg_extraction_seconds).
+        """
+        source_dir = source_dir.resolve()
         job_id = uuid.uuid4().hex[:12]
         # Create with total_files=0; the walker updates it as it discovers files
         self._tracker.create_job(job_id, source_dir, total_files=0, index_name=self._index_name)
@@ -213,7 +188,7 @@ class IngestPipeline:
         processed = 0
         failed = 0
         extraction_time = 0.0
-        timing_count = 0   # successful extractions with valid timing (for avg)
+        timing_count = 0
         files_done = 0     # all completed futures, including failures (for progress bar)
 
         # Single-element list so the walker thread can update it without a lock
@@ -228,21 +203,13 @@ class IngestPipeline:
         )
         walker.start()
 
-        state: dict = {
-            "start": job_start,
-            "discovered": 0,
-            "walker_done": False,
-            "done": 0,
-            "in_flight": 0,
-            "extracted": 0,
-            "indexed": 0,
-            "failed": 0,
-            "timing_count": 0,
-            "total_extraction_time": 0.0,
-        }
-
         ctx: Live | nullcontext = (  # type: ignore[type-arg]
-            Live(_make_progress_line(state), console=console, refresh_per_second=4, transient=True)
+            Live(
+                _make_progress_line(job_start, 0, False, 0, 0, 0, 0, 0, 0.0),
+                console=console,
+                refresh_per_second=4,
+                transient=True,
+            )
             if show_progress
             else nullcontext()
         )
@@ -312,18 +279,11 @@ class IngestPipeline:
 
                         # Update live display
                         if live is not None:
-                            state.update({
-                                "discovered": discovered[0],
-                                "walker_done": walker_done,
-                                "done": files_done,
-                                "in_flight": len(pending_futures),
-                                "extracted": extracted,
-                                "indexed": processed,
-                                "failed": failed,
-                                "timing_count": timing_count,
-                                "total_extraction_time": extraction_time,
-                            })
-                            live.update(_make_progress_line(state))
+                            live.update(_make_progress_line(
+                                job_start, discovered[0], walker_done, files_done,
+                                len(pending_futures), processed, failed,
+                                timing_count, extraction_time,
+                            ))
 
                         # Exit when walker is done and all futures are collected
                         if walker_done and not pending_futures:
@@ -337,24 +297,20 @@ class IngestPipeline:
                         self._tracker.update_progress(job_id, extracted, processed, failed)
 
             walker.join(timeout=5)
+            elapsed = time.monotonic() - job_start
             self._tracker.complete_job(job_id, JobStatus.COMPLETED)
             log.info("ingest complete", job_id=job_id, extracted=extracted, processed=processed, failed=failed)
 
-            if show_progress and console:
-                elapsed = time.monotonic() - job_start
-                avg_extraction = extraction_time / timing_count if timing_count > 0 else 0.0
-                job = self._tracker.get_job(job_id)
-                if job:
-                    _print_final_stats(job, elapsed, files_done, avg_extraction, console)
-
         except Exception:
+            elapsed = time.monotonic() - job_start
             self._tracker.complete_job(job_id, JobStatus.FAILED)
             log.exception("ingest job failed", job_id=job_id)
             raise
         finally:
             INGEST_JOBS_ACTIVE.dec()
 
-        return self._tracker.get_job(job_id)  # type: ignore[return-value]
+        avg_extraction = extraction_time / timing_count if timing_count > 0 else 0.0
+        return self._tracker.get_job(job_id), elapsed, avg_extraction  # type: ignore[return-value]
 
     def _extract_one(self, file_path: Path, job_id: str) -> tuple[list[Document], float]:
         structlog.contextvars.bind_contextvars(job_id=job_id)

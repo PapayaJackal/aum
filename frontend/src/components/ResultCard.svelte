@@ -1,13 +1,20 @@
 <script lang="ts">
   import type { SearchResult } from "../lib/api";
+  import { getSearchQs } from "../lib/searchState.svelte";
 
   let { result, index = "" }: { result: SearchResult; index: string } = $props();
 
-  let filename = $derived(result.source_path.split("/").pop() || result.source_path);
+  let parts = $derived(result.display_path.split("/"));
+  let filename = $derived(parts[parts.length - 1] || result.display_path);
+  let dirPart = $derived(parts.length > 1 ? parts.slice(0, -1).join("/") + "/" : "");
   let contentType = $derived(result.metadata["Content-Type"] || "");
+  let docHref = $derived.by(() => {
+    const qs = getSearchQs();
+    return `#/document/${encodeURIComponent(index)}/${result.doc_id}${qs ? "?" + qs : ""}`;
+  });
 </script>
 
-<a href="#/document/{encodeURIComponent(index)}/{result.doc_id}" class="card">
+<a href={docHref} class="card">
   <div class="card-header">
     <span class="filename">{filename}</span>
     <span class="score">{result.score.toFixed(3)}</span>
@@ -15,11 +22,12 @@
 
   <p class="snippet">{@html result.snippet}</p>
 
-  {#if contentType}
-    <div class="card-footer">
+  <div class="card-footer">
+    <span class="path" title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span>
+    {#if contentType}
       <span class="badge">{contentType}</span>
-    </div>
-  {/if}
+    {/if}
+  </div>
 </a>
 
 <style>
@@ -75,13 +83,17 @@
     align-items: center;
     font-size: 0.8rem;
     color: #999;
+    gap: 0.5rem;
   }
 
   .path {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 70%;
+    min-width: 0;
+    font-family: monospace;
+    font-size: 0.78rem;
+    color: #777;
   }
 
   .badge {
@@ -90,5 +102,6 @@
     padding: 0.15rem 0.5rem;
     border-radius: 3px;
     font-size: 0.75rem;
+    flex-shrink: 0;
   }
 </style>

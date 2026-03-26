@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { search, listIndices } from "../lib/api";
-  import { searchState } from "../lib/searchState.svelte";
+  import { searchState, getSearchQs } from "../lib/searchState.svelte";
   import ResultList from "../components/ResultList.svelte";
   import FacetPanel from "../components/FacetPanel.svelte";
 
@@ -23,7 +24,20 @@
   let loading = $state(false);
   let error = $state("");
 
-  async function doSearch(page: number = 1) {
+  function updateSearchUrl() {
+    const qs = getSearchQs();
+    history.replaceState(null, "", qs ? `#/?${qs}` : "#/");
+  }
+
+  // Sync URL when active facets change (client-side filter, no re-search needed)
+  $effect(() => {
+    const _ = JSON.stringify(searchState.activeFacets); // track
+    untrack(() => {
+      if (searchState.searched) updateSearchUrl();
+    });
+  });
+
+  async function doSearch(page: number = 1, resetFacets = true) {
     if (!searchState.query.trim()) return;
     loading = true;
     error = "";
@@ -36,7 +50,7 @@
       searchState.total = res.total;
       if (res.facets !== null) {
         searchState.facets = res.facets;
-        searchState.activeFacets = {};
+        if (resetFacets) searchState.activeFacets = {};
       }
     } catch (err: any) {
       error = err.message || "Search failed";
@@ -44,8 +58,30 @@
       searchState.total = 0;
     } finally {
       loading = false;
+      updateSearchUrl();
     }
   }
+
+  onMount(() => {
+    const hash = window.location.hash;
+    const qIdx = hash.indexOf("?");
+    if (qIdx < 0) return;
+    const params = new URLSearchParams(hash.slice(qIdx + 1));
+    const q = params.get("q");
+    if (!q) return;
+    searchState.query = q;
+    searchState.searchType = (params.get("type") as "text" | "vector" | "hybrid") || "text";
+    const indexParam = params.get("index");
+    if (indexParam) searchState.selectedIndex = indexParam;
+    searchState.pageSize = parseInt(params.get("pageSize") || "20");
+    const facetsStr = params.get("facets");
+    if (facetsStr) {
+      try { searchState.activeFacets = JSON.parse(facetsStr); } catch {}
+    } else {
+      searchState.activeFacets = {};
+    }
+    doSearch(parseInt(params.get("page") || "1"), false);
+  });
 
   function handleSubmit(e: Event) {
     e.preventDefault();

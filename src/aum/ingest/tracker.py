@@ -32,6 +32,13 @@ CREATE TABLE IF NOT EXISTS job_errors (
     message TEXT NOT NULL,
     timestamp TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS index_source_dirs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    index_name TEXT NOT NULL,
+    source_dir TEXT NOT NULL,
+    UNIQUE(index_name, source_dir)
+);
 """
 
 
@@ -59,6 +66,10 @@ class JobTracker:
             "INSERT INTO jobs (job_id, source_dir, index_name, status, total_files, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
             (job_id, str(source_dir), index_name, JobStatus.RUNNING.value, total_files, now),
+        )
+        self._conn.execute(
+            "INSERT OR IGNORE INTO index_source_dirs (index_name, source_dir) VALUES (?, ?)",
+            (index_name, str(source_dir.resolve())),
         )
         self._conn.commit()
         log.info(
@@ -111,6 +122,13 @@ class JobTracker:
         if row is None:
             return None
         return self._row_to_job(row)
+
+    def get_source_dirs_for_index(self, index_name: str) -> list[Path]:
+        """Return all source directories that have been indexed into this index."""
+        rows = self._conn.execute(
+            "SELECT source_dir FROM index_source_dirs WHERE index_name = ?", (index_name,)
+        ).fetchall()
+        return [Path(row["source_dir"]) for row in rows]
 
     def list_jobs(self, status: JobStatus | None = None) -> list[IngestJob]:
         if status:
