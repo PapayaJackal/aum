@@ -246,6 +246,7 @@ class IngestPipeline:
                                 timing_count += 1
                                 extracted += max(0, len(docs) - 1)
                                 for i, doc in enumerate(docs):
+                                    self._set_display_path(doc, source_dir)
                                     doc_id = _file_doc_id(file_path, i)
                                     batch.append((doc_id, doc))
                                     log.debug(
@@ -311,6 +312,24 @@ class IngestPipeline:
 
         avg_extraction = extraction_time / timing_count if timing_count > 0 else 0.0
         return self._tracker.get_job(job_id), elapsed, avg_extraction  # type: ignore[return-value]
+
+    @staticmethod
+    def _set_display_path(doc: Document, source_dir: Path) -> None:
+        """Compute a relative display path and store it in document metadata.
+
+        For attachments extracted from containers the extractor already sets
+        ``_aum_display_path`` to an absolute logical path (e.g.
+        ``/data/inbox/email.eml/attachment.pdf``).  For top-level documents
+        it is unset.  In both cases we resolve it to a path relative to the
+        source directory so the search API can return it directly.
+        """
+        logical = doc.metadata.get("_aum_display_path") or str(doc.source_path)
+        p = Path(logical)
+        try:
+            display = str(p.relative_to(source_dir))
+        except ValueError:
+            display = p.name
+        doc.metadata["_aum_display_path"] = display
 
     def _extract_one(self, file_path: Path, job_id: str) -> tuple[list[Document], float]:
         structlog.contextvars.bind_contextvars(job_id=job_id)

@@ -10,6 +10,7 @@ from aum.models import Document
 class SearchResult:
     doc_id: str
     source_path: str
+    display_path: str
     score: float
     snippet: str
     metadata: dict[str, str | list[str]] = field(default_factory=dict)

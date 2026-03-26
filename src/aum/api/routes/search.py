@@ -14,33 +14,14 @@ from aum.api.deps import (
     get_current_user,
     get_permission_manager,
     make_search_backend,
-    make_tracker,
 )
 from aum.auth.models import User
 from aum.auth.permissions import PermissionDeniedError, PermissionManager
-from aum.search.base import SearchResult
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/api", tags=["search"])
 
 _INTERNAL_METADATA_KEYS = {"_aum_display_path"}
-
-
-def _display_path(source_path: str, metadata: dict, source_dirs: list[Path]) -> str:
-    """Compute a safe relative display path, never exposing absolute filesystem paths.
-
-    Tries each known source directory (longest path first so the most specific
-    match wins), then falls back to just the filename.
-    """
-    logical = metadata.get("_aum_display_path") or source_path
-    p = Path(logical)
-    for source_dir in sorted(source_dirs, key=lambda d: len(d.parts), reverse=True):
-        try:
-            return str(p.relative_to(source_dir))
-        except ValueError:
-            continue
-    # Fall back to just the filename — never return an absolute path
-    return p.name
 
 
 def _clean_metadata(metadata: dict) -> dict:
@@ -109,13 +90,9 @@ async def search(
     _check_index_access(user, idx, perms)
 
     backend = make_search_backend(config, index=idx)
-    source_dirs = make_tracker(config).get_source_dirs_for_index(idx)
 
     include_facets = offset == 0
 
-    results: list[SearchResult]
-    total: int
-    facets: dict[str, list[str]] | None
     if type == "text":
         results, total, facets = backend.search_text(q, limit=limit, offset=offset, include_facets=include_facets)
     elif type == "vector":
@@ -139,7 +116,7 @@ async def search(
         results=[
             SearchResultResponse(
                 doc_id=r.doc_id,
-                display_path=_display_path(r.source_path, r.metadata, source_dirs),
+                display_path=r.display_path,
                 score=r.score,
                 snippet=r.snippet,
                 metadata=_clean_metadata(r.metadata),
@@ -164,14 +141,13 @@ async def get_document(
     _check_index_access(user, idx, perms)
 
     backend = make_search_backend(config, index=idx)
-    source_dirs = make_tracker(config).get_source_dirs_for_index(idx)
     doc = backend.get_document(doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
     return DocumentResponse(
         doc_id=doc.doc_id,
-        display_path=_display_path(doc.source_path, doc.metadata, source_dirs),
+        display_path=doc.display_path,
         content=doc.snippet,
         metadata=_clean_metadata(doc.metadata),
     )

@@ -8,20 +8,84 @@ from aum.search.base import SearchResult
 
 log = structlog.get_logger()
 
-_FACET_FIELDS = ["Content-Type", "Author", "dc:creator"]
+# ---------------------------------------------------------------------------
+# Indexed metadata fields
+#
+# Only these curated fields are indexed in Elasticsearch.  The full Tika
+# metadata blob is still stored (``enabled: false``) so nothing is lost, but
+# we avoid exploding the dynamic-field count past ES's 1000-field limit.
+# ---------------------------------------------------------------------------
+
+_META_PROPERTIES: dict[str, dict] = {
+    "content_type": {"type": "keyword"},
+    "creator": {"type": "keyword"},
+    "created": {
+        "type": "date",
+        "format": "strict_date_optional_time||epoch_millis",
+        "ignore_malformed": True,
+    },
+    "modified": {
+        "type": "date",
+        "format": "strict_date_optional_time||epoch_millis",
+        "ignore_malformed": True,
+    },
+    "email_addresses": {"type": "keyword"},
+}
+
+# For each canonical field, the Tika metadata keys to try (first match wins).
+_META_SOURCE_KEYS: dict[str, list[str]] = {
+    "content_type": ["Content-Type"],
+    "creator": ["dc:creator", "Author", "meta:author", "creator"],
+    "created": ["dcterms:created", "Creation-Date", "meta:creation-date", "created", "date"],
+    "modified": ["dcterms:modified", "Last-Modified", "meta:save-date", "modified"],
+}
+
+# Email header keys whose values are merged into a single ``email_addresses`` field.
+_EMAIL_HEADER_KEYS = ["Message-From", "Message-To", "Message-CC"]
+
+
+def _extract_indexed_meta(raw_metadata: dict[str, str | list[str]]) -> dict[str, str | list[str]]:
+    """Pick the fields we care about out of the raw Tika metadata."""
+    result: dict[str, str | list[str]] = {}
+    for field_name, source_keys in _META_SOURCE_KEYS.items():
+        for key in source_keys:
+            if key in raw_metadata:
+                result[field_name] = raw_metadata[key]
+                break
+
+    # Merge all email header values into a single list.
+    addresses: list[str] = []
+    for key in _EMAIL_HEADER_KEYS:
+        val = raw_metadata.get(key)
+        if val is not None:
+            if isinstance(val, list):
+                addresses.extend(val)
+            else:
+                addresses.append(val)
+    if addresses:
+        result["email_addresses"] = addresses
+
+    return result
+
+
+# Facets are driven from the indexed ``meta`` sub-fields.
+_FACET_FIELDS: dict[str, str] = {
+    "Content Type": "meta.content_type",
+    "Creator": "meta.creator",
+}
 _FACET_AGGS = {
-    field: {"terms": {"field": f"metadata.{field}.keyword", "size": 100}}
-    for field in _FACET_FIELDS
+    label: {"terms": {"field": es_field, "size": 100}}
+    for label, es_field in _FACET_FIELDS.items()
 }
 
 
 def _parse_facets(resp: dict) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
-    for field in _FACET_FIELDS:
-        buckets = resp.get("aggregations", {}).get(field, {}).get("buckets", [])
+    for label in _FACET_FIELDS:
+        buckets = resp.get("aggregations", {}).get(label, {}).get("buckets", [])
         values = sorted(b["key"] for b in buckets if b.get("key"))
         if values:
-            result[field] = values
+            result[label] = values
     return result
 
 
@@ -43,8 +107,14 @@ class ElasticsearchBackend:
         mappings: dict = {
             "properties": {
                 "source_path": {"type": "keyword"},
+                "display_path": {"type": "keyword"},
                 "content": {"type": "text", "analyzer": "standard"},
-                "metadata": {"type": "object", "dynamic": True},
+                "metadata": {"type": "object", "enabled": False},
+                "meta": {
+                    "type": "object",
+                    "dynamic": False,
+                    "properties": _META_PROPERTIES,
+                },
             }
         }
 
@@ -65,8 +135,10 @@ class ElasticsearchBackend:
     def index_document(self, doc_id: str, document: Document) -> None:
         body: dict = {
             "source_path": str(document.source_path),
+            "display_path": document.metadata.get("_aum_display_path", ""),
             "content": document.content,
             "metadata": document.metadata,
+            "meta": _extract_indexed_meta(document.metadata),
         }
         if document.embedding is not None:
             body["embedding"] = document.embedding
@@ -83,8 +155,10 @@ class ElasticsearchBackend:
             operations.append({"index": {"_index": self._index, "_id": doc_id}})
             body: dict = {
                 "source_path": str(document.source_path),
+                "display_path": document.metadata.get("_aum_display_path", ""),
                 "content": document.content,
                 "metadata": document.metadata,
+                "meta": _extract_indexed_meta(document.metadata),
             }
             if document.embedding is not None:
                 body["embedding"] = document.embedding
@@ -176,12 +250,19 @@ class ElasticsearchBackend:
         try:
             hit = self._client.get(index=self._index, id=doc_id)
             source = hit["_source"]
+            metadata = dict(source.get("metadata", {}))
+            meta = source.get("meta", {})
+            for label, es_field in _FACET_FIELDS.items():
+                meta_key = es_field.split(".", 1)[1]
+                if meta_key in meta:
+                    metadata[label] = meta[meta_key]
             return SearchResult(
                 doc_id=hit["_id"],
                 source_path=source.get("source_path", ""),
+                display_path=source.get("display_path", ""),
                 score=1.0,
                 snippet=source.get("content", ""),
-                metadata=source.get("metadata", {}),
+                metadata=metadata,
             )
         except NotFoundError:
             return None
@@ -200,15 +281,24 @@ class ElasticsearchBackend:
         results: list[SearchResult] = []
         for hit in hits.get("hits", []):
             source = hit["_source"]
+            metadata = dict(source.get("metadata", {}))
+            # Inject the indexed meta fields under their facet-friendly label
+            # names so client-side facet filtering can match on them.
+            meta = source.get("meta", {})
+            for label, es_field in _FACET_FIELDS.items():
+                meta_key = es_field.split(".", 1)[1]
+                if meta_key in meta:
+                    metadata[label] = meta[meta_key]
             highlight = hit.get("highlight", {}).get("content", [])
             snippet = highlight[0] if highlight else source.get("content", "")[:200]
             results.append(
                 SearchResult(
                     doc_id=hit["_id"],
                     source_path=source.get("source_path", ""),
+                    display_path=source.get("display_path", ""),
                     score=hit.get("_score", 0.0),
                     snippet=snippet,
-                    metadata=source.get("metadata", {}),
+                    metadata=metadata,
                 )
             )
         return results, total

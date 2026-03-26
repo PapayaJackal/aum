@@ -7,7 +7,7 @@
   let parts = $derived(result.display_path.split("/"));
   let filename = $derived(parts[parts.length - 1] || result.display_path);
   let dirPart = $derived(parts.length > 1 ? parts.slice(0, -1).join("/") + "/" : "");
-  let contentType = $derived(result.metadata["Content-Type"] || "");
+  let contentType = $derived(result.metadata["Content Type"] || result.metadata["Content-Type"] || "");
   let docHref = $derived.by(() => {
     const qs = getSearchQs();
     return `#/document/${encodeURIComponent(index)}/${result.doc_id}${qs ? "?" + qs : ""}`;
