@@ -969,9 +969,24 @@ def serve(host: str | None, port: int | None) -> None:
 
     _ensure_jwt_secret(config)
 
+    import threading
+
     import uvicorn
+    from prometheus_client import make_asgi_app
 
     from aum.api.app import create_app
+
+    # Serve Prometheus metrics on a separate port (not exposed to public users).
+    metrics_app = make_asgi_app()
+    metrics_host = host or config.host
+    metrics_port = config.metrics_port
+    metrics_thread = threading.Thread(
+        target=uvicorn.run,
+        kwargs=dict(app=metrics_app, host=metrics_host, port=metrics_port, log_level="warning"),
+        daemon=True,
+    )
+    metrics_thread.start()
+    log.info("metrics server started", host=metrics_host, port=metrics_port)
 
     app = create_app(config)
     uvicorn.run(
