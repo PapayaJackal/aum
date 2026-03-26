@@ -20,7 +20,7 @@ def configure_logging(level: str = "INFO", fmt: str = "json") -> None:
     if fmt == "console":
         processors.append(structlog.dev.ConsoleRenderer())
     else:
-        processors.append(structlog.processors.JSONRenderer())
+        processors.append(structlog.processors.JSONRenderer(ensure_ascii=False))
 
     structlog.configure(
         processors=processors,
