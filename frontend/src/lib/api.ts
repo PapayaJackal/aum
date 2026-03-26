@@ -64,7 +64,12 @@ export function getProviders(): Promise<{ providers: string[] }> {
 
 // Indices
 
-export function listIndices(): Promise<{ indices: string[] }> {
+export interface IndexInfo {
+  name: string;
+  has_embeddings: boolean;
+}
+
+export function listIndices(): Promise<{ indices: IndexInfo[] }> {
   return request("/indices");
 }
 

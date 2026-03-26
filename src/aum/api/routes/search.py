@@ -62,8 +62,13 @@ class DocumentResponse(BaseModel):
     extracted_from: ExtractedFromResponse | None = None
 
 
+class IndexInfo(BaseModel):
+    name: str
+    has_embeddings: bool
+
+
 class IndicesResponse(BaseModel):
-    indices: list[str]
+    indices: list[IndexInfo]
 
 
 @router.get("/indices", response_model=IndicesResponse)
@@ -73,11 +78,17 @@ async def list_indices(
     config = get_config()
     backend = make_search_backend(config)
     all_indices = backend.list_indices()
-    if user.is_admin:
-        return IndicesResponse(indices=all_indices)
-    perms = get_permission_manager()
-    accessible = [idx for idx in all_indices if perms.check(user, idx)]
-    return IndicesResponse(indices=accessible)
+    if not user.is_admin:
+        perms = get_permission_manager()
+        all_indices = [idx for idx in all_indices if perms.check(user, idx)]
+    from aum.api.deps import make_tracker
+    tracker = make_tracker(config)
+    return IndicesResponse(
+        indices=[
+            IndexInfo(name=idx, has_embeddings=tracker.get_embedding_model(idx) is not None)
+            for idx in all_indices
+        ]
+    )
 
 
 def _check_index_access(user: User, index: str, perms: PermissionManager) -> None:
@@ -116,12 +127,6 @@ async def search(
 
     if type == "text":
         results, total, facets = backend.search_text(q, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
-    elif type == "vector":
-        embedder = _get_embedder(idx)
-        if embedder is None:
-            raise HTTPException(status_code=400, detail=f"No embeddings found for index '{idx}'. Run 'aum embed' first.")
-        vector = embedder.embed_query(q)
-        results, total, facets = backend.search_vector(vector, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
     elif type == "hybrid":
         embedder = _get_embedder(idx)
         if embedder is None:

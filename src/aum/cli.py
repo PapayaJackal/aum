@@ -304,7 +304,7 @@ def embed(
 @main.command()
 @click.argument("query")
 @click.option("--index", default=None, help="Index name (default: from config)")
-@click.option("--type", "search_type", type=click.Choice(["text", "vector", "hybrid"]), default="text")
+@click.option("--type", "search_type", type=click.Choice(["text", "hybrid"]), default="text")
 @click.option("--limit", default=20, type=int, help="Max results")
 @click.option("--offset", default=0, type=int, help="Offset for pagination")
 @click.option("--file-type", multiple=True, help="Filter by file type (e.g. PDF, Word)")
@@ -357,7 +357,7 @@ def search(
     facets: dict[str, list[str]] | None
     if search_type == "text":
         results, total, facets = backend.search_text(query, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
-    elif search_type in ("vector", "hybrid"):
+    elif search_type == "hybrid":
         from aum.api.deps import make_embedder, make_tracker
 
         tracker = make_tracker(config)
@@ -371,10 +371,7 @@ def search(
         config.embeddings_model = prev_model
         embedder = make_embedder(config)
         vector = embedder.embed_query(query)
-        if search_type == "vector":
-            results, total, facets = backend.search_vector(vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
-        else:
-            results, total, facets = backend.search_hybrid(query, vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
+        results, total, facets = backend.search_hybrid(query, vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
     else:
         results, total, facets = [], 0, None
 

@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { onMount, untrack } from "svelte";
-  import { search, listIndices } from "../lib/api";
-  import { searchState, getSearchQs, savePrefs } from "../lib/searchState.svelte";
+  import { search, listIndices, type IndexInfo } from "../lib/api";
+  import { searchState, getSearchQs, savePrefs, saveIndexSearchType, getIndexSearchType } from "../lib/searchState.svelte";
   import ResultList from "../components/ResultList.svelte";
   import FacetPanel from "../components/FacetPanel.svelte";
   import Document from "./Document.svelte";
@@ -14,14 +14,32 @@
     listIndices()
       .then((res) => {
         indices = res.indices;
-        if (indices.length > 0 && (!searchState.selectedIndex || !indices.includes(searchState.selectedIndex))) {
-          searchState.selectedIndex = indices[0];
+        const names = indices.map((i) => i.name);
+        if (indices.length > 0 && (!searchState.selectedIndex || !names.includes(searchState.selectedIndex))) {
+          searchState.selectedIndex = indices[0].name;
         }
+        _syncSearchType();
       })
       .catch(() => { indices = []; });
   });
 
-  let indices = $state<string[]>([]);
+  let indices = $state<IndexInfo[]>([]);
+
+  function _currentIndex(): IndexInfo | undefined {
+    return indices.find((i) => i.name === searchState.selectedIndex);
+  }
+
+  function _syncSearchType() {
+    const idx = _currentIndex();
+    if (!idx || !idx.has_embeddings) {
+      searchState.searchType = "text";
+      return;
+    }
+    const saved = getIndexSearchType(idx.name);
+    searchState.searchType = saved ?? "hybrid";
+  }
+
+  let hybridEnabled = $derived((_currentIndex()?.has_embeddings) ?? false);
   let loading = $state(false);
   let error = $state("");
 
@@ -91,7 +109,8 @@
     const q = params.get("q");
     if (!q) return;
     searchState.query = q;
-    searchState.searchType = (params.get("type") as "text" | "vector" | "hybrid") || searchState.searchType;
+    const typeParam = params.get("type");
+    if (typeParam === "text" || typeParam === "hybrid") searchState.searchType = typeParam;
     const indexParam = params.get("index");
     if (indexParam) searchState.selectedIndex = indexParam;
     searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
@@ -128,7 +147,8 @@
     const q = params.get("q");
     if (!q) return;
     searchState.query = q;
-    searchState.searchType = (params.get("type") as "text" | "vector" | "hybrid") || searchState.searchType;
+    const typeParam = params.get("type");
+    if (typeParam === "text" || typeParam === "hybrid") searchState.searchType = typeParam;
     const indexParam = params.get("index");
     if (indexParam) searchState.selectedIndex = indexParam;
     searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
@@ -156,11 +176,13 @@
   }
 
   function handleIndexChange() {
+    _syncSearchType();
     savePrefs();
     if (searchState.searched) doSearch(1);
   }
 
   function handleSearchTypeChange() {
+    if (searchState.selectedIndex) saveIndexSearchType(searchState.selectedIndex, searchState.searchType);
     savePrefs();
     if (searchState.searched) doSearch(1);
   }
@@ -224,15 +246,26 @@
     {#if indices.length > 0}
       <select bind:value={searchState.selectedIndex} class="toolbar-select" onchange={handleIndexChange}>
         {#each indices as idx}
-          <option value={idx}>{idx}</option>
+          <option value={idx.name}>{idx.name}</option>
         {/each}
       </select>
     {/if}
-    <select bind:value={searchState.searchType} class="toolbar-select" onchange={handleSearchTypeChange}>
-      <option value="text">Full text</option>
-      <option value="vector">Semantic</option>
-      <option value="hybrid">Hybrid</option>
-    </select>
+    <div class="search-type-toggle" class:disabled={!hybridEnabled} title={hybridEnabled ? "" : "No embeddings for this index"}>
+      <button
+        type="button"
+        class="toggle-btn"
+        class:active={searchState.searchType === "text"}
+        disabled={!hybridEnabled && searchState.searchType !== "text"}
+        onclick={() => { searchState.searchType = "text"; handleSearchTypeChange(); }}
+      >Full text</button>
+      <button
+        type="button"
+        class="toggle-btn"
+        class:active={searchState.searchType === "hybrid"}
+        disabled={!hybridEnabled}
+        onclick={() => { searchState.searchType = "hybrid"; handleSearchTypeChange(); }}
+      >Hybrid</button>
+    </div>
     <button type="submit" disabled={loading || !searchState.query.trim()}>
       {loading ? "..." : "Search"}
     </button>
@@ -345,6 +378,43 @@
     background: rgba(255, 255, 255, 0.9);
     font-size: 0.85rem;
     flex-shrink: 0;
+  }
+
+  .search-type-toggle {
+    display: flex;
+    flex-shrink: 0;
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+  }
+
+  .search-type-toggle.disabled {
+    opacity: 0.5;
+  }
+
+  .toggle-btn {
+    padding: 0.45rem 0.7rem;
+    background: rgba(255, 255, 255, 0.15);
+    color: rgba(255, 255, 255, 0.85);
+    border: none;
+    border-radius: 0;
+    font-size: 0.82rem;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .toggle-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.25);
+  }
+
+  .toggle-btn.active {
+    background: rgba(255, 255, 255, 0.9);
+    color: #1a1a2e;
+    font-weight: 500;
+  }
+
+  .toggle-btn:disabled {
+    cursor: not-allowed;
   }
 
   button {
