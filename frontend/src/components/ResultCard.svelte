@@ -3,7 +3,9 @@
   import { searchState } from "../lib/searchState.svelte";
   import { sanitizeHighlight } from "../lib/highlight";
 
-  let { result, index = "" }: { result: SearchResult; index: string } = $props();
+  let { result, multiIndex = false }: { result: SearchResult; multiIndex: boolean } = $props();
+
+  let index = $derived(result.index);
 
   let parts = $derived(result.display_path.split("/"));
   let filename = $derived(parts[parts.length - 1] || result.display_path);
@@ -51,9 +53,14 @@
     {:else}
       <span class="path" title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span>
     {/if}
-    {#if fileType}
-      <span class="badge">{fileType}</span>
-    {/if}
+    <div class="badges">
+      {#if multiIndex && index}
+        <span class="badge index-badge">{index}</span>
+      {/if}
+      {#if fileType}
+        <span class="badge">{fileType}</span>
+      {/if}
+    </div>
   </div>
 </button>
 
@@ -135,6 +142,12 @@
     color: #777;
   }
 
+  .badges {
+    display: flex;
+    gap: 0.35rem;
+    flex-shrink: 0;
+  }
+
   .badge {
     background: #eef;
     color: #55a;
@@ -142,5 +155,10 @@
     border-radius: 3px;
     font-size: 0.75rem;
     flex-shrink: 0;
+  }
+
+  .index-badge {
+    background: #e8f0fe;
+    color: #1a73e8;
   }
 </style>

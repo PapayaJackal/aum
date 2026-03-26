@@ -5,6 +5,7 @@
   import { searchState, getSearchQs, savePrefs, saveIndexSearchType, getIndexSearchType } from "../lib/searchState.svelte";
   import ResultList from "../components/ResultList.svelte";
   import FacetPanel from "../components/FacetPanel.svelte";
+  import IndexSelector from "../components/IndexSelector.svelte";
   import Document from "./Document.svelte";
 
   let { header }: { header: Snippet<[() => ReturnType<Snippet>]> } = $props();
@@ -15,8 +16,12 @@
       .then((res) => {
         indices = res.indices;
         const names = indices.map((i) => i.name);
-        if (indices.length > 0 && (!searchState.selectedIndex || !names.includes(searchState.selectedIndex))) {
-          searchState.selectedIndex = indices[0].name;
+        // Remove any selected indices that no longer exist
+        const valid = searchState.selectedIndices.filter((n) => names.includes(n));
+        if (valid.length === 0 && indices.length > 0) {
+          searchState.selectedIndices = [indices[0].name];
+        } else if (valid.length !== searchState.selectedIndices.length) {
+          searchState.selectedIndices = valid;
         }
         _syncSearchType();
       })
@@ -25,21 +30,21 @@
 
   let indices = $state<IndexInfo[]>([]);
 
-  function _currentIndex(): IndexInfo | undefined {
-    return indices.find((i) => i.name === searchState.selectedIndex);
-  }
-
   function _syncSearchType() {
-    const idx = _currentIndex();
-    if (!idx || !idx.has_embeddings) {
+    if (!hybridEnabled) {
       searchState.searchType = "text";
       return;
     }
-    const saved = getIndexSearchType(idx.name);
+    const saved = getIndexSearchType(searchState.selectedIndices);
     searchState.searchType = saved ?? "hybrid";
   }
 
-  let hybridEnabled = $derived((_currentIndex()?.has_embeddings) ?? false);
+  // Hybrid is enabled only if ALL selected indices have embeddings
+  let hybridEnabled = $derived(
+    searchState.selectedIndices.length > 0 &&
+    searchState.selectedIndices.every((name) => indices.find((i) => i.name === name)?.has_embeddings)
+  );
+
   let loading = $state(false);
   let error = $state("");
 
@@ -71,6 +76,8 @@
     });
   });
 
+  let joinedIndex = $derived(searchState.selectedIndices.join(","));
+
   async function doSearch(page: number = 1, resetFacets = true) {
     if (!searchState.query.trim()) return;
     loading = true;
@@ -84,7 +91,7 @@
         searchState.activeFacets = {};
         prevFacetsJson = "{}";
       }
-      const res = await search(searchState.query, searchState.searchType, searchState.pageSize, searchState.selectedIndex, offset, activeFilters);
+      const res = await search(searchState.query, searchState.searchType, searchState.pageSize, joinedIndex, offset, activeFilters);
       searchState.results = res.results;
       searchState.total = res.total;
       if (res.facets !== null) {
@@ -112,7 +119,9 @@
     const typeParam = params.get("type");
     if (typeParam === "text" || typeParam === "hybrid") searchState.searchType = typeParam;
     const indexParam = params.get("index");
-    if (indexParam) searchState.selectedIndex = indexParam;
+    if (indexParam) {
+      searchState.selectedIndices = indexParam.split(",").filter(Boolean);
+    }
     searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
     const facetsStr = params.get("facets");
     if (facetsStr) {
@@ -124,7 +133,7 @@
     const docIndexParam = params.get("docIndex");
     if (docParam) {
       searchState.selectedDocId = docParam;
-      searchState.selectedDocIndex = docIndexParam || searchState.selectedIndex;
+      searchState.selectedDocIndex = docIndexParam || searchState.selectedIndices[0] || "";
     } else {
       searchState.selectedDocId = "";
       searchState.selectedDocIndex = "";
@@ -150,7 +159,9 @@
     const typeParam = params.get("type");
     if (typeParam === "text" || typeParam === "hybrid") searchState.searchType = typeParam;
     const indexParam = params.get("index");
-    if (indexParam) searchState.selectedIndex = indexParam;
+    if (indexParam) {
+      searchState.selectedIndices = indexParam.split(",").filter(Boolean);
+    }
     searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
     const facetsStr = params.get("facets");
     if (facetsStr) {
@@ -175,14 +186,15 @@
     if (searchState.searched) doSearch(1, false);
   }
 
-  function handleIndexChange() {
+  function handleIndicesChange(selected: string[]) {
+    searchState.selectedIndices = selected;
     _syncSearchType();
     savePrefs();
     if (searchState.searched) doSearch(1);
   }
 
   function handleSearchTypeChange() {
-    if (searchState.selectedIndex) saveIndexSearchType(searchState.selectedIndex, searchState.searchType);
+    if (searchState.selectedIndices.length > 0) saveIndexSearchType(searchState.selectedIndices, searchState.searchType);
     savePrefs();
     if (searchState.searched) doSearch(1);
   }
@@ -202,6 +214,8 @@
   let totalPages = $derived(Math.max(1, Math.ceil(searchState.total / searchState.pageSize)));
 
   let facets = $derived(searchState.facets);
+
+  let multiIndex = $derived(searchState.selectedIndices.length > 1);
 
   function pageNumbers(current: number, total: number): (number | "...")[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
@@ -244,13 +258,13 @@
       class="search-input"
     />
     {#if indices.length > 0}
-      <select bind:value={searchState.selectedIndex} class="toolbar-select" onchange={handleIndexChange}>
-        {#each indices as idx}
-          <option value={idx.name}>{idx.name}</option>
-        {/each}
-      </select>
+      <IndexSelector
+        {indices}
+        selectedIndices={searchState.selectedIndices}
+        onchange={handleIndicesChange}
+      />
     {/if}
-    <div class="search-type-toggle" class:disabled={!hybridEnabled} title={hybridEnabled ? "" : "No embeddings for this index"}>
+    <div class="search-type-toggle" class:disabled={!hybridEnabled} title={hybridEnabled ? "" : "No embeddings for selected datasets"}>
       <button
         type="button"
         class="toggle-btn"
@@ -301,7 +315,7 @@
 
             {#each pageNumbers(searchState.currentPage, totalPages) as p}
               {#if p === "..."}
-                <span class="page-ellipsis">…</span>
+                <span class="page-ellipsis">&hellip;</span>
               {:else}
                 <button
                   class="page-btn"
@@ -329,7 +343,7 @@
             </select>
           </div>
         </div>
-        <ResultList results={searchState.results} index={searchState.selectedIndex} />
+        <ResultList results={searchState.results} {multiIndex} />
       </div>
 
       {#if sidebarOpen}
@@ -369,15 +383,6 @@
 
   .search-input:focus {
     outline: 2px solid #4a7cf7;
-  }
-
-  .toolbar-select {
-    padding: 0.45rem 0.5rem;
-    border: none;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.9);
-    font-size: 0.85rem;
-    flex-shrink: 0;
   }
 
   .search-type-toggle {

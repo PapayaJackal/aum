@@ -386,3 +386,72 @@ class TestSearchType:
             make_mock.assert_called_once()
             call_args = make_mock.call_args
             assert call_args.kwargs.get("index") == "my-index" or call_args[1].get("index") == "my-index"
+
+
+# --- Multi-index search ---
+
+
+class TestMultiIndex:
+    @pytest.fixture(autouse=True)
+    def setup(self, _patch_cli):
+        pass
+
+    def test_multiple_index_options_joined(self, runner, mock_backend):
+        with patch("aum.api.deps.make_search_backend", return_value=mock_backend) as make_mock:
+            result = runner.invoke(main, ["search", "russia", "--index", "idx1", "--index", "idx2"])
+            assert result.exit_code == 0
+            make_mock.assert_called_once()
+            call_args = make_mock.call_args
+            idx = call_args.kwargs.get("index") or call_args[1].get("index")
+            assert idx == "idx1,idx2"
+
+    def test_multi_index_shows_index_per_result(self, runner, mock_backend):
+        results_with_index = [
+            SearchResult(
+                doc_id="d1", source_path="/a", display_path="a.pdf",
+                score=5.0, snippet="text", metadata={}, index="idx1",
+            ),
+            SearchResult(
+                doc_id="d2", source_path="/b", display_path="b.pdf",
+                score=4.0, snippet="text", metadata={}, index="idx2",
+            ),
+        ]
+        mock_backend.search_text.return_value = (results_with_index, 2, None)
+        result = runner.invoke(main, ["search", "test", "--index", "idx1", "--index", "idx2"])
+        assert result.exit_code == 0
+        assert "[idx1]" in result.output
+        assert "[idx2]" in result.output
+
+    def test_single_index_no_index_prefix(self, runner, mock_backend):
+        results_with_index = [
+            SearchResult(
+                doc_id="d1", source_path="/a", display_path="a.pdf",
+                score=5.0, snippet="text", metadata={}, index="myidx",
+            ),
+        ]
+        mock_backend.search_text.return_value = (results_with_index, 1, None)
+        result = runner.invoke(main, ["search", "test", "--index", "myidx"])
+        assert result.exit_code == 0
+        # Single index: no [myidx] prefix shown
+        assert "[myidx]" not in result.output
+
+    def test_hybrid_multi_index_no_embeddings(self, runner, mock_backend, monkeypatch, tmp_path):
+        mock_tracker = MagicMock()
+        mock_tracker.get_embedding_model.return_value = None
+        monkeypatch.setattr("aum.api.deps.make_tracker", lambda *a, **kw: mock_tracker)
+
+        result = runner.invoke(main, ["search", "test", "--type", "hybrid", "--index", "idx1", "--index", "idx2"])
+        assert result.exit_code != 0
+        assert "no embeddings found for index 'idx1'" in result.output.lower() or "no embeddings" in result.output.lower()
+
+    def test_hybrid_multi_index_model_mismatch(self, runner, mock_backend, monkeypatch, tmp_path):
+        mock_tracker = MagicMock()
+        mock_tracker.get_embedding_model.side_effect = [
+            ("model-a", "ollama", 768),
+            ("model-b", "ollama", 768),
+        ]
+        monkeypatch.setattr("aum.api.deps.make_tracker", lambda *a, **kw: mock_tracker)
+
+        result = runner.invoke(main, ["search", "test", "--type", "hybrid", "--index", "idx1", "--index", "idx2"])
+        assert result.exit_code != 0
+        assert "mismatch" in result.output.lower()

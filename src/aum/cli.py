@@ -494,7 +494,7 @@ def _retry_embed(config: AumConfig, job, batch_size: int | None, pull: bool) -> 
 
 @main.command()
 @click.argument("query")
-@click.option("--index", default=None, help="Index name (default: from config)")
+@click.option("--index", multiple=True, help="Index name(s) to search (repeatable, default: from config)")
 @click.option("--type", "search_type", type=click.Choice(["text", "hybrid"]), default="text")
 @click.option("--limit", default=20, type=int, help="Max results")
 @click.option("--offset", default=0, type=int, help="Offset for pagination")
@@ -506,7 +506,7 @@ def _retry_embed(config: AumConfig, job, batch_size: int | None, pull: bool) -> 
 @click.option("--show-facets", is_flag=True, help="Display available facet values")
 def search(
     query: str,
-    index: str | None,
+    index: tuple[str, ...],
     search_type: str,
     limit: int,
     offset: int,
@@ -526,8 +526,10 @@ def search(
     from aum.api.deps import default_index_name, make_search_backend
     from aum.search.base import SearchResult
 
-    idx = index or default_index_name(config)
-    backend = make_search_backend(config, index=idx)
+    idx_list = list(index) if index else [default_index_name(config)]
+    joined_index = ",".join(idx_list)
+    multi_index = len(idx_list) > 1
+    backend = make_search_backend(config, index=joined_index)
 
     # Build filters from CLI options
     filters: dict[str, list[str]] = {}
@@ -552,13 +554,29 @@ def search(
         from aum.api.deps import make_embedder, make_tracker
 
         tracker = make_tracker(config)
-        prev = tracker.get_embedding_model(idx)
-        if prev is None:
-            click.echo(f"Error: no embeddings found for index '{idx}'. Run 'aum embed' first.", err=True)
-            sys.exit(1)
 
-        # Use the model and backend that were actually used to embed this index
-        prev_model, prev_backend, _ = prev
+        # Validate all indices have embeddings with the same model
+        model_info: tuple[str, str, int] | None = None
+        for idx in idx_list:
+            prev = tracker.get_embedding_model(idx)
+            if prev is None:
+                click.echo(f"Error: no embeddings found for index '{idx}'. Run 'aum embed --index {idx}' first.", err=True)
+                sys.exit(1)
+            if model_info is None:
+                model_info = prev
+            else:
+                prev_model, prev_backend, _ = prev
+                if (prev_model, prev_backend) != (model_info[0], model_info[1]):
+                    click.echo(
+                        f"Error: embedding model mismatch across indices. "
+                        f"'{idx_list[0]}' uses '{model_info[1]}/{model_info[0]}' "
+                        f"but '{idx}' uses '{prev_backend}/{prev_model}'.",
+                        err=True,
+                    )
+                    sys.exit(1)
+
+        assert model_info is not None
+        prev_model, prev_backend, _ = model_info
         config.embeddings_model = prev_model
         config.embeddings_backend = prev_backend
         embedder = make_embedder(config)
@@ -582,7 +600,8 @@ def search(
     click.echo(f"Showing {offset + 1}-{offset + len(results)} of {total} results\n")
 
     for i, r in enumerate(results, offset + 1):
-        click.echo(f"{i}. [{r.score:.3f}] {r.display_path or r.source_path}")
+        index_prefix = f"[{r.index}] " if multi_index else ""
+        click.echo(f"{i}. [{r.score:.3f}] {index_prefix}{r.display_path or r.source_path}")
         # Show key metadata inline
         meta_parts = []
         for key in ("File Type", "Creator", "Created"):

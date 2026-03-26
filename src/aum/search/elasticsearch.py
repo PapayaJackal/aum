@@ -448,6 +448,7 @@ class ElasticsearchBackend:
                 snippet=source.get("content", ""),
                 metadata=metadata,
                 extracted_from=source.get("extracted_from", ""),
+                index=hit.get("_index", ""),
             )
         except NotFoundError:
             return None
@@ -621,6 +622,7 @@ class ElasticsearchBackend:
                     metadata=metadata,
                     extracted_from=source.get("extracted_from", ""),
                     display_path_highlighted=display_path_highlighted,
+                    index=hit.get("_index", ""),
                 )
             )
         return results, total

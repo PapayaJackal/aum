@@ -165,6 +165,7 @@ class SearchResult:
     metadata: dict[str, str | list[str]] = field(default_factory=dict)
     extracted_from: str = ""
     display_path_highlighted: str = ""
+    index: str = ""
 
 
 class SearchBackend(Protocol):

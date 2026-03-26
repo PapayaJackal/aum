@@ -36,6 +36,7 @@ class SearchResultResponse(BaseModel):
     score: float
     snippet: str
     metadata: dict[str, str | list[str]]
+    index: str = ""
 
 
 class SearchResponse(BaseModel):
@@ -110,12 +111,15 @@ async def search(
     filters: Annotated[str | None, Query()] = None,
 ) -> SearchResponse:
     config = get_config()
-    idx = index or default_index_name(config)
+    idx_raw = index or default_index_name(config)
+    idx_list = [i.strip() for i in idx_raw.split(",") if i.strip()]
 
     perms = get_permission_manager()
-    _check_index_access(user, idx, perms)
+    for idx in idx_list:
+        _check_index_access(user, idx, perms)
 
-    backend = make_search_backend(config, index=idx)
+    joined_index = ",".join(idx_list)
+    backend = make_search_backend(config, index=joined_index)
 
     parsed_filters: dict[str, list[str]] | None = None
     if filters:
@@ -129,15 +133,13 @@ async def search(
     if type == "text":
         results, total, facets = backend.search_text(q, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
     elif type == "hybrid":
-        embedder = _get_embedder(idx)
-        if embedder is None:
-            raise HTTPException(status_code=400, detail=f"No embeddings found for index '{idx}'. Run 'aum embed' first.")
+        embedder = _get_embedder_for_indices(idx_list)
         vector = embedder.embed_query(q)
         results, total, facets = backend.search_hybrid(q, vector, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown search type: {type}")
 
-    log.info("search completed", query=q, type=type, index=idx, limit=limit, offset=offset, results=len(results), total=total, facets_included=include_facets, filters=parsed_filters)
+    log.info("search completed", query=q, type=type, index=joined_index, limit=limit, offset=offset, results=len(results), total=total, facets_included=include_facets, filters=parsed_filters)
 
     return SearchResponse(
         results=[
@@ -148,6 +150,7 @@ async def search(
                 score=r.score,
                 snippet=r.snippet,
                 metadata=_clean_metadata(r.metadata),
+                index=r.index,
             )
             for r in results
         ],
@@ -227,17 +230,38 @@ async def download_document(
     return FileResponse(path=str(file_path), filename=file_path.name)
 
 
-def _get_embedder(index_name: str):  # noqa: ANN202
-    """Load the embedder for a given index, using the model it was embedded with."""
+def _get_embedder_for_indices(idx_list: list[str]):  # noqa: ANN202
+    """Load the embedder for one or more indices, validating all have compatible embeddings."""
     config = get_config()
     from aum.api.deps import make_embedder, make_tracker
 
     tracker = make_tracker(config)
-    prev = tracker.get_embedding_model(index_name)
-    if prev is None:
-        return None
 
-    prev_model, prev_backend, _ = prev
+    model_info: tuple[str, str, int] | None = None
+    for idx in idx_list:
+        prev = tracker.get_embedding_model(idx)
+        if prev is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No embeddings found for index '{idx}'. Run 'aum embed --index {idx}' first.",
+            )
+        if model_info is None:
+            model_info = prev
+        else:
+            prev_model, prev_backend, _ = prev
+            if (prev_model, prev_backend) != (model_info[0], model_info[1]):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Embedding model mismatch: index '{idx_list[0]}' uses "
+                        f"'{model_info[1]}/{model_info[0]}' but index '{idx}' uses "
+                        f"'{prev_backend}/{prev_model}'. "
+                        f"Hybrid search requires all indices to use the same embedding model."
+                    ),
+                )
+
+    assert model_info is not None
+    prev_model, prev_backend, _ = model_info
     config.embeddings_model = prev_model
     config.embeddings_backend = prev_backend
     return make_embedder(config)

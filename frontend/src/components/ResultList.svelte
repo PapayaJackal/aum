@@ -2,7 +2,7 @@
   import type { SearchResult } from "../lib/api";
   import ResultCard from "./ResultCard.svelte";
 
-  let { results = [], index = "" }: { results: SearchResult[]; index: string } = $props();
+  let { results = [], multiIndex = false }: { results: SearchResult[]; multiIndex: boolean } = $props();
 </script>
 
 <div class="result-list">
@@ -10,7 +10,7 @@
     <p class="empty">No results found.</p>
   {:else}
     {#each results as result}
-      <ResultCard {result} {index} />
+      <ResultCard {result} {multiIndex} />
     {/each}
   {/if}
 </div>

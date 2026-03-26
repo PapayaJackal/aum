@@ -82,6 +82,7 @@ export interface SearchResult {
   score: number;
   snippet: string;
   metadata: Record<string, string | string[]>;
+  index: string;
 }
 
 export interface SearchResponse {
