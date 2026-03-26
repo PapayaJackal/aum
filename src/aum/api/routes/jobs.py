@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from aum.api.deps import get_current_user, get_tracker
+from aum.api.deps import get_tracker, require_admin
 from aum.auth.models import User
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -36,7 +36,7 @@ class JobDetailResponse(JobResponse):
 
 @router.get("", response_model=list[JobResponse])
 async def list_jobs(
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_admin)],
     status: str | None = None,
 ) -> list[JobResponse]:
     tracker = get_tracker()
@@ -63,7 +63,7 @@ async def list_jobs(
 @router.get("/{job_id}", response_model=JobDetailResponse)
 async def get_job(
     job_id: str,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(require_admin)],
 ) -> JobDetailResponse:
     tracker = get_tracker()
     job = tracker.get_job(job_id)
