@@ -121,8 +121,10 @@ async def login(
         user = auth.authenticate(credentials.username, credentials.password)
     except AuthError as exc:
         _record_failure(client_ip)
+        log.warning("login failed", username=credentials.username, client_ip=client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
+    log.info("login successful", username=user.username, is_admin=user.is_admin)
     return TokenResponse(
         access_token=tokens.create_access_token(user),
         refresh_token=tokens.create_refresh_token(user),
@@ -138,10 +140,12 @@ async def refresh(
     try:
         payload = tokens.verify_refresh_token(data.refresh_token)
     except TokenError as exc:
+        log.warning("token refresh failed", error=str(exc))
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
     user = auth.get_user(int(payload["sub"]))
     if user is None:
+        log.warning("token refresh for deleted user", user_id=payload["sub"])
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     return TokenResponse(
@@ -189,12 +193,17 @@ async def oauth_callback(
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
 
-    token = await client.authorize_access_token(request)
+    try:
+        token = await client.authorize_access_token(request)
+    except Exception as exc:
+        log.warning("oauth callback failed", provider=provider, error=str(exc))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="OAuth authentication failed")
     userinfo = token.get("userinfo")
     if userinfo is None:
         userinfo = await client.userinfo(token=token)
 
     user = oauth.get_or_create_user(provider, dict(userinfo))
+    log.info("oauth login successful", provider=provider, username=user.username)
 
     return TokenResponse(
         access_token=tokens.create_access_token(user),
