@@ -42,6 +42,7 @@ class AumConfig(BaseSettings):
     es_url: str = "http://localhost:9200"
     es_index: str = "aum"
     es_rrf: bool = False
+    es_max_highlight_offset: int = 10_000_000
 
     # Tika
     tika_server_url: str = "http://localhost:9998"

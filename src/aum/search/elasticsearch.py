@@ -156,11 +156,12 @@ def _build_filter_clauses(filters: dict[str, list[str]]) -> list[dict]:
 class ElasticsearchBackend:
     """Search backend using Elasticsearch with optional kNN vector search."""
 
-    def __init__(self, url: str = "http://localhost:9200", index: str = "aum", rrf: bool = False) -> None:
+    def __init__(self, url: str = "http://localhost:9200", index: str = "aum", rrf: bool = False, max_highlight_offset: int = 10_000_000) -> None:
         self._client = Elasticsearch(url)
         self._index = index
         self._vector_dimension: int | None = None
         self._rrf = rrf
+        self._max_highlight_offset = max_highlight_offset
 
     def _build_mappings(self, vector_dimension: int | None) -> dict:
         mappings: dict = {
@@ -232,7 +233,12 @@ class ElasticsearchBackend:
 
         self._client.indices.create(
             index=self._index,
-            body={"mappings": mappings},
+            body={
+                "settings": {
+                    "highlight.max_analyzed_offset": self._max_highlight_offset,
+                },
+                "mappings": mappings,
+            },
         )
         log.info("created elasticsearch index", index=self._index, vector=vector_dimension is not None)
 
@@ -295,7 +301,7 @@ class ElasticsearchBackend:
             "highlight": {
                 "pre_tags": ["<mark>"],
                 "post_tags": ["</mark>"],
-                "max_analyzed_offset": 999_999,
+                "max_analyzed_offset": self._max_highlight_offset,
                 "fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}},
             },
         }
@@ -372,7 +378,7 @@ class ElasticsearchBackend:
         body["highlight"] = {
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
-            "max_analyzed_offset": 999_999,
+            "max_analyzed_offset": self._max_highlight_offset,
             "fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}},
         }
         if include_facets:
