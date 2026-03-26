@@ -187,7 +187,7 @@ class ElasticsearchBackend:
             "query": {"match": {"content": {"query": query, "operator": "and"}}},
             "size": limit,
             "from": offset,
-            "highlight": {"fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}}},
+            "highlight": {"pre_tags": ["<mark>"], "post_tags": ["</mark>"], "fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}}},
         }
         if include_facets:
             body["aggs"] = _FACET_AGGS
