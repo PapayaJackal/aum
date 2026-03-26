@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import time
 
 from fastapi import Request, Response
@@ -20,6 +21,11 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             elapsed = time.monotonic() - start
             backend = request.app.state.config.search_backend if hasattr(request.app.state, "config") else "unknown"
             SEARCH_LATENCY.labels(type=search_type, backend=backend).observe(elapsed)
-            return response
+        else:
+            response = await call_next(request)
 
-        return await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Kallisti"] = "To The Fairest"
+        response.headers["X-Fnord"] = ""
+        response.headers["X-Sacred-Chao"] = random.choice(("Hodge", "Podge"))
+        return response
