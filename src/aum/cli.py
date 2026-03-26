@@ -280,10 +280,11 @@ def embed(
                     if n_failed:
                         EMBEDDING_DOCS_FAILED.inc(n_failed)
 
+                elapsed = time.monotonic() - job_start
+                rate = embedded / elapsed if elapsed > 0 else 0
+                log.info("embedding batch complete", embedded=embedded, failed=failed, total=total_unembedded, rate=f"{rate:.1f} docs/s")
                 if live is not None:
                     live.update(_make_progress(total_unembedded, embedded, failed, job_start))
-                else:
-                    log.info("embedding progress", embedded=embedded, failed=failed, total=total_unembedded)
 
     finally:
         EMBEDDING_JOBS_ACTIVE.dec()
