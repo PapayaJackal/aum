@@ -5,7 +5,7 @@ def test_default_config():
     config = AumConfig()
     assert config.search_backend == "elasticsearch"
     assert config.tika_server_url == "http://localhost:9998"
-    assert config.ocr_enabled is True
+    assert config.ocr_enabled is False
     assert config.ocr_language == "eng"
     assert config.embeddings_enabled is False
     assert config.log_level == "INFO"
