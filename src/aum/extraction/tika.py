@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from pathlib import Path
 
@@ -14,6 +15,13 @@ from aum.metrics import EXTRACTION_DURATION, EXTRACTION_ERRORS
 from aum.models import Document
 
 log = structlog.get_logger()
+
+_EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+
+def _condense_whitespace(text: str) -> str:
+    """Collapse runs of 3+ consecutive newlines down to 2."""
+    return _EXCESS_BLANK_LINES_RE.sub("\n\n", text)
 
 
 def _normalize_metadata(raw: dict) -> dict[str, str | list[str]]:
@@ -82,7 +90,7 @@ class TikaExtractor:
             log.warning("unpack failed, will fall back to direct extraction",
                         file_path=str(file_path), error=str(exc))
 
-        content = (unpack_parsed.get("content") or "").strip()
+        content = _condense_whitespace((unpack_parsed.get("content") or "").strip())
         raw_metadata = unpack_parsed.get("metadata") or {}
 
         # Fallback: if unpack produced no text (failed or file has no attachments
@@ -236,7 +244,7 @@ class TikaExtractor:
             EXTRACTION_ERRORS.labels(error_type=f"TikaHTTP{status}").inc()
             raise ExtractionError(f"Tika returned HTTP {status} for {file_path}")
 
-        content = (container.get("content") or "").strip()
+        content = _condense_whitespace((container.get("content") or "").strip())
         if not content:
             return None
 
