@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from aum.ingest.tracker import JobTracker
-from aum.models import JobStatus
+from aum.models import JobStatus, JobType
 
 
 class TestJobTracker:
@@ -65,6 +65,72 @@ class TestJobTracker:
 
     def test_get_nonexistent_job(self, tracker: JobTracker):
         assert tracker.get_job("nope") is None
+
+    def test_create_job_default_type_is_ingest(self, tracker: JobTracker):
+        job = tracker.create_job("type1", Path("/data"), total_files=1)
+        assert job.job_type == JobType.INGEST
+
+        fetched = tracker.get_job("type1")
+        assert fetched is not None
+        assert fetched.job_type == JobType.INGEST
+
+    def test_create_embed_job(self, tracker: JobTracker):
+        job = tracker.create_job("emb1", Path("."), total_files=50, job_type=JobType.EMBED)
+        assert job.job_type == JobType.EMBED
+
+        fetched = tracker.get_job("emb1")
+        assert fetched is not None
+        assert fetched.job_type == JobType.EMBED
+
+
+class TestGetFailedPaths:
+    def test_returns_distinct_paths(self, tracker: JobTracker):
+        tracker.create_job("fp1", Path("/data"), total_files=10)
+        # Same file fails twice with different errors
+        tracker.record_error("fp1", Path("/data/a.pdf"), "ExtractionError", "err1")
+        tracker.record_error("fp1", Path("/data/a.pdf"), "IndexingError", "err2")
+        tracker.record_error("fp1", Path("/data/b.pdf"), "ExtractionError", "err3")
+
+        paths = tracker.get_failed_paths("fp1")
+        assert len(paths) == 2
+        assert set(paths) == {Path("/data/a.pdf"), Path("/data/b.pdf")}
+
+    def test_excludes_empty_extraction_by_default(self, tracker: JobTracker):
+        tracker.create_job("fp2", Path("/data"), total_files=10)
+        tracker.record_error("fp2", Path("/data/a.pdf"), "ExtractionError", "corrupt")
+        tracker.record_error("fp2", Path("/data/b.pdf"), "EmptyExtraction", "no text")
+
+        paths = tracker.get_failed_paths("fp2")
+        assert paths == [Path("/data/a.pdf")]
+
+    def test_include_empty_flag(self, tracker: JobTracker):
+        tracker.create_job("fp3", Path("/data"), total_files=10)
+        tracker.record_error("fp3", Path("/data/a.pdf"), "ExtractionError", "corrupt")
+        tracker.record_error("fp3", Path("/data/b.pdf"), "EmptyExtraction", "no text")
+
+        paths = tracker.get_failed_paths("fp3", include_empty=True)
+        assert len(paths) == 2
+
+    def test_empty_when_no_errors(self, tracker: JobTracker):
+        tracker.create_job("fp4", Path("/data"), total_files=5)
+        assert tracker.get_failed_paths("fp4") == []
+
+
+class TestGetFailedDocIds:
+    def test_returns_distinct_doc_ids(self, tracker: JobTracker):
+        tracker.create_job("ed1", Path("."), total_files=10, job_type=JobType.EMBED)
+        tracker.record_error("ed1", Path("abc123"), "EmbeddingError", "timeout")
+        tracker.record_error("ed1", Path("def456"), "EmbeddingError", "oom")
+        # Same doc fails twice
+        tracker.record_error("ed1", Path("abc123"), "EmbeddingError", "retry failed")
+
+        doc_ids = tracker.get_failed_doc_ids("ed1")
+        assert len(doc_ids) == 2
+        assert set(doc_ids) == {"abc123", "def456"}
+
+    def test_empty_when_no_errors(self, tracker: JobTracker):
+        tracker.create_job("ed2", Path("."), total_files=5, job_type=JobType.EMBED)
+        assert tracker.get_failed_doc_ids("ed2") == []
 
 
 class TestEmbeddingModelTracking:

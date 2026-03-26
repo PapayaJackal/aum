@@ -207,6 +207,7 @@ class TikaExtractor:
                 responseMimeType="application/x-tar",
                 services={"meta": "/meta", "text": "/tika", "all": "/rmeta/xml", "unpack": "/unpack/all"},
                 rawResponse=True,
+                headers=self._tika_headers(),
             )
             status, response_bytes = raw
             parsed = tika_unpack._parse(raw)

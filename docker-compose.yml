@@ -10,7 +10,7 @@ services:
       - es-data:/usr/share/elasticsearch/data
 
   tika:
-    image: docker.io/apache/tika:3.3.0.0
+    image: docker.io/apache/tika:3.3.0.0-full
     ports:
       - "9998:9998"
 

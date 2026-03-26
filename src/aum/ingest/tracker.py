@@ -7,7 +7,7 @@ from threading import Lock
 
 import structlog
 
-from aum.models import IngestError, IngestJob, JobStatus
+from aum.models import IngestError, IngestJob, JobStatus, JobType
 
 log = structlog.get_logger()
 
@@ -66,24 +66,34 @@ class JobTracker:
             self._conn.execute("ALTER TABLE jobs ADD COLUMN extracted INTEGER DEFAULT 0")
         if "empty" not in cols:
             self._conn.execute("ALTER TABLE jobs ADD COLUMN empty INTEGER DEFAULT 0")
+        if "job_type" not in cols:
+            self._conn.execute("ALTER TABLE jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'ingest'")
 
-    def create_job(self, job_id: str, source_dir: Path, total_files: int, index_name: str = "aum") -> IngestJob:
+    def create_job(
+        self,
+        job_id: str,
+        source_dir: Path,
+        total_files: int,
+        index_name: str = "aum",
+        job_type: JobType = JobType.INGEST,
+    ) -> IngestJob:
         now = datetime.now(UTC).isoformat()
         with self._lock:
             self._conn.execute(
-                "INSERT INTO jobs (job_id, source_dir, index_name, status, total_files, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (job_id, str(source_dir), index_name, JobStatus.RUNNING.value, total_files, now),
+                "INSERT INTO jobs (job_id, source_dir, index_name, job_type, status, total_files, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (job_id, str(source_dir), index_name, job_type.value, JobStatus.RUNNING.value, total_files, now),
             )
             self._conn.commit()
         log.info(
-            "created ingest job", job_id=job_id, source_dir=str(source_dir),
-            index_name=index_name, total_files=total_files,
+            "created job", job_id=job_id, job_type=job_type.value,
+            source_dir=str(source_dir), index_name=index_name, total_files=total_files,
         )
         return IngestJob(
             job_id=job_id,
             source_dir=source_dir,
             index_name=index_name,
+            job_type=job_type,
             status=JobStatus.RUNNING,
             total_files=total_files,
             created_at=datetime.fromisoformat(now),
@@ -161,6 +171,7 @@ class JobTracker:
             job_id=row["job_id"],
             source_dir=Path(row["source_dir"]),
             index_name=row["index_name"] if "index_name" in keys else "aum",
+            job_type=JobType(row["job_type"]) if "job_type" in keys else JobType.INGEST,
             status=JobStatus(row["status"]),
             total_files=row["total_files"],
             extracted=row["extracted"] if "extracted" in keys else 0,
@@ -171,6 +182,40 @@ class JobTracker:
             created_at=datetime.fromisoformat(row["created_at"]),
             finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
         )
+
+    # --- Retry helpers ---
+
+    def get_failed_paths(self, job_id: str, include_empty: bool = False) -> list[Path]:
+        """Return distinct file paths that had errors in the given job.
+
+        By default excludes EmptyExtraction errors since retrying those rarely
+        helps unless extraction settings (e.g. OCR) have changed.  Pass
+        ``include_empty=True`` to include them.
+        """
+        if include_empty:
+            rows = self._conn.execute(
+                "SELECT DISTINCT file_path FROM job_errors WHERE job_id = ?",
+                (job_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT DISTINCT file_path FROM job_errors"
+                " WHERE job_id = ? AND error_type != 'EmptyExtraction'",
+                (job_id,),
+            ).fetchall()
+        return [Path(row["file_path"]) for row in rows]
+
+    def get_failed_doc_ids(self, job_id: str) -> list[str]:
+        """Return distinct document IDs that had errors in the given job.
+
+        Used for retrying failed embedding jobs where errors reference
+        Elasticsearch document IDs rather than file paths.
+        """
+        rows = self._conn.execute(
+            "SELECT DISTINCT file_path FROM job_errors WHERE job_id = ?",
+            (job_id,),
+        ).fetchall()
+        return [row["file_path"] for row in rows]
 
     # --- Embedding model tracking ---
 

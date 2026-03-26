@@ -33,30 +33,18 @@ def main() -> None:
 # --- Ingest & Index ---
 
 
-@main.command()
-@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--index", default=None, help="Target index name (default: from config)")
-@click.option("--batch-size", default=None, type=int, help="Batch size for indexing")
-@click.option("--workers", default=None, type=int, help="Number of extraction workers")
-@click.option("--ocr/--no-ocr", default=None, help="Enable or disable OCR (default: from config)")
-@click.option("--ocr-language", default=None, help="OCR language (e.g. eng, deu, fra+eng)")
-def ingest(
-    directory: Path,
-    index: str | None,
-    batch_size: int | None,
-    workers: int | None,
-    ocr: bool | None,
-    ocr_language: str | None,
-) -> None:
-    """Ingest documents from a directory."""
-    config = _load_config()
-    _setup(config)
-
-    from aum.api.deps import default_index_name, make_search_backend, make_tracker
+def _make_ingest_pipeline(
+    config: AumConfig,
+    idx: str,
+    batch_size: int | None = None,
+    workers: int | None = None,
+    ocr: bool | None = None,
+    ocr_language: str | None = None,
+):
+    """Create the extractor + pipeline objects used by ingest and retry."""
+    from aum.api.deps import make_search_backend, make_tracker
     from aum.extraction.tika import TikaExtractor
     from aum.ingest.pipeline import IngestPipeline
-
-    idx = index or default_index_name(config)
 
     extractor = TikaExtractor(
         server_url=config.tika_server_url,
@@ -76,8 +64,10 @@ def ingest(
         batch_size=batch_size or config.ingest_batch_size,
         max_workers=workers or config.ingest_max_workers,
     )
+    return pipeline
 
-    job, elapsed, avg_extraction = pipeline.run(directory)
+
+def _print_ingest_summary(job, elapsed: float, avg_extraction: float) -> None:
     throughput = job.total_files / elapsed if elapsed > 0 else 0.0
     click.echo(f"Job {job.job_id} [{job.index_name}]: {job.status.value}")
     click.echo(f"  Files:      {job.total_files}")
@@ -90,6 +80,34 @@ def ingest(
         click.echo(f"  Avg/file:   {avg_extraction:.3f}s")
     if job.failed > 0 or job.empty > 0:
         click.echo(f"  Run 'aum job {job.job_id} --errors' for details")
+
+
+@main.command()
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--index", default=None, help="Target index name (default: from config)")
+@click.option("--batch-size", default=None, type=int, help="Batch size for indexing")
+@click.option("--workers", default=None, type=int, help="Number of extraction workers")
+@click.option("--ocr/--no-ocr", default=None, help="Enable or disable OCR (default: from config)")
+@click.option("--ocr-language", default=None, help="OCR language (e.g. eng, deu, fra+eng)")
+def ingest(
+    directory: Path,
+    index: str | None,
+    batch_size: int | None,
+    workers: int | None,
+    ocr: bool | None,
+    ocr_language: str | None,
+) -> None:
+    """Ingest documents from a directory."""
+    config = _load_config()
+    _setup(config)
+
+    from aum.api.deps import default_index_name
+
+    idx = index or default_index_name(config)
+    pipeline = _make_ingest_pipeline(config, idx, batch_size, workers, ocr, ocr_language)
+
+    job, elapsed, avg_extraction = pipeline.run(directory)
+    _print_ingest_summary(job, elapsed, avg_extraction)
 
 
 @main.command("init")
@@ -129,46 +147,14 @@ def reset_index(index: str | None) -> None:
 # --- Embedding ---
 
 
-@main.command()
-@click.option("--index", default=None, help="Target index name (default: from config)")
-@click.option("--batch-size", default=None, type=int, help="Batch size for embedding")
-@click.option("--backend", default=None, type=click.Choice(["ollama", "openai"]), help="Embedding backend")
-@click.option("--model", default=None, help="Embedding model name")
-@click.option("--pull/--no-pull", default=True, help="Auto-pull model in Ollama (default: yes)")
-def embed(
-    index: str | None,
-    batch_size: int | None,
-    backend: str | None,
-    model: str | None,
-    pull: bool,
-) -> None:
-    """Generate embeddings for documents that don't have them yet.
+def _setup_embedder(config: AumConfig, idx: str, pull: bool = True):
+    """Create search backend, tracker, and embedder for embedding operations.
 
-    Runs as a separate job from ingest — queries the search index for
-    un-embedded documents, generates embeddings via the configured backend
-    (Ollama or OpenAI-compatible API), and updates them in place.
+    Validates model consistency and optionally auto-pulls Ollama models.
+    Returns (search_backend, tracker, embedder).
     """
-    import time
-    from contextlib import nullcontext
+    from aum.api.deps import make_embedder, make_search_backend, make_tracker
 
-    from rich.console import Console as RichConsole
-    from rich.live import Live
-    from rich.text import Text
-
-    from aum.api.deps import default_index_name, make_embedder, make_search_backend
-    from aum.metrics import EMBEDDING_DOCS_FAILED, EMBEDDING_DOCS_PROCESSED, EMBEDDING_JOBS_ACTIVE
-
-    config = _load_config()
-    _setup(config)
-
-    if backend:
-        config.embeddings_backend = backend
-    if model:
-        config.embeddings_model = model
-
-    from aum.api.deps import make_tracker
-
-    idx = index or default_index_name(config)
     search = make_search_backend(config, index=idx)
     tracker = make_tracker(config)
     embedder = make_embedder(config)
@@ -198,16 +184,96 @@ def embed(
             click.echo(f"Pulling model '{config.embeddings_model}' (if needed)...")
             embedder.ensure_model()
 
-    total_unembedded = search.count_unembedded()
-    if total_unembedded == 0:
-        click.echo(f"All documents in '{idx}' already have embeddings.")
-        return
+    return search, tracker, embedder
+
+
+@main.command()
+@click.option("--index", default=None, help="Target index name (default: from config)")
+@click.option("--batch-size", default=None, type=int, help="Batch size for embedding")
+@click.option("--backend", default=None, type=click.Choice(["ollama", "openai"]), help="Embedding backend")
+@click.option("--model", default=None, help="Embedding model name")
+@click.option("--pull/--no-pull", default=True, help="Auto-pull model in Ollama (default: yes)")
+def embed(
+    index: str | None,
+    batch_size: int | None,
+    backend: str | None,
+    model: str | None,
+    pull: bool,
+) -> None:
+    """Generate embeddings for documents that don't have them yet.
+
+    Runs as a separate job from ingest — queries the search index for
+    un-embedded documents, generates embeddings via the configured backend
+    (Ollama or OpenAI-compatible API), and updates them in place.
+    """
+    from aum.api.deps import default_index_name
+
+    config = _load_config()
+    _setup(config)
+
+    if backend:
+        config.embeddings_backend = backend
+    if model:
+        config.embeddings_model = model
+
+    idx = index or default_index_name(config)
+    search, tracker, embedder = _setup_embedder(config, idx, pull)
 
     bs = batch_size or config.embeddings_batch_size
+    job = _run_embed_job(config, search, tracker, embedder, idx, bs)
+
+    if job is not None and job.processed > 0:
+        tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, embedder.dimension)
+
+
+def _run_embed_job(
+    config: AumConfig,
+    search,
+    tracker,
+    embedder,
+    idx: str,
+    bs: int,
+    doc_ids: list[str] | None = None,
+):
+    """Run an embedding job, optionally for specific document IDs (retry).
+
+    When *doc_ids* is None, processes all unembedded documents.  When
+    provided, only re-embeds those specific documents.
+
+    Returns the completed IngestJob.
+    """
+    import time
+    import uuid
+    from contextlib import nullcontext
+
+    from rich.console import Console as RichConsole
+    from rich.live import Live
+    from rich.text import Text
+
+    from aum.metrics import EMBEDDING_DOCS_FAILED, EMBEDDING_DOCS_PROCESSED, EMBEDDING_JOBS_ACTIVE
+    from aum.models import JobStatus, JobType
+
+    if doc_ids is not None:
+        total = len(doc_ids)
+        scroll_source = search.scroll_document_ids(doc_ids, batch_size=bs)
+    else:
+        total = search.count_unembedded()
+        if total == 0:
+            click.echo(f"All documents in '{idx}' already have embeddings.")
+            return None
+        scroll_source = search.scroll_unembedded(batch_size=bs)
+
+    job_id = uuid.uuid4().hex[:12]
+    tracker.create_job(
+        job_id, source_dir=Path("."), total_files=total,
+        index_name=idx, job_type=JobType.EMBED,
+    )
+
     click.echo(
-        f"Embedding {total_unembedded} documents in '{idx}'"
+        f"Embedding {total} documents in '{idx}'"
         f" using {config.embeddings_backend}/{config.embeddings_model}"
         f" (batch_size={bs}, num_ctx={config.embeddings_context_length})"
+        f"  [job {job_id}]"
     )
 
     EMBEDDING_JOBS_ACTIVE.inc()
@@ -239,7 +305,7 @@ def embed(
         console = RichConsole(stderr=True) if show_progress else None
         ctx: Live | nullcontext = (
             Live(
-                _make_progress(total_unembedded, 0, 0, job_start),
+                _make_progress(total, 0, 0, job_start),
                 console=console,
                 refresh_per_second=4,
                 transient=True,
@@ -254,10 +320,9 @@ def embed(
         overlap_chars = config.embeddings_chunk_overlap
 
         with ctx as live:
-            for scroll_batch in search.scroll_unembedded(batch_size=bs):
+            for scroll_batch in scroll_source:
                 # Process each document: chunk, embed all chunks, store as nested array
                 updates: list[tuple[str, list[list[float]]]] = []
-                batch_failed = False
 
                 for doc_id, content in scroll_batch:
                     chunks = chunk_text(content, max_chars=max_chunk_chars, overlap_chars=overlap_chars)
@@ -268,6 +333,7 @@ def embed(
                         log.error("embedding failed", doc_id=doc_id, error=str(exc), n_chunks=len(chunks))
                         failed += 1
                         EMBEDDING_DOCS_FAILED.inc()
+                        tracker.record_error(job_id, Path(doc_id), "EmbeddingError", str(exc))
                         continue
 
                     updates.append((doc_id, chunk_vectors))
@@ -281,22 +347,143 @@ def embed(
                     if n_failed:
                         EMBEDDING_DOCS_FAILED.inc(n_failed)
 
+                tracker.update_progress(job_id, extracted=0, processed=embedded, failed=failed)
                 elapsed = time.monotonic() - job_start
                 rate = embedded / elapsed if elapsed > 0 else 0
-                log.info("embedding batch complete", embedded=embedded, failed=failed, total=total_unembedded, rate=f"{rate:.1f} docs/s")
+                log.info("embedding batch complete", job_id=job_id, embedded=embedded, failed=failed, total=total, rate=f"{rate:.1f} docs/s")
                 if live is not None:
-                    live.update(_make_progress(total_unembedded, embedded, failed, job_start))
+                    live.update(_make_progress(total, embedded + failed, failed, job_start))
 
+    except Exception:
+        tracker.complete_job(job_id, JobStatus.FAILED)
+        log.exception("embedding job failed", job_id=job_id)
+        raise
     finally:
         EMBEDDING_JOBS_ACTIVE.dec()
 
+    tracker.complete_job(job_id, JobStatus.COMPLETED)
+
     elapsed = time.monotonic() - job_start
     rate = embedded / elapsed if elapsed > 0 else 0
-    click.echo(f"Embedded:  {embedded}")
-    click.echo(f"Failed:    {failed}")
-    click.echo(f"Time:      {elapsed:.1f}s ({rate:.1f} docs/s)")
+    click.echo(f"Job {job_id} [{idx}]: completed")
+    click.echo(f"  Embedded:  {embedded}")
+    click.echo(f"  Failed:    {failed}")
+    click.echo(f"  Time:      {elapsed:.1f}s ({rate:.1f} docs/s)")
+    if failed > 0:
+        click.echo(f"  Run 'aum job {job_id} --errors' for details")
 
-    if embedded > 0:
+    return tracker.get_job(job_id)
+
+
+# --- Retry ---
+
+
+@main.command()
+@click.argument("job_id")
+@click.option("--include-empty/--no-include-empty", default=True, help="Retry files with empty extractions (default: yes)")
+@click.option("--batch-size", default=None, type=int, help="Override batch size")
+@click.option("--workers", default=None, type=int, help="Override worker count (ingest only)")
+@click.option("--ocr/--no-ocr", default=None, help="Enable or disable OCR (ingest only)")
+@click.option("--ocr-language", default=None, help="OCR language (ingest only, e.g. eng, deu, fra+eng)")
+@click.option("--pull/--no-pull", default=True, help="Auto-pull model in Ollama (embed only)")
+def retry(
+    job_id: str,
+    include_empty: bool,
+    batch_size: int | None,
+    workers: int | None,
+    ocr: bool | None,
+    ocr_language: str | None,
+    pull: bool,
+) -> None:
+    """Retry failed items from a previous job.
+
+    Looks up which items failed in the given job and re-processes only those.
+    Works for both ingest and embedding jobs.  The retry itself is tracked as
+    a new job that can be inspected and retried again if needed.
+
+    By default, both failed and empty items are retried.  Use --no-include-empty
+    to skip files that had empty extractions.
+    """
+    from aum.api.deps import make_tracker
+    from aum.models import JobType
+
+    config = _load_config()
+    _setup(config)
+
+    tracker = make_tracker(config)
+    job = tracker.get_job(job_id)
+
+    if job is None:
+        click.echo(f"Job not found: {job_id}", err=True)
+        sys.exit(1)
+
+    if job.failed == 0 and job.empty == 0:
+        click.echo(f"Job {job_id} has no failed or empty items.")
+        return
+
+    if job.job_type == JobType.INGEST:
+        _retry_ingest(config, job, include_empty, batch_size, workers, ocr, ocr_language)
+    elif job.job_type == JobType.EMBED:
+        _retry_embed(config, job, batch_size, pull)
+    else:
+        click.echo(f"Unknown job type: {job.job_type.value}", err=True)
+        sys.exit(1)
+
+
+def _retry_ingest(
+    config: AumConfig,
+    job,
+    include_empty: bool,
+    batch_size: int | None,
+    workers: int | None,
+    ocr: bool | None,
+    ocr_language: str | None,
+) -> None:
+    from aum.api.deps import make_tracker
+
+    tracker = make_tracker(config)
+    failed_paths = tracker.get_failed_paths(job.job_id, include_empty=include_empty)
+    if not failed_paths:
+        click.echo(f"No retryable errors in job {job.job_id}.")
+        return
+
+    # Filter to paths that still exist on disk
+    existing = [p for p in failed_paths if p.exists()]
+    skipped = len(failed_paths) - len(existing)
+    if skipped:
+        log.warning("skipping missing files", skipped=skipped, total=len(failed_paths))
+
+    if not existing:
+        click.echo("All failed files have been removed from disk.")
+        return
+
+    click.echo(f"Retrying {len(existing)} files from job {job.job_id} (index: {job.index_name})")
+    if skipped:
+        click.echo(f"  ({skipped} files no longer on disk, skipped)")
+
+    pipeline = _make_ingest_pipeline(config, job.index_name, batch_size, workers, ocr, ocr_language)
+    retry_job, elapsed, avg_extraction = pipeline.run_retry(existing, job.source_dir)
+    _print_ingest_summary(retry_job, elapsed, avg_extraction)
+
+
+def _retry_embed(config: AumConfig, job, batch_size: int | None, pull: bool) -> None:
+    from aum.api.deps import make_tracker
+
+    tracker = make_tracker(config)
+    failed_doc_ids = tracker.get_failed_doc_ids(job.job_id)
+    if not failed_doc_ids:
+        click.echo(f"No retryable errors in job {job.job_id}.")
+        return
+
+    click.echo(f"Retrying {len(failed_doc_ids)} failed documents from job {job.job_id} (index: {job.index_name})")
+
+    idx = job.index_name
+    search, tracker, embedder = _setup_embedder(config, idx, pull)
+
+    bs = batch_size or config.embeddings_batch_size
+    retry_job = _run_embed_job(config, search, tracker, embedder, idx, bs, doc_ids=failed_doc_ids)
+
+    if retry_job is not None and retry_job.processed > 0:
         tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, embedder.dimension)
 
 
@@ -445,7 +632,7 @@ def list_indices() -> None:
 @main.command("jobs")
 @click.option("--status", type=click.Choice(["pending", "running", "completed", "failed"]), default=None)
 def list_jobs(status: str | None) -> None:
-    """List ingest jobs."""
+    """List all jobs (ingest and embedding)."""
     config = _load_config()
     _setup(config)
 
@@ -460,19 +647,19 @@ def list_jobs(status: str | None) -> None:
         click.echo("No jobs found.")
         return
 
-    click.echo(f"{'JOB ID':<14} {'INDEX':<16} {'STATUS':<12} {'FILES':<8} {'EXTRACTED':<11} {'INDEXED':<9} {'EMPTY':<7} {'FAILED':<8} {'CREATED'}")
+    click.echo(f"{'JOB ID':<14} {'TYPE':<8} {'INDEX':<16} {'STATUS':<12} {'FILES':<8} {'OK':<8} {'EMPTY':<8} {'FAILED':<8} {'CREATED'}")
     click.echo("-" * 108)
     for j in jobs:
         files = str(j.total_files) if j.total_files else "?"
         created = f"{j.created_at:%Y-%m-%d %H:%M}"
-        click.echo(f"{j.job_id:<14} {j.index_name:<16} {j.status.value:<12} {files:<8} {j.extracted:<11} {j.processed:<9} {j.empty:<7} {j.failed:<8} {created}")
+        click.echo(f"{j.job_id:<14} {j.job_type.value:<8} {j.index_name:<16} {j.status.value:<12} {files:<8} {j.processed:<8} {j.empty:<8} {j.failed:<8} {created}")
 
 
 @main.command("job")
 @click.argument("job_id")
 @click.option("--errors", is_flag=True, help="Show error details")
 def show_job(job_id: str, errors: bool) -> None:
-    """Show details of a specific ingest job."""
+    """Show details of a specific job."""
     config = _load_config()
     _setup(config)
 
@@ -485,18 +672,26 @@ def show_job(job_id: str, errors: bool) -> None:
         click.echo(f"Job not found: {job_id}", err=True)
         sys.exit(1)
 
+    from aum.models import JobType
+
     click.echo(f"Job ID:     {job.job_id}")
+    click.echo(f"Type:       {job.job_type.value}")
     click.echo(f"Index:      {job.index_name}")
-    click.echo(f"Source:     {job.source_dir}")
+    if job.job_type == JobType.INGEST:
+        click.echo(f"Source:     {job.source_dir}")
     click.echo(f"Status:     {job.status.value}")
     click.echo(f"Files:      {job.total_files}")
-    click.echo(f"Extracted:  {job.extracted}")
-    click.echo(f"Indexed:    {job.processed}")
-    click.echo(f"Empty:      {job.empty}")
+    if job.job_type == JobType.INGEST:
+        click.echo(f"Extracted:  {job.extracted}")
+    click.echo(f"Processed:  {job.processed}")
+    if job.job_type == JobType.INGEST:
+        click.echo(f"Empty:      {job.empty}")
     click.echo(f"Failed:     {job.failed}")
     click.echo(f"Created:    {job.created_at:%Y-%m-%d %H:%M:%S}")
     if job.finished_at:
         click.echo(f"Finished:   {job.finished_at:%Y-%m-%d %H:%M:%S}")
+    if job.failed > 0:
+        click.echo(f"\nRetry with: aum retry {job.job_id}")
 
     if errors and job.errors:
         click.echo(f"\nErrors ({len(job.errors)}):")

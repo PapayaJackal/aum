@@ -63,6 +63,49 @@ class TestCondenseWhitespace:
         assert _condense_whitespace(text) == "A\n\nB"
 
 
+class TestTikaHeaders:
+    """Tests for OCR header propagation."""
+
+    def test_ocr_enabled_sets_language(self):
+        ext = TikaExtractor(ocr_enabled=True, ocr_language="deu")
+        headers = ext._tika_headers()
+        assert headers["X-Tika-OCRLanguage"] == "deu"
+        assert "X-Tika-OCRskipOcr" not in headers
+
+    def test_ocr_disabled_sets_skip(self):
+        ext = TikaExtractor(ocr_enabled=False)
+        headers = ext._tika_headers()
+        assert headers["X-Tika-OCRskipOcr"] == "true"
+        assert "X-Tika-OCRLanguage" not in headers
+
+    def test_skip_embedded_header(self):
+        ext = TikaExtractor(ocr_enabled=True, ocr_language="eng")
+        headers = ext._tika_headers(skip_embedded=True)
+        assert headers["X-Tika-Skip-Embedded"] == "true"
+        assert headers["X-Tika-OCRLanguage"] == "eng"
+
+    def test_unpack_passes_headers(self, tmp_path: Path):
+        """The _unpack method must pass OCR headers to tika_parse1."""
+        source = tmp_path / "doc.pdf"
+        source.write_bytes(b"test")
+
+        ext = TikaExtractor(ocr_enabled=True, ocr_language="fra", extract_dir=str(tmp_path / "ex"))
+
+        with patch("aum.extraction.tika.tika_parse1") as mock_parse1:
+            mock_parse1.return_value = (200, b"")
+            with patch("aum.extraction.tika.tika_unpack._parse", return_value={"content": "text", "metadata": {}}):
+                ext._unpack(source)
+
+        mock_parse1.assert_called_once()
+        call_kwargs = mock_parse1.call_args
+        passed_headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers")
+        # tika_parse1 is called positionally, check kwargs
+        if passed_headers is None:
+            # All args might be positional — headers are passed as a kwarg
+            passed_headers = call_kwargs.kwargs["headers"]
+        assert passed_headers["X-Tika-OCRLanguage"] == "fra"
+
+
 class TestTikaExtractorEmptyContent:
     """Tests for the empty-content detection in TikaExtractor."""
 

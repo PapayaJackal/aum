@@ -20,6 +20,7 @@ class JobErrorResponse(BaseModel):
 
 class JobResponse(BaseModel):
     job_id: str
+    job_type: str
     source_dir: str
     status: str
     total_files: int
@@ -46,6 +47,7 @@ async def list_jobs(
     return [
         JobResponse(
             job_id=j.job_id,
+            job_type=j.job_type.value,
             source_dir=str(j.source_dir),
             status=j.status.value,
             total_files=j.total_files,
@@ -70,6 +72,7 @@ async def get_job(
 
     return JobDetailResponse(
         job_id=job.job_id,
+        job_type=job.job_type.value,
         source_dir=str(job.source_dir),
         status=job.status.value,
         total_files=job.total_files,

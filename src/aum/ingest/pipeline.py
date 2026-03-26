@@ -167,6 +167,26 @@ class IngestPipeline:
         self._batch_size = batch_size
         self._max_workers = max_workers
 
+    def run_retry(self, file_paths: list[Path], source_dir: Path) -> tuple[IngestJob, float, float]:
+        """Re-run ingest for specific file paths (retry failed items).
+
+        Works like ``run()`` but feeds explicit paths instead of walking a
+        directory.  The resulting job is a normal tracked job that can itself
+        be retried later.
+
+        Returns (job, elapsed_seconds, avg_extraction_seconds).
+        """
+        self._backend.initialize()
+
+        source_dir = source_dir.resolve()
+        job_id = uuid.uuid4().hex[:12]
+        total = len(file_paths)
+        self._tracker.create_job(job_id, source_dir, total_files=total, index_name=self._index_name)
+        self._tracker.update_total_files(job_id, total)
+
+        log.info("starting retry ingest", job_id=job_id, source_dir=str(source_dir), files=total)
+        return self._run_pipeline(job_id, source_dir, file_paths)
+
     def run(self, source_dir: Path) -> tuple[IngestJob, float, float]:
         """Run a full ingest job on a directory.
 
@@ -183,6 +203,20 @@ class IngestPipeline:
         self._tracker.create_job(job_id, source_dir, total_files=0, index_name=self._index_name)
 
         log.info("starting ingest", job_id=job_id, source_dir=str(source_dir))
+        return self._run_pipeline(job_id, source_dir)
+
+    def _run_pipeline(
+        self,
+        job_id: str,
+        source_dir: Path,
+        explicit_paths: list[Path] | None = None,
+    ) -> tuple[IngestJob, float, float]:
+        """Core pipeline loop shared by run() and run_retry().
+
+        When *explicit_paths* is ``None`` a walker thread discovers files from
+        *source_dir*.  When a list is provided those paths are fed directly
+        into the extraction workers.
+        """
         INGEST_JOBS_ACTIVE.inc()
 
         show_progress = sys.stderr.isatty()
@@ -206,11 +240,22 @@ class IngestPipeline:
 
         file_queue: Queue[Path | None] = Queue(maxsize=self._max_workers * 4)
 
-        walker = Thread(
-            target=_walk_files,
-            args=(source_dir, file_queue, self._tracker, job_id, discovered),
-            daemon=True,
-        )
+        if explicit_paths is not None:
+            # Feed explicit paths into the queue directly
+            def _feed_paths() -> int:
+                for p in explicit_paths:
+                    file_queue.put(p)
+                    discovered[0] += 1
+                file_queue.put(_SENTINEL)
+                return len(explicit_paths)
+
+            walker = Thread(target=_feed_paths, daemon=True)
+        else:
+            walker = Thread(
+                target=_walk_files,
+                args=(source_dir, file_queue, self._tracker, job_id, discovered),
+                daemon=True,
+            )
         walker.start()
 
         ctx: Live | nullcontext = (  # type: ignore[type-arg]

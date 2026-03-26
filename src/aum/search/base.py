@@ -222,6 +222,10 @@ class SearchBackend(Protocol):
         """Yield batches of (doc_id, content) for documents without embeddings."""
         ...
 
+    def scroll_document_ids(self, doc_ids: list[str], batch_size: int = 64) -> ...:
+        """Yield batches of (doc_id, content) for specific document IDs."""
+        ...
+
     def update_embeddings(self, updates: list[tuple[str, list[list[float]]]]) -> int:
         """Bulk-update chunk embedding vectors. Returns number of failures."""
         ...

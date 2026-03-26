@@ -528,6 +528,32 @@ class ElasticsearchBackend:
                 except Exception:
                     pass
 
+    def scroll_document_ids(self, doc_ids: list[str], batch_size: int = 64):
+        """Yield batches of (doc_id, content) for specific document IDs.
+
+        Uses mget to fetch documents in batches rather than scroll, since we
+        already know the exact IDs we want.
+        """
+        for i in range(0, len(doc_ids), batch_size):
+            chunk = doc_ids[i : i + batch_size]
+            try:
+                resp = self._client.mget(
+                    index=self._index,
+                    body={"ids": chunk},
+                    _source=["content"],
+                )
+            except Exception:
+                log.exception("mget failed for doc batch", n_ids=len(chunk))
+                continue
+            batch: list[tuple[str, str]] = []
+            for doc in resp.get("docs", []):
+                if doc.get("found"):
+                    batch.append((doc["_id"], doc["_source"].get("content", "")))
+                else:
+                    log.warning("document not found for retry", doc_id=doc["_id"])
+            if batch:
+                yield batch
+
     def update_embeddings(self, updates: list[tuple[str, list[list[float]]]]) -> int:
         """Bulk-update chunk embeddings on existing documents.
 

@@ -13,6 +13,11 @@ class JobStatus(enum.Enum):
     FAILED = "failed"
 
 
+class JobType(enum.Enum):
+    INGEST = "ingest"
+    EMBED = "embed"
+
+
 @dataclass
 class Document:
     """A document extracted and ready for indexing."""
@@ -35,6 +40,7 @@ class IngestJob:
     job_id: str
     source_dir: Path
     index_name: str = "aum"
+    job_type: JobType = JobType.INGEST
     status: JobStatus = JobStatus.PENDING
     total_files: int = 0
     extracted: int = 0
