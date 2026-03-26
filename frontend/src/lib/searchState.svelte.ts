@@ -1,15 +1,36 @@
 import type { SearchResult } from "./api";
 
+const PREF_KEY = "aum_prefs";
+
+function loadPrefs(): { pageSize: number; selectedIndex: string; searchType: string } {
+  try {
+    const raw = localStorage.getItem(PREF_KEY);
+    if (raw) return { pageSize: 20, selectedIndex: "", searchType: "text", ...JSON.parse(raw) };
+  } catch {}
+  return { pageSize: 20, selectedIndex: "", searchType: "text" };
+}
+
+export function savePrefs() {
+  try {
+    localStorage.setItem(
+      PREF_KEY,
+      JSON.stringify({ pageSize: searchState.pageSize, selectedIndex: searchState.selectedIndex, searchType: searchState.searchType })
+    );
+  } catch {}
+}
+
+const _prefs = loadPrefs();
+
 export const searchState = $state({
   query: "",
-  searchType: "text",
-  selectedIndex: "",
+  searchType: _prefs.searchType,
+  selectedIndex: _prefs.selectedIndex,
   results: [] as SearchResult[],
   total: 0,
   searched: false,
   activeFacets: {} as Record<string, string[]>,
   facets: {} as Record<string, string[]>,
-  pageSize: 20,
+  pageSize: _prefs.pageSize,
   currentPage: 1,
   selectedDocId: "",
   selectedDocIndex: "",

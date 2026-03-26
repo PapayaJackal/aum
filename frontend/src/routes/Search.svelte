@@ -2,7 +2,7 @@
   import type { Snippet } from "svelte";
   import { onMount, untrack } from "svelte";
   import { search, listIndices } from "../lib/api";
-  import { searchState, getSearchQs } from "../lib/searchState.svelte";
+  import { searchState, getSearchQs, savePrefs } from "../lib/searchState.svelte";
   import ResultList from "../components/ResultList.svelte";
   import FacetPanel from "../components/FacetPanel.svelte";
   import Document from "./Document.svelte";
@@ -13,10 +13,10 @@
   $effect(() => {
     listIndices()
       .then((res) => {
-        if (res.indices.length > 0 && !searchState.selectedIndex) {
-          searchState.selectedIndex = res.indices[0];
-        }
         indices = res.indices;
+        if (indices.length > 0 && (!searchState.selectedIndex || !indices.includes(searchState.selectedIndex))) {
+          searchState.selectedIndex = indices[0];
+        }
       })
       .catch(() => { indices = []; });
   });
@@ -80,10 +80,10 @@
     const q = params.get("q");
     if (!q) return;
     searchState.query = q;
-    searchState.searchType = (params.get("type") as "text" | "vector" | "hybrid") || "text";
+    searchState.searchType = (params.get("type") as "text" | "vector" | "hybrid") || searchState.searchType;
     const indexParam = params.get("index");
     if (indexParam) searchState.selectedIndex = indexParam;
-    searchState.pageSize = parseInt(params.get("pageSize") || "20");
+    searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
     const facetsStr = params.get("facets");
     if (facetsStr) {
       try { searchState.activeFacets = JSON.parse(facetsStr); } catch {}
@@ -117,10 +117,10 @@
     const q = params.get("q");
     if (!q) return;
     searchState.query = q;
-    searchState.searchType = (params.get("type") as "text" | "vector" | "hybrid") || "text";
+    searchState.searchType = (params.get("type") as "text" | "vector" | "hybrid") || searchState.searchType;
     const indexParam = params.get("index");
     if (indexParam) searchState.selectedIndex = indexParam;
-    searchState.pageSize = parseInt(params.get("pageSize") || "20");
+    searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
     const facetsStr = params.get("facets");
     if (facetsStr) {
       try { searchState.activeFacets = JSON.parse(facetsStr); } catch {}
@@ -140,6 +140,17 @@
   }
 
   function handlePageSizeChange() {
+    savePrefs();
+    if (searchState.searched) doSearch(1);
+  }
+
+  function handleIndexChange() {
+    savePrefs();
+    if (searchState.searched) doSearch(1);
+  }
+
+  function handleSearchTypeChange() {
+    savePrefs();
     if (searchState.searched) doSearch(1);
   }
 
@@ -224,13 +235,13 @@
       class="search-input"
     />
     {#if indices.length > 0}
-      <select bind:value={searchState.selectedIndex} class="toolbar-select">
+      <select bind:value={searchState.selectedIndex} class="toolbar-select" onchange={handleIndexChange}>
         {#each indices as idx}
           <option value={idx}>{idx}</option>
         {/each}
       </select>
     {/if}
-    <select bind:value={searchState.searchType} class="toolbar-select">
+    <select bind:value={searchState.searchType} class="toolbar-select" onchange={handleSearchTypeChange}>
       <option value="text">Full text</option>
       <option value="vector">Semantic</option>
       <option value="hybrid">Hybrid</option>
