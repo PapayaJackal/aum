@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { SearchResult } from "../lib/api";
-  import { getSearchQs } from "../lib/searchState.svelte";
+  import { searchState } from "../lib/searchState.svelte";
 
   let { result, index = "" }: { result: SearchResult; index: string } = $props();
 
@@ -8,13 +8,15 @@
   let filename = $derived(parts[parts.length - 1] || result.display_path);
   let dirPart = $derived(parts.length > 1 ? parts.slice(0, -1).join("/") + "/" : "");
   let fileType = $derived(result.metadata["File Type"] || "");
-  let docHref = $derived.by(() => {
-    const qs = getSearchQs();
-    return `#/document/${encodeURIComponent(index)}/${result.doc_id}${qs ? "?" + qs : ""}`;
-  });
+  let isSelected = $derived(searchState.selectedDocId === result.doc_id);
+
+  function handleClick() {
+    searchState.selectedDocId = result.doc_id;
+    searchState.selectedDocIndex = index;
+  }
 </script>
 
-<a href={docHref} class="card">
+<button type="button" class="card" class:selected={isSelected} onclick={handleClick}>
   <div class="card-header">
     <span class="filename">{filename}</span>
     <span class="score">{result.score.toFixed(3)}</span>
@@ -28,22 +30,32 @@
       <span class="badge">{fileType}</span>
     {/if}
   </div>
-</a>
+</button>
 
 <style>
   .card {
     display: block;
+    width: 100%;
+    text-align: left;
+    font: inherit;
     background: white;
     padding: 1rem;
     border-radius: 6px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
     text-decoration: none;
     color: inherit;
-    transition: box-shadow 0.15s;
+    transition: box-shadow 0.15s, border-color 0.15s;
+    border: 2px solid transparent;
+    cursor: pointer;
   }
 
   .card:hover {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+
+  .card.selected {
+    border-color: #4a7cf7;
+    background: #f0f4ff;
   }
 
   .card-header {

@@ -2,7 +2,6 @@
   import { isAuthenticated } from "./lib/auth";
   import Login from "./routes/Login.svelte";
   import Search from "./routes/Search.svelte";
-  import Document from "./routes/Document.svelte";
 
   let hash = $state(window.location.hash || "#/");
 
@@ -31,23 +30,6 @@
     </nav>
   </header>
   <main><Login /></main>
-
-{:else if hash.startsWith("#/document/")}
-  {@const rest = hash.slice("#/document/".length)}
-  {@const restQIdx = rest.indexOf("?")}
-  {@const restPath = restQIdx >= 0 ? rest.slice(0, restQIdx) : rest}
-  {@const restQs = restQIdx >= 0 ? rest.slice(restQIdx) : ""}
-  {@const slashIdx = restPath.indexOf("/")}
-  {@const docIndex = slashIdx >= 0 ? decodeURIComponent(restPath.slice(0, slashIdx)) : ""}
-  {@const docId = slashIdx >= 0 ? restPath.slice(slashIdx + 1) : restPath}
-  <header>
-    <nav>
-      <a href="#/" class="brand">ॐ</a>
-      <a href={"#/" + restQs} class="back-link">← Back to search</a>
-      <button class="logout-btn" onclick={logout}>Logout</button>
-    </nav>
-  </header>
-  <main><Document {docId} index={docIndex} qs={restQs} /></main>
 
 {:else}
   <Search>
@@ -95,17 +77,6 @@
     color: white;
     text-decoration: none;
     flex-shrink: 0;
-  }
-
-  .back-link {
-    color: #aac;
-    text-decoration: none;
-    font-size: 0.9rem;
-    flex: 1;
-  }
-
-  .back-link:hover {
-    color: white;
   }
 
   .logout-btn {

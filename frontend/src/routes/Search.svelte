@@ -5,6 +5,7 @@
   import { searchState, getSearchQs } from "../lib/searchState.svelte";
   import ResultList from "../components/ResultList.svelte";
   import FacetPanel from "../components/FacetPanel.svelte";
+  import Document from "./Document.svelte";
 
   let { header }: { header: Snippet<[() => ReturnType<Snippet>]> } = $props();
 
@@ -37,6 +38,14 @@
     });
   });
 
+  // Sync URL when selected document changes
+  $effect(() => {
+    const _ = searchState.selectedDocId; // track
+    untrack(() => {
+      if (searchState.searched) updateSearchUrl();
+    });
+  });
+
   async function doSearch(page: number = 1, resetFacets = true) {
     if (!searchState.query.trim()) return;
     loading = true;
@@ -62,7 +71,8 @@
     }
   }
 
-  onMount(() => {
+  /** Parse URL hash parameters and restore search/sidebar state. */
+  function parseUrlState() {
     const hash = window.location.hash;
     const qIdx = hash.indexOf("?");
     if (qIdx < 0) return;
@@ -80,17 +90,70 @@
     } else {
       searchState.activeFacets = {};
     }
+    const docParam = params.get("doc");
+    const docIndexParam = params.get("docIndex");
+    if (docParam) {
+      searchState.selectedDocId = docParam;
+      searchState.selectedDocIndex = docIndexParam || searchState.selectedIndex;
+    } else {
+      searchState.selectedDocId = "";
+      searchState.selectedDocIndex = "";
+    }
     doSearch(parseInt(params.get("page") || "1"), false);
+  }
+
+  onMount(() => {
+    parseUrlState();
   });
+
+  // Re-parse URL on hash changes (e.g. facet links from sidebar navigating to a new search).
+  function onHashChange() {
+    const hash = window.location.hash;
+    if (!hash.startsWith("#/") || hash.startsWith("#/login")) return;
+    // If the URL changed externally (e.g. facet link in sidebar), re-parse and re-search.
+    const qIdx = hash.indexOf("?");
+    if (qIdx < 0) return;
+    const params = new URLSearchParams(hash.slice(qIdx + 1));
+    const q = params.get("q");
+    if (!q) return;
+    searchState.query = q;
+    searchState.searchType = (params.get("type") as "text" | "vector" | "hybrid") || "text";
+    const indexParam = params.get("index");
+    if (indexParam) searchState.selectedIndex = indexParam;
+    searchState.pageSize = parseInt(params.get("pageSize") || "20");
+    const facetsStr = params.get("facets");
+    if (facetsStr) {
+      try { searchState.activeFacets = JSON.parse(facetsStr); } catch {}
+    } else {
+      searchState.activeFacets = {};
+    }
+    searchState.selectedDocId = params.get("doc") || "";
+    searchState.selectedDocIndex = params.get("docIndex") || "";
+    doSearch(parseInt(params.get("page") || "1"), false);
+  }
 
   function handleSubmit(e: Event) {
     e.preventDefault();
+    searchState.selectedDocId = "";
+    searchState.selectedDocIndex = "";
     doSearch(1);
   }
 
   function handlePageSizeChange() {
     if (searchState.searched) doSearch(1);
   }
+
+  function closeSidebar() {
+    searchState.selectedDocId = "";
+    searchState.selectedDocIndex = "";
+  }
+
+  function navigateDoc(docId: string, index: string) {
+    searchState.selectedDocId = docId;
+    searchState.selectedDocIndex = index;
+  }
+
+  let sidebarOpen = $derived(!!searchState.selectedDocId);
 
   let totalPages = $derived(Math.max(1, Math.ceil(searchState.total / searchState.pageSize)));
 
@@ -146,6 +209,8 @@
   });
 </script>
 
+<svelte:window onhashchange={onHashChange} />
+
 <svelte:head>
   <title>{searchState.searched && searchState.query ? `aum - ${searchState.query}` : "aum"}</title>
 </svelte:head>
@@ -184,9 +249,9 @@
   {/if}
 
   {#if searchState.searched}
-    <div class="results-layout">
+    <div class="results-layout" class:sidebar-open={sidebarOpen}>
       {#if Object.keys(facets).length > 0}
-        <aside>
+        <aside class="facet-aside">
           <FacetPanel {facets} bind:activeFacets={searchState.activeFacets} dateFacets={["Created"]} />
         </aside>
       {/if}
@@ -238,6 +303,19 @@
         </div>
         <ResultList results={filteredResults} index={searchState.selectedIndex} />
       </div>
+
+      {#if sidebarOpen}
+        <aside class="doc-sidebar">
+          {#key searchState.selectedDocId}
+            <Document
+              docId={searchState.selectedDocId}
+              index={searchState.selectedDocIndex}
+              onClose={closeSidebar}
+              onNavigateDoc={navigateDoc}
+            />
+          {/key}
+        </aside>
+      {/if}
     </div>
   {/if}
 </main>
@@ -312,7 +390,7 @@
     margin-top: 0.75rem;
   }
 
-  aside {
+  .facet-aside {
     flex: 0 0 220px;
     max-width: 220px;
     min-width: 0;
@@ -326,6 +404,25 @@
   .results-main {
     flex: 1;
     min-width: 0;
+  }
+
+  .sidebar-open .results-main {
+    flex: 0 0 35%;
+    max-width: 35%;
+  }
+
+  .doc-sidebar {
+    flex: 1;
+    min-width: 0;
+    background: #fafafa;
+    border-left: 1px solid #ddd;
+    border-radius: 6px;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.05);
+    position: sticky;
+    top: 3rem;
+    align-self: flex-start;
+    max-height: calc(100vh - 3.5rem);
+    overflow-y: auto;
   }
 
   .toolbar-sentinel {
@@ -353,6 +450,7 @@
     padding: 0.65rem 0.75rem;
     margin: 0 -0.75rem 0.75rem;
   }
+
 
   .result-count {
     color: #888;

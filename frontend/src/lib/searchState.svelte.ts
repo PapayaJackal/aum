@@ -11,6 +11,8 @@ export const searchState = $state({
   facets: {} as Record<string, string[]>,
   pageSize: 20,
   currentPage: 1,
+  selectedDocId: "",
+  selectedDocIndex: "",
 });
 
 export function getSearchQs(): string {
@@ -22,5 +24,9 @@ export function getSearchQs(): string {
   if (searchState.pageSize !== 20) params.set("pageSize", String(searchState.pageSize));
   const af = searchState.activeFacets;
   if (Object.keys(af).length > 0) params.set("facets", JSON.stringify(af));
+  if (searchState.selectedDocId) {
+    params.set("doc", searchState.selectedDocId);
+    if (searchState.selectedDocIndex) params.set("docIndex", searchState.selectedDocIndex);
+  }
   return params.toString();
 }
