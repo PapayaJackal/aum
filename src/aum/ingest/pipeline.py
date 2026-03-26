@@ -9,7 +9,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
 from queue import Empty, Queue
-from threading import Thread
+from threading import Lock, Thread
 
 import structlog
 import structlog.contextvars
@@ -194,6 +194,10 @@ class IngestPipeline:
         # Single-element list so the walker thread can update it without a lock
         discovered: list[int] = [0]
 
+        # Track truly concurrent extractions (threads actively inside _extract_one)
+        in_flight_lock = Lock()
+        in_flight_count: list[int] = [0]
+
         file_queue: Queue[Path | None] = Queue(maxsize=self._max_workers * 4)
 
         walker = Thread(
@@ -232,7 +236,7 @@ class IngestPipeline:
                             if file_path is _SENTINEL:
                                 walker_done = True
                                 break
-                            future = pool.submit(self._extract_one, file_path, job_id)
+                            future = pool.submit(self._extract_one, file_path, job_id, in_flight_lock, in_flight_count)
                             pending_futures[future] = file_path
 
                         # Collect completed extractions
@@ -282,7 +286,7 @@ class IngestPipeline:
                         if live is not None:
                             live.update(_make_progress_line(
                                 job_start, discovered[0], walker_done, files_done,
-                                len(pending_futures), processed, failed,
+                                in_flight_count[0], processed, failed,
                                 timing_count, extraction_time,
                             ))
 
@@ -331,13 +335,25 @@ class IngestPipeline:
             display = p.name
         doc.metadata["_aum_display_path"] = display
 
-    def _extract_one(self, file_path: Path, job_id: str) -> tuple[list[Document], float]:
+    def _extract_one(
+        self,
+        file_path: Path,
+        job_id: str,
+        in_flight_lock: Lock,
+        in_flight_count: list[int],
+    ) -> tuple[list[Document], float]:
         structlog.contextvars.bind_contextvars(job_id=job_id)
-        start = time.monotonic()
-        docs = self._extractor.extract(file_path)
-        elapsed = time.monotonic() - start
-        INGEST_DURATION.labels(stage="extraction").observe(elapsed)
-        return docs, elapsed
+        with in_flight_lock:
+            in_flight_count[0] += 1
+        try:
+            start = time.monotonic()
+            docs = self._extractor.extract(file_path)
+            elapsed = time.monotonic() - start
+            INGEST_DURATION.labels(stage="extraction").observe(elapsed)
+            return docs, elapsed
+        finally:
+            with in_flight_lock:
+                in_flight_count[0] -= 1
 
     def _flush_batch(self, job_id: str, batch: list[tuple[str, Document]]) -> tuple[int, int, float, float]:
         """Embed (if configured) and index a batch. Returns (processed, failed, embed_time, index_time)."""
