@@ -4,7 +4,13 @@ import structlog
 from elasticsearch import Elasticsearch, NotFoundError
 
 from aum.models import Document
-from aum.search.base import SearchResult
+from aum.search.base import (
+    DATE_FACETS,
+    FACET_FIELDS,
+    SearchResult,
+    alias_mimetype,
+    extract_email,
+)
 
 log = structlog.get_logger()
 
@@ -35,7 +41,7 @@ _META_PROPERTIES: dict[str, dict] = {
 # For each canonical field, the Tika metadata keys to try (first match wins).
 _META_SOURCE_KEYS: dict[str, list[str]] = {
     "content_type": ["Content-Type"],
-    "creator": ["dc:creator", "Author", "meta:author", "creator"],
+    "creator": ["dc:creator", "xmp:dc:creator", "Author", "meta:author", "creator"],
     "created": ["dcterms:created", "Creation-Date", "meta:creation-date", "created", "date"],
     "modified": ["dcterms:modified", "Last-Modified", "meta:save-date", "modified"],
 }
@@ -53,37 +59,62 @@ def _extract_indexed_meta(raw_metadata: dict[str, str | list[str]]) -> dict[str,
                 result[field_name] = raw_metadata[key]
                 break
 
-    # Merge all email header values into a single list.
-    addresses: list[str] = []
+    # Strip MIME type parameters (e.g. "; charset=UTF-8") so aggregations
+    # group on the base type only.
+    if "content_type" in result and isinstance(result["content_type"], str):
+        result["content_type"] = result["content_type"].split(";")[0].strip()
+
+    # Merge all email header values into a single list, extracting just the
+    # email address (no display name) and normalising to lowercase.
+    # Values that don't contain a valid address (e.g. "undisclosed-recipients:;")
+    # are silently dropped.
+    seen: set[str] = set()
+    unique: list[str] = []
     for key in _EMAIL_HEADER_KEYS:
         val = raw_metadata.get(key)
-        if val is not None:
-            if isinstance(val, list):
-                addresses.extend(val)
-            else:
-                addresses.append(val)
-    if addresses:
-        result["email_addresses"] = addresses
+        if val is None:
+            continue
+        raw_vals = val if isinstance(val, list) else [val]
+        for rv in raw_vals:
+            addr = extract_email(rv)
+            if addr is not None and addr not in seen:
+                seen.add(addr)
+                unique.append(addr)
+    if unique:
+        result["email_addresses"] = unique
 
     return result
 
 
-# Facets are driven from the indexed ``meta`` sub-fields.
-_FACET_FIELDS: dict[str, str] = {
-    "Content Type": "meta.content_type",
-    "Creator": "meta.creator",
-}
-_FACET_AGGS = {
-    label: {"terms": {"field": es_field, "size": 100}}
-    for label, es_field in _FACET_FIELDS.items()
-}
+# ---------------------------------------------------------------------------
+# Elasticsearch aggregations built from the shared facet definitions.
+# ---------------------------------------------------------------------------
+
+_FACET_AGGS: dict[str, dict] = {}
+for _label, _es_field in FACET_FIELDS.items():
+    if _label in DATE_FACETS:
+        _FACET_AGGS[_label] = {
+            "date_histogram": {
+                "field": _es_field,
+                "calendar_interval": "year",
+                "format": "yyyy",
+                "min_doc_count": 1,
+            }
+        }
+    else:
+        _FACET_AGGS[_label] = {"terms": {"field": _es_field, "size": 100}}
 
 
 def _parse_facets(resp: dict) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
-    for label in _FACET_FIELDS:
+    for label in FACET_FIELDS:
         buckets = resp.get("aggregations", {}).get(label, {}).get("buckets", [])
-        values = sorted(b["key"] for b in buckets if b.get("key"))
+        if label in DATE_FACETS:
+            values = [b["key_as_string"] for b in buckets if b.get("doc_count", 0) > 0]
+        elif label == "File Type":
+            values = sorted({alias_mimetype(b["key"]) for b in buckets if b.get("key")})
+        else:
+            values = sorted(b["key"] for b in buckets if b.get("key"))
         if values:
             result[label] = values
     return result
@@ -255,10 +286,16 @@ class ElasticsearchBackend:
             source = hit["_source"]
             metadata = dict(source.get("metadata", {}))
             meta = source.get("meta", {})
-            for label, es_field in _FACET_FIELDS.items():
+            for label, es_field in FACET_FIELDS.items():
                 meta_key = es_field.split(".", 1)[1]
-                if meta_key in meta:
-                    metadata[label] = meta[meta_key]
+                val = meta.get(meta_key)
+                if val is None:
+                    continue
+                if label == "File Type" and isinstance(val, str):
+                    val = alias_mimetype(val)
+                elif label in DATE_FACETS and isinstance(val, str) and len(val) >= 4:
+                    val = val[:4]
+                metadata[label] = val
             return SearchResult(
                 doc_id=hit["_id"],
                 source_path=source.get("source_path", ""),
@@ -315,10 +352,16 @@ class ElasticsearchBackend:
             # Inject the indexed meta fields under their facet-friendly label
             # names so client-side facet filtering can match on them.
             meta = source.get("meta", {})
-            for label, es_field in _FACET_FIELDS.items():
+            for label, es_field in FACET_FIELDS.items():
                 meta_key = es_field.split(".", 1)[1]
-                if meta_key in meta:
-                    metadata[label] = meta[meta_key]
+                val = meta.get(meta_key)
+                if val is None:
+                    continue
+                if label == "File Type" and isinstance(val, str):
+                    val = alias_mimetype(val)
+                elif label in DATE_FACETS and isinstance(val, str) and len(val) >= 4:
+                    val = val[:4]
+                metadata[label] = val
             highlight = hit.get("highlight", {}).get("content", [])
             snippet = highlight[0] if highlight else source.get("content", "")[:200]
             results.append(

@@ -96,11 +96,25 @@
 
   let facets = $derived(searchState.facets);
 
+  const DATE_FACET_KEYS = new Set(["Created"]);
+
   let filteredResults = $derived.by(() => {
     if (Object.keys(searchState.activeFacets).length === 0) return searchState.results;
     return searchState.results.filter((r) => {
-      for (const [key, values] of Object.entries(searchState.activeFacets)) {
-        if (values.length > 0 && !values.includes(r.metadata[key] ?? "")) return false;
+      for (const [key, filterValues] of Object.entries(searchState.activeFacets)) {
+        if (filterValues.length === 0) continue;
+        const meta = r.metadata[key];
+        if (DATE_FACET_KEYS.has(key)) {
+          // Date range: filterValues is [minYear, maxYear]
+          const year = Number(meta);
+          const lo = Number(filterValues[0]);
+          const hi = Number(filterValues[1] ?? filterValues[0]);
+          if (isNaN(year) || year < lo || year > hi) return false;
+        } else if (Array.isArray(meta)) {
+          if (!meta.some((v) => filterValues.includes(v))) return false;
+        } else {
+          if (!filterValues.includes(meta ?? "")) return false;
+        }
       }
       return true;
     });
@@ -173,7 +187,7 @@
     <div class="results-layout">
       {#if Object.keys(facets).length > 0}
         <aside>
-          <FacetPanel {facets} bind:activeFacets={searchState.activeFacets} />
+          <FacetPanel {facets} bind:activeFacets={searchState.activeFacets} dateFacets={["Created"]} />
         </aside>
       {/if}
       <div class="results-main">
@@ -299,9 +313,14 @@
   }
 
   aside {
-    flex: 0 0 200px;
-    max-width: 200px;
+    flex: 0 0 220px;
+    max-width: 220px;
     min-width: 0;
+    position: sticky;
+    top: 3rem;
+    align-self: flex-start;
+    max-height: calc(100vh - 3.5rem);
+    overflow-y: auto;
   }
 
   .results-main {

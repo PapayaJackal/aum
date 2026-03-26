@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import time
 from pathlib import Path
 
@@ -16,12 +15,24 @@ from aum.models import Document
 
 log = structlog.get_logger()
 
-_EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
-
-
 def _condense_whitespace(text: str) -> str:
-    """Collapse runs of 3+ consecutive newlines down to 2."""
-    return _EXCESS_BLANK_LINES_RE.sub("\n\n", text)
+    """Collapse consecutive blank lines down to at most one.
+
+    A line is considered blank if it contains only whitespace (including
+    non-breaking spaces and other Unicode whitespace that Tika may emit).
+    """
+    lines = text.split("\n")
+    result: list[str] = []
+    blank_run = 0
+    for line in lines:
+        if line.strip() == "":
+            blank_run += 1
+            if blank_run <= 1:
+                result.append("")
+        else:
+            blank_run = 0
+            result.append(line)
+    return "\n".join(result)
 
 
 def _normalize_metadata(raw: dict) -> dict[str, str | list[str]]:

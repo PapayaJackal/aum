@@ -75,7 +75,7 @@ export interface SearchResult {
   display_path: string;
   score: number;
   snippet: string;
-  metadata: Record<string, string>;
+  metadata: Record<string, string | string[]>;
 }
 
 export interface SearchResponse {
@@ -107,7 +107,7 @@ export interface DocumentDetail {
   doc_id: string;
   display_path: string;
   content: string;
-  metadata: Record<string, string>;
+  metadata: Record<string, string | string[]>;
   attachments: AttachmentRef[];
   extracted_from: AttachmentRef | null;
 }

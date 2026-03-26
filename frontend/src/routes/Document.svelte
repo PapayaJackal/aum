@@ -6,6 +6,150 @@
   let doc = $state<DocumentDetail | null>(null);
   let loading = $state(true);
   let error = $state("");
+  let showAllMeta = $state(false);
+
+  // Human-readable aliases for common Tika metadata keys.
+  const KEY_ALIASES: Record<string, string> = {
+    "Content-Type": "Content Type",
+    "dc:creator": "Author",
+    "meta:author": "Author",
+    "Author": "Author",
+    "creator": "Creator",
+    "dcterms:created": "Created",
+    "Creation-Date": "Created",
+    "meta:creation-date": "Created",
+    "dcterms:modified": "Modified",
+    "Last-Modified": "Modified",
+    "meta:save-date": "Modified",
+    "Content-Length": "File Size",
+    "dc:title": "Title",
+    "dc:subject": "Subject",
+    "dc:description": "Description",
+    "Message-From": "From",
+    "Message-To": "To",
+    "Message-CC": "CC",
+    "Message-BCC": "BCC",
+    "subject": "Subject",
+    "pdf:PDFVersion": "PDF Version",
+    "xmpTPg:NPages": "Page Count",
+    "meta:page-count": "Page Count",
+    "meta:word-count": "Word Count",
+    "meta:character-count": "Character Count",
+    "Application-Name": "Application",
+    "producer": "Producer",
+    "pdf:docinfo:producer": "Producer",
+  };
+
+  // Keys whose display name should appear in the priority section (default).
+  const DEFAULT_PRIORITY = new Set([
+    "Title", "Creator", "From", "To", "CC",
+    "Created", "Modified", "Content Type", "File Type",
+    "File Size", "Page Count", "Word Count", "Subject",
+  ]);
+
+  // For email documents, show only these fields in priority, in this order.
+  const EMAIL_PRIORITY_ORDER = ["From", "To", "CC", "BCC", "Subject", "File Size"];
+  const EMAIL_PRIORITY = new Set(EMAIL_PRIORITY_ORDER);
+
+  // Noisy internal keys to hide by default.
+  const HIDDEN_PREFIXES = ["X-TIKA:", "X-Parsed-By", "access_permission:", "pdf:has", "pdf:encrypted", "pdf:unmapped", "pdf:charsPerPage", "pdf:containsDamagedFont", "pdf:totalUnmapped", "resourceName", "pdf:docinfo:custom:"];
+  // Keys injected by the backend for faceting that shouldn't appear as metadata rows.
+  const HIDDEN_EXACT = new Set(["Email Addresses"]);
+
+  // Keys whose values are email addresses and should link to the Email Addresses facet.
+  const EMAIL_KEYS = new Set(["Message-From", "Message-To", "Message-CC", "Message-BCC"]);
+
+  // Facet labels (injected by backend) that can be clicked to filter search results.
+  const FACET_LABELS = new Set(["File Type", "Creator", "Created"]);
+
+  function isHidden(key: string): boolean {
+    if (key.startsWith("_aum_")) return true;
+    if (HIDDEN_EXACT.has(key)) return true;
+    return HIDDEN_PREFIXES.some((p) => key.startsWith(p));
+  }
+
+  function displayKey(key: string): string {
+    return KEY_ALIASES[key] ?? key;
+  }
+
+  function displayValue(value: string | string[]): string {
+    return Array.isArray(value) ? value.join(", ") : value;
+  }
+
+  /** Extract the email address from an RFC 2822 string like "Name <email>" and lowercase it. */
+  function extractEmail(raw: string): string {
+    const match = raw.match(/<([^>]+)>/);
+    const addr = match ? match[1] : raw;
+    return addr.trim().toLowerCase();
+  }
+
+  function humanFileSize(bytes: string | number): string {
+    const n = typeof bytes === "string" ? parseInt(bytes, 10) : bytes;
+    if (isNaN(n)) return String(bytes);
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+
+  // Build search URL with facet active.
+  function facetSearchHref(label: string, value: string): string {
+    const params = new URLSearchParams(qs.startsWith("?") ? qs.slice(1) : qs);
+    const facets: Record<string, string[]> = {};
+    const existing = params.get("facets");
+    if (existing) {
+      try { Object.assign(facets, JSON.parse(existing)); } catch {}
+    }
+    facets[label] = [value];
+    params.set("facets", JSON.stringify(facets));
+    if (!params.get("q")) params.set("q", "*");
+    return `#/?${params.toString()}`;
+  }
+
+  type MetaEntry = {
+    key: string;
+    display: string;
+    value: string | string[];
+    facetLabel?: string;
+    isEmail?: boolean;
+    isFileSize?: boolean;
+  };
+
+  let isEmailDoc = $derived(
+    doc?.metadata["File Type"] === "Email (EML)"
+      || doc?.metadata["Content-Type"]?.toString().startsWith("message/rfc822")
+  );
+
+  let metaEntries = $derived.by(() => {
+    if (!doc) return { priority: [] as MetaEntry[], extra: [] as MetaEntry[] };
+    const priorityNames = isEmailDoc ? EMAIL_PRIORITY : DEFAULT_PRIORITY;
+    const priority: MetaEntry[] = [];
+    const extra: MetaEntry[] = [];
+    const seen = new Set<string>();
+
+    for (const [key, value] of Object.entries(doc.metadata)) {
+      if (isHidden(key)) continue;
+      const display = displayKey(key);
+      if (seen.has(display)) continue;
+      seen.add(display);
+      const facetLabel = FACET_LABELS.has(key) ? key : undefined;
+      const isEmail = EMAIL_KEYS.has(key);
+      const isFileSize = display === "File Size";
+      const entry: MetaEntry = { key, display, value, facetLabel, isEmail, isFileSize };
+      if (priorityNames.has(display)) {
+        priority.push(entry);
+      } else {
+        extra.push(entry);
+      }
+    }
+
+    // For emails, sort priority entries to match the defined order.
+    if (isEmailDoc) {
+      priority.sort((a, b) => EMAIL_PRIORITY_ORDER.indexOf(a.display) - EMAIL_PRIORITY_ORDER.indexOf(b.display));
+    }
+
+    return { priority, extra };
+  });
 
   function docHref(id: string): string {
     return `#/document/${encodeURIComponent(index)}/${id}${qs}`;
@@ -42,18 +186,61 @@
     <button class="download-btn" onclick={() => downloadDocument(docId, index)}>Download original</button>
   </div>
 
+  {#snippet metaValue(entry: MetaEntry)}
+    {#if entry.isFileSize}
+      {humanFileSize(entry.value as string)}
+    {:else if entry.isEmail}
+      {#if Array.isArray(entry.value)}
+        {#each entry.value as v, i}
+          {#if i > 0}, {/if}
+          <a class="facet-link" href={facetSearchHref("Email Addresses", extractEmail(v))}>{v}</a>
+        {/each}
+      {:else}
+        <a class="facet-link" href={facetSearchHref("Email Addresses", extractEmail(entry.value))}>{entry.value}</a>
+      {/if}
+    {:else if entry.facetLabel && !Array.isArray(entry.value)}
+      <a class="facet-link" href={facetSearchHref(entry.facetLabel, entry.value)}>{entry.value}</a>
+    {:else if entry.facetLabel && Array.isArray(entry.value)}
+      {#each entry.value as v, i}
+        {#if i > 0}, {/if}
+        <a class="facet-link" href={facetSearchHref(entry.facetLabel, v)}>{v}</a>
+      {/each}
+    {:else}
+      {displayValue(entry.value)}
+    {/if}
+  {/snippet}
+
   <div class="meta-table">
     <h3>Metadata</h3>
-    <table>
-      <tbody>
-        {#each Object.entries(doc.metadata) as [key, value]}
-          <tr>
-            <td class="meta-key">{key}</td>
-            <td>{value}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+    <div class="meta-scroll">
+      <table>
+        <tbody>
+          {#each metaEntries.priority as entry}
+            <tr>
+              <td class="meta-key">{entry.display}</td>
+              <td>{@render metaValue(entry)}</td>
+            </tr>
+          {/each}
+          {#if metaEntries.extra.length > 0}
+            <tr>
+              <td colspan="2">
+                <button class="toggle-extra" onclick={() => (showAllMeta = !showAllMeta)}>
+                  {showAllMeta ? "Hide" : "Show"} {metaEntries.extra.length} more fields
+                </button>
+              </td>
+            </tr>
+            {#if showAllMeta}
+              {#each metaEntries.extra as entry}
+                <tr>
+                  <td class="meta-key">{entry.display}</td>
+                  <td>{@render metaValue(entry)}</td>
+                </tr>
+              {/each}
+            {/if}
+          {/if}
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <div class="content-section">
@@ -190,6 +377,11 @@
     color: #666;
   }
 
+  .meta-scroll {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
   table {
     width: 100%;
     border-collapse: collapse;
@@ -207,6 +399,28 @@
     white-space: nowrap;
     width: 200px;
     color: #555;
+  }
+
+  .facet-link {
+    color: #4a7cf7;
+    text-decoration: none;
+  }
+
+  .facet-link:hover {
+    text-decoration: underline;
+  }
+
+  .toggle-extra {
+    background: none;
+    border: none;
+    color: #66a;
+    font-size: 0.85rem;
+    cursor: pointer;
+    padding: 0.35rem 0;
+  }
+
+  .toggle-extra:hover {
+    text-decoration: underline;
   }
 
   .content-section {

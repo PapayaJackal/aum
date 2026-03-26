@@ -7,7 +7,7 @@
   let parts = $derived(result.display_path.split("/"));
   let filename = $derived(parts[parts.length - 1] || result.display_path);
   let dirPart = $derived(parts.length > 1 ? parts.slice(0, -1).join("/") + "/" : "");
-  let contentType = $derived(result.metadata["Content Type"] || result.metadata["Content-Type"] || "");
+  let fileType = $derived(result.metadata["File Type"] || "");
   let docHref = $derived.by(() => {
     const qs = getSearchQs();
     return `#/document/${encodeURIComponent(index)}/${result.doc_id}${qs ? "?" + qs : ""}`;
@@ -24,8 +24,8 @@
 
   <div class="card-footer">
     <span class="path" title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span>
-    {#if contentType}
-      <span class="badge">{contentType}</span>
+    {#if fileType}
+      <span class="badge">{fileType}</span>
     {/if}
   </div>
 </a>
