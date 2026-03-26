@@ -1,6 +1,29 @@
-import { getToken, clearAuth } from "./auth";
+import { getToken, getRefreshToken, setAuth, clearAuth } from "./auth";
 
 const BASE = "/api";
+
+let _refreshing: Promise<boolean> | null = null;
+
+/** Try to refresh the access token using the stored refresh token.
+ *  Returns true on success.  Concurrent callers share the same request. */
+async function _tryRefresh(): Promise<boolean> {
+  const rt = getRefreshToken();
+  if (!rt) return false;
+
+  try {
+    const res = await fetch(`${BASE}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: rt }),
+    });
+    if (!res.ok) return false;
+    const data: { access_token: string; refresh_token: string } = await res.json();
+    setAuth(data.access_token, data.refresh_token);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function request<T>(
   path: string,
@@ -15,12 +38,22 @@ async function request<T>(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${BASE}${path}`, { ...options, headers });
+  let res = await fetch(`${BASE}${path}`, { ...options, headers });
 
   if (res.status === 401) {
-    clearAuth();
-    window.location.hash = "#/login";
-    throw new Error("Unauthorized");
+    // Attempt a transparent token refresh before giving up
+    if (!_refreshing) _refreshing = _tryRefresh().finally(() => (_refreshing = null));
+    const ok = await _refreshing;
+    if (ok) {
+      // Retry the original request with the fresh token
+      headers["Authorization"] = `Bearer ${getToken()}`;
+      res = await fetch(`${BASE}${path}`, { ...options, headers });
+    }
+    if (res.status === 401) {
+      clearAuth();
+      window.location.hash = "#/login";
+      throw new Error("Unauthorized");
+    }
   }
 
   if (!res.ok) {
