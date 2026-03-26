@@ -527,7 +527,7 @@ class ElasticsearchBackend:
                 try:
                     self._client.clear_scroll(scroll_id=scroll_id)
                 except Exception:
-                    pass
+                    log.debug("failed to clear scroll", scroll_id=scroll_id, exc_info=True)
 
     def scroll_document_ids(self, doc_ids: list[str], batch_size: int = 64):
         """Yield batches of (doc_id, content) for specific document IDs.
