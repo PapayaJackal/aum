@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { isAuthenticated } from "./lib/auth";
+  import { isAuthenticated, clearAuth } from "./lib/auth";
   import Login from "./routes/Login.svelte";
   import Search from "./routes/Search.svelte";
 
@@ -16,7 +16,7 @@
   });
 
   function logout() {
-    import("./lib/auth").then((m) => m.clearAuth());
+    clearAuth();
     window.location.hash = "#/login";
   }
 </script>
