@@ -73,6 +73,7 @@ class AumConfig(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     metrics_port: int = 9090
+    enable_docs: bool = False
 
     # Auth
     jwt_secret: str = "change-me-in-production"

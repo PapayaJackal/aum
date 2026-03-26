@@ -20,8 +20,8 @@ def create_app(config: AumConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="aum",
         version=__version__,
-        docs_url="/api/docs",
-        openapi_url="/api/openapi.json",
+        docs_url="/api/docs" if cfg.enable_docs else None,
+        openapi_url="/api/openapi.json" if cfg.enable_docs else None,
     )
     app.state.config = cfg
 
