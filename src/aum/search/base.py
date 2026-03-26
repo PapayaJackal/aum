@@ -164,6 +164,7 @@ class SearchResult:
     snippet: str
     metadata: dict[str, str | list[str]] = field(default_factory=dict)
     extracted_from: str = ""
+    display_path_highlighted: str = ""
 
 
 class SearchBackend(Protocol):

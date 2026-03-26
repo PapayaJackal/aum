@@ -32,6 +32,7 @@ def _clean_metadata(metadata: dict) -> dict:
 class SearchResultResponse(BaseModel):
     doc_id: str
     display_path: str
+    display_path_highlighted: str
     score: float
     snippet: str
     metadata: dict[str, str | list[str]]
@@ -143,6 +144,7 @@ async def search(
             SearchResultResponse(
                 doc_id=r.doc_id,
                 display_path=r.display_path,
+                display_path_highlighted=r.display_path_highlighted,
                 score=r.score,
                 snippet=r.snippet,
                 metadata=_clean_metadata(r.metadata),

@@ -78,6 +78,7 @@ export function listIndices(): Promise<{ indices: IndexInfo[] }> {
 export interface SearchResult {
   doc_id: string;
   display_path: string;
+  display_path_highlighted: string;
   score: number;
   snippet: string;
   metadata: Record<string, string | string[]>;

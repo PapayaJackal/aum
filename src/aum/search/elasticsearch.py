@@ -167,7 +167,11 @@ class ElasticsearchBackend:
         mappings: dict = {
             "properties": {
                 "source_path": {"type": "keyword"},
-                "display_path": {"type": "keyword"},
+                "display_path": {
+                    "type": "text",
+                    "analyzer": "standard",
+                    "fields": {"keyword": {"type": "keyword"}},
+                },
                 "extracted_from": {"type": "keyword"},
                 "content": {"type": "text", "analyzer": "standard"},
                 "metadata": {"type": "object", "enabled": False},
@@ -288,12 +292,18 @@ class ElasticsearchBackend:
         return failures
 
     def search_text(self, query: str, *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
-        match_clause: dict = {"match": {"content": {"query": query, "operator": "and"}}}
+        should_clauses: list[dict] = [
+            {"match": {"content": {"query": query, "operator": "and", "boost": 2}}},
+            {"match": {"display_path": {"query": query, "operator": "and"}}},
+        ]
         filter_clauses = _build_filter_clauses(filters) if filters else []
-        if filter_clauses:
-            query_body: dict = {"bool": {"must": [match_clause], "filter": filter_clauses}}
-        else:
-            query_body = match_clause
+        query_body: dict = {
+            "bool": {
+                "should": should_clauses,
+                "minimum_should_match": 1,
+                **({"filter": filter_clauses} if filter_clauses else {}),
+            }
+        }
         body: dict = {
             "query": query_body,
             "size": limit,
@@ -302,7 +312,10 @@ class ElasticsearchBackend:
                 "pre_tags": ["<mark>"],
                 "post_tags": ["</mark>"],
                 "max_analyzed_offset": self._max_highlight_offset,
-                "fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}},
+                "fields": {
+                    "content": {"fragment_size": 200, "number_of_fragments": 1},
+                    "display_path": {"number_of_fragments": 0},
+                },
             },
         }
         if include_facets:
@@ -337,12 +350,18 @@ class ElasticsearchBackend:
     def search_hybrid(
         self, query: str, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
-        match_clause: dict = {"match": {"content": {"query": query, "operator": "and"}}}
+        should_clauses: list[dict] = [
+            {"match": {"content": {"query": query, "operator": "and", "boost": 2}}},
+            {"match": {"display_path": {"query": query, "operator": "and"}}},
+        ]
         filter_clauses = _build_filter_clauses(filters) if filters else []
-        if filter_clauses:
-            text_query: dict = {"bool": {"must": [match_clause], "filter": filter_clauses}}
-        else:
-            text_query = match_clause
+        text_query: dict = {
+            "bool": {
+                "should": should_clauses,
+                "minimum_should_match": 1,
+                **({"filter": filter_clauses} if filter_clauses else {}),
+            }
+        }
 
         knn_body: dict = {
             "field": "chunks.embedding",
@@ -379,7 +398,10 @@ class ElasticsearchBackend:
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
             "max_analyzed_offset": self._max_highlight_offset,
-            "fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}},
+            "fields": {
+                "content": {"fragment_size": 200, "number_of_fragments": 1},
+                "display_path": {"number_of_fragments": 0},
+            },
         }
         if include_facets:
             body["aggs"] = _FACET_AGGS
@@ -446,7 +468,7 @@ class ElasticsearchBackend:
     def find_by_display_path(self, display_path: str) -> SearchResult | None:
         """Find a single document by exact display_path."""
         body: dict = {
-            "query": {"term": {"display_path": display_path}},
+            "query": {"term": {"display_path.keyword": display_path}},
             "size": 1,
         }
         try:
@@ -558,8 +580,11 @@ class ElasticsearchBackend:
                 elif label in DATE_FACETS and isinstance(val, str) and len(val) >= 4:
                     val = val[:4]
                 metadata[label] = val
-            highlight = hit.get("highlight", {}).get("content", [])
-            snippet = highlight[0] if highlight else source.get("content", "")[:200]
+            hit_highlight = hit.get("highlight", {})
+            content_hl = hit_highlight.get("content", [])
+            snippet = content_hl[0] if content_hl else source.get("content", "")[:200]
+            path_hl = hit_highlight.get("display_path", [])
+            display_path_highlighted = path_hl[0] if path_hl else ""
             results.append(
                 SearchResult(
                     doc_id=hit["_id"],
@@ -569,6 +594,7 @@ class ElasticsearchBackend:
                     snippet=snippet,
                     metadata=metadata,
                     extracted_from=source.get("extracted_from", ""),
+                    display_path_highlighted=display_path_highlighted,
                 )
             )
         return results, total

@@ -7,6 +7,20 @@
   let parts = $derived(result.display_path.split("/"));
   let filename = $derived(parts[parts.length - 1] || result.display_path);
   let dirPart = $derived(parts.length > 1 ? parts.slice(0, -1).join("/") + "/" : "");
+
+  let hasPathHighlight = $derived(!!result.display_path_highlighted);
+  // Protect </mark> closing tags from being split on their "/"
+  let hlParts = $derived(
+    result.display_path_highlighted
+      ? result.display_path_highlighted
+          .replaceAll("</mark>", "\x00mark\x01")
+          .split("/")
+          .map((s) => s.replaceAll("\x00mark\x01", "</mark>"))
+      : [],
+  );
+  let hlFilename = $derived(hlParts.length > 0 ? hlParts[hlParts.length - 1] : "");
+  let hlDirPart = $derived(hlParts.length > 1 ? hlParts.slice(0, -1).join("/") + "/" : "");
+
   let fileType = $derived(result.metadata["File Type"] || "");
   let isSelected = $derived(searchState.selectedDocId === result.doc_id);
 
@@ -18,14 +32,22 @@
 
 <button type="button" class="card" class:selected={isSelected} onclick={handleClick}>
   <div class="card-header">
-    <span class="filename">{filename}</span>
+    {#if hasPathHighlight}
+      <span class="filename">{@html hlFilename}</span>
+    {:else}
+      <span class="filename">{filename}</span>
+    {/if}
     <span class="score">{result.score.toFixed(3)}</span>
   </div>
 
   <p class="snippet">{@html result.snippet}</p>
 
   <div class="card-footer">
-    <span class="path" title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span>
+    {#if hasPathHighlight}
+      <span class="path" title={index + "/" + result.display_path}>{@html index + "/" + hlDirPart + hlFilename}</span>
+    {:else}
+      <span class="path" title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span>
+    {/if}
     {#if fileType}
       <span class="badge">{fileType}</span>
     {/if}
@@ -83,7 +105,9 @@
     margin: 0 0 0.5rem;
   }
 
-  .snippet :global(mark) {
+  .snippet :global(mark),
+  .filename :global(mark),
+  .path :global(mark) {
     background: #fff3b0;
     padding: 0.1em;
     border-radius: 2px;
