@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getDocument, downloadUrl, type DocumentDetail } from "../lib/api";
+  import { getDocument, downloadDocument, type DocumentDetail } from "../lib/api";
 
   let { docId, index = "", qs = "" }: { docId: string; index: string; qs: string } = $props();
 
@@ -35,7 +35,7 @@
         <p class="doc-path">{index}/{doc.display_path}</p>
       {/if}
     </div>
-    <a class="download-btn" href={downloadUrl(docId, index)} download>Download original</a>
+    <button class="download-btn" onclick={() => downloadDocument(docId, index)}>Download original</button>
   </div>
 
   <div class="meta-table">
@@ -97,8 +97,10 @@
   .download-btn {
     flex-shrink: 0;
     font-size: 0.85rem;
+    font-family: inherit;
     color: #4a7cf7;
-    text-decoration: none;
+    background: transparent;
+    cursor: pointer;
     border: 1px solid #4a7cf7;
     padding: 0.25rem 0.65rem;
     border-radius: 4px;

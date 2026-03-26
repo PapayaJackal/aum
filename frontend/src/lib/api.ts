@@ -117,9 +117,49 @@ export function getDocument(docId: string, index: string = ""): Promise<Document
   return request(`/documents/${encodeURIComponent(docId)}${params}`);
 }
 
-export function downloadUrl(docId: string, index: string = ""): string {
+export async function downloadDocument(docId: string, index: string = ""): Promise<void> {
   const params = index ? `?index=${encodeURIComponent(index)}` : "";
-  return `/api/documents/${encodeURIComponent(docId)}/download${params}`;
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${BASE}/documents/${encodeURIComponent(docId)}/download${params}`, { headers });
+
+  if (res.status === 401) {
+    clearAuth();
+    window.location.hash = "#/login";
+    throw new Error("Unauthorized");
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(body.detail || res.statusText);
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+
+  // Prefer RFC 5987 filename* (percent-encoded UTF-8), fall back to plain filename
+  let filename = "download";
+  const starMatch = disposition.match(/filename\*=(?:UTF-8|utf-8)''(.+?)(?:;|$)/);
+  if (starMatch) {
+    filename = decodeURIComponent(starMatch[1]);
+  } else {
+    const plainMatch = disposition.match(/filename="(.+?)"/);
+    if (plainMatch) {
+      filename = plainMatch[1];
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // Jobs
