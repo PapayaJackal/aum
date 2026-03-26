@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS job_errors (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id TEXT NOT NULL REFERENCES jobs(job_id),
@@ -34,6 +36,8 @@ CREATE TABLE IF NOT EXISTS job_errors (
     message TEXT NOT NULL,
     timestamp TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_job_errors_job_id ON job_errors(job_id);
 
 CREATE TABLE IF NOT EXISTS index_embeddings (
     index_name TEXT PRIMARY KEY,
@@ -53,6 +57,8 @@ class JobTracker:
         self._lock = Lock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
         self._migrate()
         self._conn.commit()
@@ -135,11 +141,11 @@ class JobTracker:
             self._conn.commit()
         log.info("completed ingest job", job_id=job_id, status=status.value)
 
-    def get_job(self, job_id: str) -> IngestJob | None:
+    def get_job(self, job_id: str, include_errors: bool = False) -> IngestJob | None:
         row = self._conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
         if row is None:
             return None
-        return self._row_to_job(row)
+        return self._row_to_job(row, include_errors=include_errors)
 
     def list_jobs(self, status: JobStatus | None = None) -> list[IngestJob]:
         if status:
@@ -164,8 +170,8 @@ class JobTracker:
             for row in rows
         ]
 
-    def _row_to_job(self, row: sqlite3.Row) -> IngestJob:
-        errors = self.get_errors(row["job_id"])
+    def _row_to_job(self, row: sqlite3.Row, include_errors: bool = False) -> IngestJob:
+        errors = self.get_errors(row["job_id"]) if include_errors else []
         keys = row.keys()
         return IngestJob(
             job_id=row["job_id"],

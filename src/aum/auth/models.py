@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS oauth_accounts (
     UNIQUE(provider, provider_user_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_oauth_accounts_user_id ON oauth_accounts(user_id);
+
 CREATE TABLE IF NOT EXISTS user_index_permissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

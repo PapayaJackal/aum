@@ -708,7 +708,7 @@ def show_job(job_id: str, errors: bool) -> None:
     from aum.api.deps import make_tracker
 
     tracker = make_tracker(config)
-    job = tracker.get_job(job_id)
+    job = tracker.get_job(job_id, include_errors=errors)
 
     if job is None:
         click.echo(f"Job not found: {job_id}", err=True)

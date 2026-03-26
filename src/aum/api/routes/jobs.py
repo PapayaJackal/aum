@@ -66,7 +66,7 @@ async def get_job(
     user: Annotated[User, Depends(require_admin)],
 ) -> JobDetailResponse:
     tracker = get_tracker()
-    job = tracker.get_job(job_id)
+    job = tracker.get_job(job_id, include_errors=True)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
