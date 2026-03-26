@@ -24,78 +24,24 @@
 <svelte:window onhashchange={onHashChange} />
 
 {#if hash.startsWith("#/login")}
-  <header>
-    <nav>
-      <a href="#/" class="brand">ॐ</a>
+  <header class="bg-(--color-brand) text-white px-4 py-2 flex items-center gap-3 sticky top-0 z-50">
+    <nav class="flex items-center gap-4 w-full">
+      <a href="#/" class="font-bold text-xl leading-none text-white no-underline shrink-0">&#x0950;</a>
     </nav>
   </header>
-  <main><Login /></main>
+  <main class="px-4"><Login /></main>
 
 {:else}
   <Search>
     {#snippet header(form)}
-      <header>
-        <a href="#/" class="brand">ॐ</a>
+      <header class="bg-(--color-brand) text-white px-4 py-2 flex items-center gap-3 sticky top-0 z-50">
+        <a href="#/" class="font-bold text-xl leading-none text-white no-underline shrink-0">&#x0950;</a>
         {@render form()}
-        <button class="logout-btn" onclick={logout}>Logout</button>
+        <button
+          class="bg-transparent border border-gray-500 text-gray-300 px-3 py-1 rounded cursor-pointer shrink-0 text-sm hover:border-white hover:text-white"
+          onclick={logout}
+        >Logout</button>
       </header>
     {/snippet}
   </Search>
 {/if}
-
-<style>
-  :global(body) {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #f5f5f5;
-    color: #333;
-  }
-
-  header {
-    background: #1a1a2e;
-    color: white;
-    padding: 0.5rem 1rem;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-  }
-
-  nav {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    width: 100%;
-  }
-
-  .brand {
-    font-weight: 700;
-    font-size: 1.4rem;
-    line-height: 1;
-    color: white;
-    text-decoration: none;
-    flex-shrink: 0;
-  }
-
-  .logout-btn {
-    background: none;
-    border: 1px solid #666;
-    color: #ccc;
-    padding: 0.25rem 0.75rem;
-    border-radius: 4px;
-    cursor: pointer;
-    flex-shrink: 0;
-    font-size: 0.85rem;
-  }
-
-  .logout-btn:hover {
-    border-color: white;
-    color: white;
-  }
-
-  main {
-    padding: 0 1rem;
-  }
-</style>

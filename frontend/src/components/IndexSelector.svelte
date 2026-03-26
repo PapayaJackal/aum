@@ -53,132 +53,39 @@
 
 <svelte:window onclick={handleClickOutside} />
 
-<div class="index-selector" bind:this={dropdownEl}>
-  <button type="button" class="selector-trigger" onclick={() => (open = !open)}>
-    <span class="selector-label">{label}</span>
-    <span class="selector-arrow">{open ? "\u25B4" : "\u25BE"}</span>
+<div class="relative shrink-0" bind:this={dropdownEl}>
+  <button type="button"
+    class="flex items-center gap-1 px-2 py-[0.45rem] border-none rounded bg-white/90 text-sm cursor-pointer whitespace-nowrap text-gray-800 hover:bg-white"
+    onclick={() => (open = !open)}
+  >
+    <span>{label}</span>
+    <span class="text-[0.7rem] text-gray-500">{open ? "\u25B4" : "\u25BE"}</span>
   </button>
 
   {#if open}
-    <div class="selector-dropdown">
+    <div class="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-md shadow-lg z-50 min-w-[180px] max-h-[300px] overflow-y-auto py-1">
       {#if indices.length > 1}
-        <button type="button" class="select-all-btn" onclick={toggleAll}>
+        <button type="button"
+          class="block w-full text-left px-3 py-1.5 border-none bg-transparent text-sm text-(--color-accent) cursor-pointer border-b border-b-gray-200 mb-0.5 hover:bg-blue-50"
+          onclick={toggleAll}
+        >
           {allSelected ? "Deselect all" : "Select all"}
         </button>
       {/if}
       {#each indices as idx}
-        <label class="selector-item">
+        <label class="flex items-center gap-1.5 px-3 py-1.5 cursor-pointer text-sm text-gray-800 hover:bg-gray-100">
           <input
             type="checkbox"
             checked={selectedIndices.includes(idx.name)}
             onchange={() => toggle(idx.name)}
+            class="m-0 cursor-pointer"
           />
-          <span class="item-name">{idx.name}</span>
+          <span class="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{idx.name}</span>
           {#if idx.has_embeddings}
-            <span class="embed-badge" title="Has embeddings">hybrid</span>
+            <span class="text-[0.7rem] bg-green-50 text-green-700 px-1.5 py-0.5 rounded shrink-0" title="Has embeddings">hybrid</span>
           {/if}
         </label>
       {/each}
     </div>
   {/if}
 </div>
-
-<style>
-  .index-selector {
-    position: relative;
-    flex-shrink: 0;
-  }
-
-  .selector-trigger {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.45rem 0.5rem;
-    border: none;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.9);
-    font-size: 0.85rem;
-    cursor: pointer;
-    white-space: nowrap;
-    color: #333;
-  }
-
-  .selector-trigger:hover {
-    background: rgba(255, 255, 255, 1);
-  }
-
-  .selector-arrow {
-    font-size: 0.7rem;
-    color: #666;
-  }
-
-  .selector-dropdown {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    margin-top: 4px;
-    background: white;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    z-index: 100;
-    min-width: 180px;
-    max-height: 300px;
-    overflow-y: auto;
-    padding: 0.25rem 0;
-  }
-
-  .select-all-btn {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 0.4rem 0.75rem;
-    border: none;
-    background: none;
-    font-size: 0.82rem;
-    color: #4a7cf7;
-    cursor: pointer;
-    border-bottom: 1px solid #eee;
-    margin-bottom: 0.15rem;
-  }
-
-  .select-all-btn:hover {
-    background: #f0f4ff;
-  }
-
-  .selector-item {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.4rem 0.75rem;
-    cursor: pointer;
-    font-size: 0.85rem;
-    color: #333;
-  }
-
-  .selector-item:hover {
-    background: #f5f5f5;
-  }
-
-  .selector-item input[type="checkbox"] {
-    margin: 0;
-    cursor: pointer;
-  }
-
-  .item-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .embed-badge {
-    font-size: 0.7rem;
-    background: #e8f5e9;
-    color: #2e7d32;
-    padding: 0.1rem 0.35rem;
-    border-radius: 3px;
-    flex-shrink: 0;
-  }
-</style>

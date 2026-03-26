@@ -36,130 +36,34 @@
   }
 </script>
 
-<button type="button" class="card" class:selected={isSelected} onclick={handleClick}>
-  <div class="card-header">
+<button type="button"
+  class="block w-full text-left font-[inherit] bg-white p-4 rounded-md shadow-sm no-underline text-inherit border-2 cursor-pointer transition-[box-shadow,border-color] duration-150 hover:shadow-md {isSelected ? 'border-(--color-accent) bg-blue-50' : 'border-transparent'}"
+  onclick={handleClick}
+>
+  <div class="flex justify-between items-center mb-2">
     {#if hasPathHighlight}
-      <span class="filename">{@html hlFilename}</span>
+      <span class="font-semibold text-(--color-brand)">{@html hlFilename}</span>
     {:else}
-      <span class="filename">{filename}</span>
+      <span class="font-semibold text-(--color-brand)">{filename}</span>
     {/if}
-    <span class="score">{result.score.toFixed(3)}</span>
+    <span class="text-xs text-gray-400 font-mono">{result.score.toFixed(3)}</span>
   </div>
 
-  <p class="snippet">{@html snippet}</p>
+  <p class="text-sm leading-relaxed text-gray-500 m-0 mb-2">{@html snippet}</p>
 
-  <div class="card-footer">
+  <div class="flex justify-between items-center text-xs text-gray-400 gap-2">
     {#if hasPathHighlight}
-      <span class="path" title={index + "/" + result.display_path}>{@html safeIndex + "/" + hlDirPart + hlFilename}</span>
+      <span class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500" title={index + "/" + result.display_path}>{@html safeIndex + "/" + hlDirPart + hlFilename}</span>
     {:else}
-      <span class="path" title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span>
+      <span class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500" title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span>
     {/if}
-    <div class="badges">
+    <div class="flex gap-1 shrink-0">
       {#if multiIndex && index}
-        <span class="badge index-badge">{index}</span>
+        <span class="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-xs shrink-0">{index}</span>
       {/if}
       {#if fileType}
-        <span class="badge">{fileType}</span>
+        <span class="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded text-xs shrink-0">{fileType}</span>
       {/if}
     </div>
   </div>
 </button>
-
-<style>
-  .card {
-    display: block;
-    width: 100%;
-    text-align: left;
-    font: inherit;
-    background: white;
-    padding: 1rem;
-    border-radius: 6px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-    text-decoration: none;
-    color: inherit;
-    transition: box-shadow 0.15s, border-color 0.15s;
-    border: 2px solid transparent;
-    cursor: pointer;
-  }
-
-  .card:hover {
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  }
-
-  .card.selected {
-    border-color: #4a7cf7;
-    background: #f0f4ff;
-  }
-
-  .card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
-  }
-
-  .filename {
-    font-weight: 600;
-    color: #1a1a2e;
-  }
-
-  .score {
-    font-size: 0.8rem;
-    color: #999;
-    font-family: monospace;
-  }
-
-  .snippet {
-    font-size: 0.9rem;
-    line-height: 1.5;
-    color: #555;
-    margin: 0 0 0.5rem;
-  }
-
-  .snippet :global(mark),
-  .filename :global(mark),
-  .path :global(mark) {
-    background: #fff3b0;
-    padding: 0.1em;
-    border-radius: 2px;
-  }
-
-  .card-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.8rem;
-    color: #999;
-    gap: 0.5rem;
-  }
-
-  .path {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-    font-family: monospace;
-    font-size: 0.78rem;
-    color: #777;
-  }
-
-  .badges {
-    display: flex;
-    gap: 0.35rem;
-    flex-shrink: 0;
-  }
-
-  .badge {
-    background: #eef;
-    color: #55a;
-    padding: 0.15rem 0.5rem;
-    border-radius: 3px;
-    font-size: 0.75rem;
-    flex-shrink: 0;
-  }
-
-  .index-badge {
-    background: #e8f0fe;
-    color: #1a73e8;
-  }
-</style>

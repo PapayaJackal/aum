@@ -198,30 +198,30 @@
   );
 </script>
 
-<div class="sidebar-header">
-  <h2>
+<div class="flex items-center gap-3 px-4 py-3 border-b border-gray-300 bg-gray-50 sticky top-0 z-[1]">
+  <h2 class="m-0 text-base flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
     {#if doc}
       {doc.display_path.split("/").pop()}
     {:else}
       Document
     {/if}
   </h2>
-  <button class="close-btn" onclick={onClose} title="Close">✕</button>
+  <button class="shrink-0 bg-transparent border-none text-lg text-gray-400 cursor-pointer p-1 rounded leading-none hover:bg-gray-200 hover:text-gray-800" onclick={onClose} title="Close">&#x2715;</button>
 </div>
 
-<div class="sidebar-body">
+<div class="p-3 px-4">
   {#if loading}
-    <p class="loading">Loading document...</p>
+    <p class="text-gray-400 p-4">Loading document...</p>
   {:else if error}
-    <div class="error">{error}</div>
+    <div class="bg-red-50 text-red-600 p-3 rounded my-3">{error}</div>
   {:else if doc}
-    <div class="doc-info">
+    <div class="flex items-center gap-3 mb-3">
       {#if doc.extracted_from}
-        <p class="doc-path">Extracted from <button class="link-btn" onclick={() => onNavigateDoc(doc!.extracted_from!.doc_id, index)}>{doc.extracted_from.display_path}</button></p>
+        <p class="m-0 text-xs text-gray-400 break-all flex-1 min-w-0">Extracted from <button class="bg-transparent border-none text-(--color-accent) cursor-pointer font-[inherit] p-0 no-underline hover:underline" onclick={() => onNavigateDoc(doc!.extracted_from!.doc_id, index)}>{doc.extracted_from.display_path}</button></p>
       {:else}
-        <p class="doc-path">{index}/{doc.display_path}</p>
+        <p class="m-0 text-xs text-gray-400 break-all flex-1 min-w-0">{index}/{doc.display_path}</p>
       {/if}
-      <button class="download-btn" onclick={() => downloadDocument(docId, index)}>Download original</button>
+      <button class="shrink-0 text-xs font-[inherit] text-(--color-accent) bg-transparent cursor-pointer border border-(--color-accent) px-2 py-1 rounded hover:bg-(--color-accent) hover:text-white" onclick={() => downloadDocument(docId, index)}>Download original</button>
     </div>
 
     {#snippet metaValue(entry: MetaEntry)}
@@ -233,38 +233,38 @@
         {#if Array.isArray(entry.value)}
           {#each entry.value as v, i}
             {#if i > 0}, {/if}
-            <a class="facet-link" href={facetSearchHref("Email Addresses", extractEmail(v))} onclick={handleFacetClick}>{v}</a>
+            <a class="text-(--color-accent) no-underline hover:underline" href={facetSearchHref("Email Addresses", extractEmail(v))} onclick={handleFacetClick}>{v}</a>
           {/each}
         {:else}
-          <a class="facet-link" href={facetSearchHref("Email Addresses", extractEmail(entry.value))} onclick={handleFacetClick}>{entry.value}</a>
+          <a class="text-(--color-accent) no-underline hover:underline" href={facetSearchHref("Email Addresses", extractEmail(entry.value))} onclick={handleFacetClick}>{entry.value}</a>
         {/if}
       {:else if entry.facetLabel && !Array.isArray(entry.value)}
-        <a class="facet-link" href={facetSearchHref(entry.facetLabel, entry.value)} onclick={handleFacetClick}>{entry.value}</a>
+        <a class="text-(--color-accent) no-underline hover:underline" href={facetSearchHref(entry.facetLabel, entry.value)} onclick={handleFacetClick}>{entry.value}</a>
       {:else if entry.facetLabel && Array.isArray(entry.value)}
         {#each entry.value as v, i}
           {#if i > 0}, {/if}
-          <a class="facet-link" href={facetSearchHref(entry.facetLabel, v)} onclick={handleFacetClick}>{v}</a>
+          <a class="text-(--color-accent) no-underline hover:underline" href={facetSearchHref(entry.facetLabel, v)} onclick={handleFacetClick}>{v}</a>
         {/each}
       {:else}
         {displayValue(entry.value)}
       {/if}
     {/snippet}
 
-    <div class="meta-table">
-      <h3>Metadata</h3>
-      <div class="meta-scroll">
-        <table>
+    <div class="bg-white rounded-md p-3 my-3 shadow-sm">
+      <h3 class="m-0 mb-2 text-sm text-gray-500">Metadata</h3>
+      <div class="max-h-[300px] overflow-y-auto">
+        <table class="w-full border-collapse">
           <tbody>
             {#each metaEntries.priority as entry}
               <tr>
-                <td class="meta-key">{entry.display}</td>
-                <td>{@render metaValue(entry)}</td>
+                <td class="p-1.5 border-b border-gray-100 text-sm align-top font-semibold whitespace-nowrap w-[130px] text-gray-500">{entry.display}</td>
+                <td class="p-1.5 border-b border-gray-100 text-sm align-top">{@render metaValue(entry)}</td>
               </tr>
             {/each}
             {#if metaEntries.extra.length > 0}
               <tr>
-                <td colspan="2">
-                  <button class="toggle-extra" onclick={() => (showAllMeta = !showAllMeta)}>
+                <td colspan="2" class="p-1.5">
+                  <button class="bg-transparent border-none text-indigo-500 text-xs cursor-pointer py-1 px-0 hover:underline" onclick={() => (showAllMeta = !showAllMeta)}>
                     {showAllMeta ? "Hide" : "Show"} {metaEntries.extra.length} more fields
                   </button>
                 </td>
@@ -272,8 +272,8 @@
               {#if showAllMeta}
                 {#each metaEntries.extra as entry}
                   <tr>
-                    <td class="meta-key">{entry.display}</td>
-                    <td>{@render metaValue(entry)}</td>
+                    <td class="p-1.5 border-b border-gray-100 text-sm align-top font-semibold whitespace-nowrap w-[130px] text-gray-500">{entry.display}</td>
+                    <td class="p-1.5 border-b border-gray-100 text-sm align-top">{@render metaValue(entry)}</td>
                   </tr>
                 {/each}
               {/if}
@@ -284,242 +284,19 @@
     </div>
 
     {#if doc.attachments.length > 0}
-      <div class="attachments-section">
-        <h3>Attachments</h3>
-        <ul>
+      <div class="bg-white rounded-md p-3 my-3 shadow-sm">
+        <h3 class="m-0 mb-1.5 text-sm text-gray-500">Attachments</h3>
+        <ul class="list-none m-0 p-0">
           {#each doc.attachments as att}
-            <li><button class="link-btn" onclick={() => onNavigateDoc(att.doc_id, index)}>{att.display_path.split("/").pop()}</button></li>
+            <li class="py-1 border-b border-gray-100 text-sm last:border-b-0"><button class="bg-transparent border-none text-(--color-accent) cursor-pointer font-[inherit] p-0 no-underline hover:underline" onclick={() => onNavigateDoc(att.doc_id, index)}>{att.display_path.split("/").pop()}</button></li>
           {/each}
         </ul>
       </div>
     {/if}
 
-    <div class="content-section">
-      <h3>Content</h3>
-      <pre>{@html contentHtml}</pre>
+    <div class="bg-white rounded-md p-3 my-3 shadow-sm">
+      <h3 class="m-0 mb-2 text-sm text-gray-500">Content</h3>
+      <pre class="whitespace-pre-wrap break-words text-sm leading-relaxed m-0">{@html contentHtml}</pre>
     </div>
   {/if}
 </div>
-
-<style>
-  .sidebar-header {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid #ddd;
-    background: #fafafa;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
-
-  .sidebar-header h2 {
-    margin: 0;
-    font-size: 1rem;
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .close-btn {
-    flex-shrink: 0;
-    background: none;
-    border: none;
-    font-size: 1.1rem;
-    color: #888;
-    cursor: pointer;
-    padding: 0.2rem 0.4rem;
-    border-radius: 4px;
-    line-height: 1;
-  }
-
-  .close-btn:hover {
-    background: #eee;
-    color: #333;
-  }
-
-  .sidebar-body {
-    padding: 0.75rem 1rem;
-  }
-
-  .doc-info {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .doc-path {
-    margin: 0;
-    font-size: 0.82rem;
-    color: #888;
-    word-break: break-all;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .link-btn {
-    background: none;
-    border: none;
-    color: #4a7cf7;
-    cursor: pointer;
-    font: inherit;
-    padding: 0;
-    text-decoration: none;
-  }
-
-  .link-btn:hover {
-    text-decoration: underline;
-  }
-
-  .download-btn {
-    flex-shrink: 0;
-    font-size: 0.8rem;
-    font-family: inherit;
-    color: #4a7cf7;
-    background: transparent;
-    cursor: pointer;
-    border: 1px solid #4a7cf7;
-    padding: 0.2rem 0.55rem;
-    border-radius: 4px;
-  }
-
-  .download-btn:hover {
-    background: #4a7cf7;
-    color: white;
-  }
-
-  .attachments-section {
-    background: white;
-    border-radius: 6px;
-    padding: 0.75rem;
-    margin: 0.75rem 0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  }
-
-  .attachments-section h3 {
-    margin: 0 0 0.4rem;
-    font-size: 0.9rem;
-    color: #666;
-  }
-
-  .attachments-section ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .attachments-section li {
-    padding: 0.25rem 0;
-    border-bottom: 1px solid #eee;
-    font-size: 0.85rem;
-  }
-
-  .attachments-section li:last-child {
-    border-bottom: none;
-  }
-
-  .loading {
-    color: #888;
-    padding: 1rem;
-  }
-
-  .error {
-    background: #fee;
-    color: #c33;
-    padding: 0.75rem;
-    border-radius: 4px;
-    margin: 0.75rem 0;
-  }
-
-  .meta-table {
-    background: white;
-    border-radius: 6px;
-    padding: 0.75rem;
-    margin: 0.75rem 0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  }
-
-  .meta-table h3 {
-    margin: 0 0 0.5rem;
-    font-size: 0.9rem;
-    color: #666;
-  }
-
-  .meta-scroll {
-    max-height: 300px;
-    overflow-y: auto;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  td {
-    padding: 0.3rem 0.4rem;
-    border-bottom: 1px solid #eee;
-    font-size: 0.85rem;
-    vertical-align: top;
-  }
-
-  .meta-key {
-    font-weight: 600;
-    white-space: nowrap;
-    width: 130px;
-    color: #555;
-  }
-
-  .facet-link {
-    color: #4a7cf7;
-    text-decoration: none;
-  }
-
-  .facet-link:hover {
-    text-decoration: underline;
-  }
-
-  .toggle-extra {
-    background: none;
-    border: none;
-    color: #66a;
-    font-size: 0.82rem;
-    cursor: pointer;
-    padding: 0.3rem 0;
-  }
-
-  .toggle-extra:hover {
-    text-decoration: underline;
-  }
-
-  .content-section {
-    background: white;
-    border-radius: 6px;
-    padding: 0.75rem;
-    margin: 0.75rem 0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  }
-
-  .content-section h3 {
-    margin: 0 0 0.5rem;
-    font-size: 0.9rem;
-    color: #666;
-  }
-
-  pre {
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    font-size: 0.85rem;
-    line-height: 1.5;
-    margin: 0;
-  }
-
-  pre :global(mark) {
-    background: #fff3b0;
-    padding: 0.1em;
-    border-radius: 2px;
-  }
-</style>

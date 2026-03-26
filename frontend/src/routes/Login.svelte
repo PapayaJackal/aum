@@ -36,156 +36,42 @@
   }
 </script>
 
-<div class="login-container">
-  <h1>ॐ</h1>
-  <p class="subtitle">seek and ye shall find</p>
+<div class="max-w-sm mx-auto mt-16 p-8 bg-white rounded-lg shadow-md">
+  <h1 class="m-0 mb-1 text-center text-(--color-brand) text-5xl">&#x0950;</h1>
+  <p class="text-center text-gray-400 mt-0 mb-6">seek and ye shall find</p>
 
-  <form onsubmit={handleLogin}>
+  <form onsubmit={handleLogin} class="flex flex-col gap-4">
     {#if error}
-      <div class="error">{error}</div>
+      <div class="bg-red-50 text-red-600 p-2 rounded text-sm">{error}</div>
     {/if}
 
-    <label>
+    <label class="flex flex-col gap-1 text-sm font-medium">
       Username
-      <input type="text" bind:value={username} required autocomplete="username" />
+      <input type="text" bind:value={username} required autocomplete="username"
+        class="p-2 border border-gray-300 rounded text-base focus:outline-none focus:border-(--color-brand)" />
     </label>
 
-    <label>
+    <label class="flex flex-col gap-1 text-sm font-medium">
       Password
-      <input type="password" bind:value={password} required autocomplete="current-password" />
+      <input type="password" bind:value={password} required autocomplete="current-password"
+        class="p-2 border border-gray-300 rounded text-base focus:outline-none focus:border-(--color-brand)" />
     </label>
 
-    <button type="submit" disabled={loading}>
+    <button type="submit" disabled={loading}
+      class="p-2.5 bg-(--color-brand) text-white border-none rounded text-base cursor-pointer hover:bg-(--color-brand-hover) disabled:opacity-60 disabled:cursor-not-allowed">
       {loading ? "Signing in..." : "Sign in"}
     </button>
   </form>
 
   {#if providers.length > 0}
-    <div class="divider">or</div>
-    <div class="oauth-buttons">
+    <div class="login-divider">or</div>
+    <div class="flex flex-col gap-2">
       {#each providers as provider}
-        <button onclick={() => oauthLogin(provider)} class="oauth-btn">
+        <button onclick={() => oauthLogin(provider)}
+          class="p-2.5 bg-white border border-gray-300 rounded text-base cursor-pointer capitalize hover:bg-gray-50 hover:border-gray-400">
           Sign in with {provider}
         </button>
       {/each}
     </div>
   {/if}
 </div>
-
-<style>
-  .login-container {
-    max-width: 360px;
-    margin: 4rem auto;
-    padding: 2rem;
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  }
-
-  h1 {
-    margin: 0 0 0.25rem;
-    text-align: center;
-    color: #1a1a2e;
-    font-size: 3.5rem;
-  }
-
-  .subtitle {
-    text-align: center;
-    color: #888;
-    margin: 0 0 1.5rem;
-  }
-
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9rem;
-    font-weight: 500;
-  }
-
-  input {
-    padding: 0.5rem;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 1rem;
-  }
-
-  button[type="submit"] {
-    padding: 0.6rem;
-    background: #1a1a2e;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    font-size: 1rem;
-    cursor: pointer;
-  }
-
-  button[type="submit"]:hover {
-    background: #16213e;
-  }
-
-  button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .error {
-    background: #fee;
-    color: #c33;
-    padding: 0.5rem;
-    border-radius: 4px;
-    font-size: 0.9rem;
-  }
-
-  .divider {
-    text-align: center;
-    color: #999;
-    margin: 1rem 0;
-    position: relative;
-  }
-
-  .divider::before,
-  .divider::after {
-    content: "";
-    position: absolute;
-    top: 50%;
-    width: 40%;
-    height: 1px;
-    background: #ddd;
-  }
-
-  .divider::before {
-    left: 0;
-  }
-
-  .divider::after {
-    right: 0;
-  }
-
-  .oauth-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .oauth-btn {
-    padding: 0.6rem;
-    background: white;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 0.95rem;
-    cursor: pointer;
-    text-transform: capitalize;
-  }
-
-  .oauth-btn:hover {
-    background: #f9f9f9;
-    border-color: #bbb;
-  }
-</style>

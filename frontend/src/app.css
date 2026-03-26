@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #1a1a2e;
+  --color-brand-hover: #16213e;
+  --color-accent: #4a7cf7;
+  --color-accent-hover: #3a6ce7;
+  --color-highlight: #fff3b0;
+}
+
+@layer base {
+  body {
+    @apply m-0 font-sans bg-gray-100 text-gray-800;
+  }
+
+  mark {
+    @apply bg-(--color-highlight) px-0.5 rounded-sm;
+  }
+}
+
+/* Range slider thumb styles (can't be expressed with Tailwind utilities) */
+.slider-track {
+  @apply relative h-6;
+}
+
+.slider-track input[type="range"] {
+  @apply absolute left-0 top-0 w-full pointer-events-none appearance-none bg-transparent m-0 h-6;
+}
+
+.slider-track input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  @apply pointer-events-auto w-3.5 h-3.5 rounded-full bg-(--color-accent) border-2 border-white cursor-pointer relative z-1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.slider-track input[type="range"]::-moz-range-thumb {
+  @apply pointer-events-auto w-3.5 h-3.5 rounded-full bg-(--color-accent) border-2 border-white cursor-pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.slider-track input[type="range"]::-webkit-slider-runnable-track {
+  @apply h-1 bg-gray-300 rounded;
+}
+
+.slider-track input[type="range"]::-moz-range-track {
+  @apply h-1 bg-gray-300 rounded;
+}
+
+/* Divider pseudo-elements for login "or" separator */
+.login-divider {
+  @apply text-center text-gray-400 my-4 relative;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  @apply absolute top-1/2 w-2/5 h-px bg-gray-300;
+}
+
+.login-divider::before {
+  @apply left-0;
+}
+
+.login-divider::after {
+  @apply right-0;
+}

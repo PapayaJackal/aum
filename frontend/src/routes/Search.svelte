@@ -250,12 +250,12 @@
 </svelte:head>
 
 {#snippet searchForm()}
-  <form class="search-form" onsubmit={handleSubmit}>
+  <form class="flex-1 flex gap-2 items-center min-w-0" onsubmit={handleSubmit}>
     <input
       type="search"
       placeholder="Search documents..."
       bind:value={searchState.query}
-      class="search-input"
+      class="flex-1 px-3 py-[0.45rem] border-none rounded bg-white/95 text-gray-800 text-base min-w-0 focus:outline-2 focus:outline-(--color-accent)"
     />
     {#if indices.length > 0}
       <IndexSelector
@@ -264,23 +264,22 @@
         onchange={handleIndicesChange}
       />
     {/if}
-    <div class="search-type-toggle" class:disabled={!hybridEnabled} title={hybridEnabled ? "" : "No embeddings for selected datasets"}>
+    <div class="flex shrink-0 rounded overflow-hidden border {hybridEnabled ? 'border-white/40' : 'border-white/40 opacity-50'}">
       <button
         type="button"
-        class="toggle-btn"
-        class:active={searchState.searchType === "text"}
+        class="px-3 py-[0.45rem] border-none rounded-none text-xs cursor-pointer shrink-0 {searchState.searchType === 'text' ? 'bg-white/90 text-(--color-brand) font-medium' : 'bg-white/15 text-white/85'} disabled:cursor-not-allowed hover:enabled:bg-white/25"
         disabled={!hybridEnabled && searchState.searchType !== "text"}
         onclick={() => { searchState.searchType = "text"; handleSearchTypeChange(); }}
       >Full text</button>
       <button
         type="button"
-        class="toggle-btn"
-        class:active={searchState.searchType === "hybrid"}
+        class="px-3 py-[0.45rem] border-none rounded-none text-xs cursor-pointer shrink-0 {searchState.searchType === 'hybrid' ? 'bg-white/90 text-(--color-brand) font-medium' : 'bg-white/15 text-white/85'} disabled:cursor-not-allowed hover:enabled:bg-white/25"
         disabled={!hybridEnabled}
         onclick={() => { searchState.searchType = "hybrid"; handleSearchTypeChange(); }}
       >Hybrid</button>
     </div>
-    <button type="submit" disabled={loading || !searchState.query.trim()}>
+    <button type="submit" disabled={loading || !searchState.query.trim()}
+      class="px-4 py-[0.45rem] bg-(--color-accent) text-white border-none rounded text-sm cursor-pointer shrink-0 hover:enabled:bg-(--color-accent-hover) disabled:opacity-50 disabled:cursor-not-allowed">
       {loading ? "..." : "Search"}
     </button>
   </form>
@@ -288,38 +287,37 @@
 
 {@render header(searchForm)}
 
-<main>
+<main class="px-4">
   {#if error}
-    <div class="error">{error}</div>
+    <div class="bg-red-50 text-red-600 p-3 rounded my-3">{error}</div>
   {/if}
 
   {#if searchState.searched}
-    <div class="results-layout" class:sidebar-open={sidebarOpen}>
+    <div class="flex gap-4 mt-3 {sidebarOpen ? 'sidebar-open' : ''}">
       {#if Object.keys(facets).length > 0}
-        <aside class="facet-aside">
+        <aside class="shrink-0 basis-[220px] max-w-[220px] min-w-0 sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto">
           <FacetPanel {facets} bind:activeFacets={searchState.activeFacets} dateFacets={["Created"]} />
         </aside>
       {/if}
-      <div class="results-main">
-        <div bind:this={sentinel} class="toolbar-sentinel"></div>
-        <div class="results-toolbar" class:stuck={toolbarStuck}>
-          <p class="result-count">
+      <div class="flex-1 min-w-0 {sidebarOpen ? 'max-w-[35%] shrink-0 basis-[35%]' : ''}">
+        <div bind:this={sentinel} class="relative -top-10 h-0 pointer-events-none"></div>
+        <div class="flex items-center justify-between gap-3 mb-3 flex-wrap sticky top-10 bg-gray-100 z-10 {toolbarStuck ? 'py-2.5 px-3 -mx-3' : 'py-1.5'}">
+          <p class="text-gray-400 text-sm m-0">
             {searchState.total} result{searchState.total !== 1 ? "s" : ""}
           </p>
-          <div class="pagination-controls">
+          <div class="flex items-center gap-1 flex-wrap">
             <button
-              class="page-btn"
+              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed {searchState.currentPage <= 1 ? '' : ''}"
               disabled={searchState.currentPage <= 1 || loading}
               onclick={() => doSearch(searchState.currentPage - 1, false)}
             >&lsaquo; Prev</button>
 
             {#each pageNumbers(searchState.currentPage, totalPages) as p}
               {#if p === "..."}
-                <span class="page-ellipsis">&hellip;</span>
+                <span class="px-1 py-1 text-gray-400 text-sm">&hellip;</span>
               {:else}
                 <button
-                  class="page-btn"
-                  class:active={p === searchState.currentPage}
+                  class="px-2.5 py-1 text-sm border rounded cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed {p === searchState.currentPage ? 'bg-(--color-accent) text-white border-(--color-accent)' : 'bg-gray-100 text-gray-800 border-gray-300 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent)'}"
                   disabled={loading}
                   onclick={() => doSearch(p, false)}
                 >{p}</button>
@@ -327,13 +325,13 @@
             {/each}
 
             <button
-              class="page-btn"
+              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed"
               disabled={searchState.currentPage >= totalPages || loading}
               onclick={() => doSearch(searchState.currentPage + 1, false)}
             >Next &rsaquo;</button>
 
             <select
-              class="page-size-select"
+              class="py-1 px-1.5 border border-gray-300 rounded bg-gray-100 text-sm ml-2 cursor-pointer"
               bind:value={searchState.pageSize}
               onchange={handlePageSizeChange}
             >
@@ -347,7 +345,7 @@
       </div>
 
       {#if sidebarOpen}
-        <aside class="doc-sidebar">
+        <aside class="flex-1 min-w-0 bg-gray-50 border-l border-gray-300 rounded-md shadow-[-2px_0_8px_rgba(0,0,0,0.05)] sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto">
           {#key searchState.selectedDocId}
             <Document
               docId={searchState.selectedDocId}
@@ -361,221 +359,3 @@
     </div>
   {/if}
 </main>
-
-<style>
-  .search-form {
-    flex: 1;
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    min-width: 0;
-  }
-
-  .search-input {
-    flex: 1;
-    padding: 0.45rem 0.65rem;
-    border: none;
-    border-radius: 4px;
-    font-size: 0.95rem;
-    background: rgba(255, 255, 255, 0.95);
-    min-width: 0;
-  }
-
-  .search-input:focus {
-    outline: 2px solid #4a7cf7;
-  }
-
-  .search-type-toggle {
-    display: flex;
-    flex-shrink: 0;
-    border-radius: 4px;
-    overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.4);
-  }
-
-  .search-type-toggle.disabled {
-    opacity: 0.5;
-  }
-
-  .toggle-btn {
-    padding: 0.45rem 0.7rem;
-    background: rgba(255, 255, 255, 0.15);
-    color: rgba(255, 255, 255, 0.85);
-    border: none;
-    border-radius: 0;
-    font-size: 0.82rem;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-
-  .toggle-btn:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.25);
-  }
-
-  .toggle-btn.active {
-    background: rgba(255, 255, 255, 0.9);
-    color: #1a1a2e;
-    font-weight: 500;
-  }
-
-  .toggle-btn:disabled {
-    cursor: not-allowed;
-  }
-
-  button {
-    padding: 0.45rem 1rem;
-    background: #4a7cf7;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    font-size: 0.9rem;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-
-  button:hover:not(:disabled) {
-    background: #3a6ce7;
-  }
-
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  main {
-    padding: 0 1rem;
-  }
-
-  .error {
-    background: #fee;
-    color: #c33;
-    padding: 0.75rem;
-    border-radius: 4px;
-    margin: 0.75rem 0;
-  }
-
-  .results-layout {
-    display: flex;
-    gap: 1rem;
-    margin-top: 0.75rem;
-  }
-
-  .facet-aside {
-    flex: 0 0 220px;
-    max-width: 220px;
-    min-width: 0;
-    position: sticky;
-    top: 3rem;
-    align-self: flex-start;
-    max-height: calc(100vh - 3.5rem);
-    overflow-y: auto;
-  }
-
-  .results-main {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .sidebar-open .results-main {
-    flex: 0 0 35%;
-    max-width: 35%;
-  }
-
-  .doc-sidebar {
-    flex: 1;
-    min-width: 0;
-    background: #fafafa;
-    border-left: 1px solid #ddd;
-    border-radius: 6px;
-    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.05);
-    position: sticky;
-    top: 3rem;
-    align-self: flex-start;
-    max-height: calc(100vh - 3.5rem);
-    overflow-y: auto;
-  }
-
-  .toolbar-sentinel {
-    position: relative;
-    top: -2.5rem;
-    height: 0;
-    pointer-events: none;
-  }
-
-  .results-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
-    flex-wrap: wrap;
-    position: sticky;
-    top: 2.5rem;
-    background: #f5f5f5;
-    z-index: 10;
-    padding: 0.4rem 0;
-  }
-
-  .results-toolbar.stuck {
-    padding: 0.65rem 0.75rem;
-    margin: 0 -0.75rem 0.75rem;
-  }
-
-
-  .result-count {
-    color: #888;
-    font-size: 0.9rem;
-    margin: 0;
-  }
-
-  .pagination-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    flex-wrap: wrap;
-  }
-
-  .page-btn {
-    padding: 0.3rem 0.6rem;
-    font-size: 0.85rem;
-    background: #f0f0f0;
-    color: #333;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-
-  .page-btn:hover:not(:disabled) {
-    background: #e0e8ff;
-    border-color: #4a7cf7;
-    color: #4a7cf7;
-  }
-
-  .page-btn.active {
-    background: #4a7cf7;
-    color: white;
-    border-color: #4a7cf7;
-  }
-
-  .page-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .page-ellipsis {
-    padding: 0.3rem 0.25rem;
-    color: #888;
-    font-size: 0.85rem;
-  }
-
-  .page-size-select {
-    padding: 0.3rem 0.4rem;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    background: #f0f0f0;
-    font-size: 0.85rem;
-    margin-left: 0.5rem;
-    cursor: pointer;
-  }
-</style>
