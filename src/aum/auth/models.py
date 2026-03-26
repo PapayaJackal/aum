@@ -50,7 +50,23 @@ class IndexPermission:
     index_name: str
 
 
+_initialized_connections: set[int] = set()
+
+
 def init_auth_tables(conn: sqlite3.Connection) -> None:
+    conn_id = id(conn)
+    if conn_id in _initialized_connections:
+        return
     conn.executescript(AUTH_SCHEMA)
     conn.commit()
+    _initialized_connections.add(conn_id)
     log.debug("auth tables initialized")
+
+
+def row_to_user(row: sqlite3.Row) -> User:
+    return User(
+        id=row["id"],
+        username=row["username"],
+        password_hash=row["password_hash"],
+        is_admin=bool(row["is_admin"]),
+    )

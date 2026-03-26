@@ -5,7 +5,7 @@ import sqlite3
 import structlog
 from authlib.integrations.starlette_client import OAuth
 
-from aum.auth.models import User, init_auth_tables
+from aum.auth.models import User, init_auth_tables, row_to_user
 from aum.config import OAuthProvider
 from aum.metrics import AUTH_REQUESTS
 
@@ -65,7 +65,7 @@ class OAuthManager:
         ).fetchone()
 
         if row:
-            return self._row_to_user(row)
+            return row_to_user(row)
 
         # Check if a user with this email already exists (link accounts)
         user_row = None
@@ -97,7 +97,7 @@ class OAuthManager:
         self._conn.commit()
 
         row = self._conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        return self._row_to_user(row)
+        return row_to_user(row)
 
     def _unique_username(self, base: str) -> str:
         """Generate a unique username from a base name."""
@@ -117,10 +117,3 @@ class OAuthManager:
             candidate = f"{username}_{counter}"
             counter += 1
 
-    def _row_to_user(self, row: sqlite3.Row) -> User:
-        return User(
-            id=row["id"],
-            username=row["username"],
-            password_hash=row["password_hash"],
-            is_admin=bool(row["is_admin"]),
-        )

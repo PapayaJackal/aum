@@ -7,7 +7,7 @@ import structlog
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from aum.auth.models import User, init_auth_tables
+from aum.auth.models import User, init_auth_tables, row_to_user
 from aum.metrics import AUTH_FAILURES, AUTH_REQUESTS
 
 log = structlog.get_logger()
@@ -98,21 +98,21 @@ class LocalAuth:
             )
             self._conn.commit()
 
-        return self._row_to_user(row)
+        return row_to_user(row)
 
     def get_user(self, user_id: int) -> User | None:
         row = self._conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        return self._row_to_user(row) if row else None
+        return row_to_user(row) if row else None
 
     def get_user_by_username(self, username: str) -> User | None:
         row = self._conn.execute(
             "SELECT * FROM users WHERE username = ?", (username,)
         ).fetchone()
-        return self._row_to_user(row) if row else None
+        return row_to_user(row) if row else None
 
     def list_users(self) -> list[User]:
         rows = self._conn.execute("SELECT * FROM users ORDER BY username").fetchall()
-        return [self._row_to_user(row) for row in rows]
+        return [row_to_user(row) for row in rows]
 
     def delete_user(self, username: str) -> bool:
         cursor = self._conn.execute("DELETE FROM users WHERE username = ?", (username,))
@@ -146,10 +146,3 @@ class LocalAuth:
             log.info("user admin status changed", username=username, is_admin=is_admin)
         return updated
 
-    def _row_to_user(self, row: sqlite3.Row) -> User:
-        return User(
-            id=row["id"],
-            username=row["username"],
-            password_hash=row["password_hash"],
-            is_admin=bool(row["is_admin"]),
-        )
