@@ -6,9 +6,19 @@ from pathlib import Path
 import pytest
 
 from aum.auth.local import LocalAuth
+from aum.auth.models import _initialized_connections
 from aum.auth.permissions import PermissionManager
+from aum.auth.tokens import TokenManager
 from aum.config import AumConfig
 from aum.ingest.tracker import JobTracker
+
+_TEST_JWT_SECRET = "test-jwt-secret-for-testing-only"
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_init():
+    """Clear cached connection IDs so init_auth_tables runs on fresh connections."""
+    _initialized_connections.clear()
 
 
 @pytest.fixture
@@ -41,7 +51,12 @@ def permissions(db_conn: sqlite3.Connection) -> PermissionManager:
 
 @pytest.fixture
 def config(tmp_db: str) -> AumConfig:
-    return AumConfig(data_dir=str(Path(tmp_db).parent), log_format="console")
+    return AumConfig(data_dir=str(Path(tmp_db).parent), log_format="console", jwt_secret=_TEST_JWT_SECRET)
+
+
+@pytest.fixture
+def token_manager() -> TokenManager:
+    return TokenManager(secret=_TEST_JWT_SECRET)
 
 
 @pytest.fixture
