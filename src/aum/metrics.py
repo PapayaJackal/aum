@@ -24,6 +24,13 @@ INGEST_JOBS_ACTIVE = Gauge(
     "Number of currently running ingest jobs",
 )
 
+# Index management
+INDEXES_RECREATED = Counter(
+    "aum_indexes_recreated_total",
+    "Number of times an index was recreated due to stale mapping",
+    ["index"],
+)
+
 # Search
 SEARCH_REQUESTS = Counter(
     "aum_search_requests_total",

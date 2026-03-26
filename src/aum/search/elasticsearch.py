@@ -3,6 +3,7 @@ from __future__ import annotations
 import structlog
 from elasticsearch import Elasticsearch, NotFoundError
 
+from aum.metrics import INDEXES_RECREATED
 from aum.models import Document
 from aum.search.base import (
     DATE_FACETS,
@@ -160,13 +161,7 @@ class ElasticsearchBackend:
         self._index = index
         self._vector_dimension: int | None = None
 
-    def initialize(self, *, vector_dimension: int | None = None) -> None:
-        self._vector_dimension = vector_dimension
-
-        if self._client.indices.exists(index=self._index):
-            log.info("elasticsearch index already exists", index=self._index)
-            return
-
+    def _build_mappings(self, vector_dimension: int | None) -> dict:
         mappings: dict = {
             "properties": {
                 "source_path": {"type": "keyword"},
@@ -189,6 +184,45 @@ class ElasticsearchBackend:
                 "index": True,
                 "similarity": "cosine",
             }
+
+        return mappings
+
+    def _meta_mapping_matches(self) -> bool:
+        """Check whether the existing index has the expected meta field mappings."""
+        try:
+            resp = self._client.indices.get_mapping(index=self._index)
+            existing = resp[self._index]["mappings"]
+            existing_meta = existing.get("properties", {}).get("meta", {}).get("properties", {})
+            for field, expected_props in _META_PROPERTIES.items():
+                actual = existing_meta.get(field, {})
+                if actual.get("type") != expected_props.get("type"):
+                    log.warning(
+                        "meta field type mismatch",
+                        field=field,
+                        expected=expected_props.get("type"),
+                        actual=actual.get("type"),
+                    )
+                    return False
+            return True
+        except Exception:
+            log.warning("failed to check index mapping", index=self._index, exc_info=True)
+            return False
+
+    def initialize(self, *, vector_dimension: int | None = None) -> None:
+        self._vector_dimension = vector_dimension
+
+        if self._client.indices.exists(index=self._index):
+            if self._meta_mapping_matches():
+                log.info("elasticsearch index already exists with correct mapping", index=self._index)
+                return
+            log.warning(
+                "elasticsearch index has stale mapping, recreating",
+                index=self._index,
+            )
+            self._client.indices.delete(index=self._index)
+            INDEXES_RECREATED.labels(index=self._index).inc()
+
+        mappings = self._build_mappings(vector_dimension)
 
         self._client.indices.create(
             index=self._index,

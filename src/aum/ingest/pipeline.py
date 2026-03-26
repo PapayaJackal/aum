@@ -172,6 +172,12 @@ class IngestPipeline:
 
         Returns (job, elapsed_seconds, avg_extraction_seconds).
         """
+        # Ensure the search index exists with the correct mapping before
+        # ingesting any documents.  This is a no-op when the index already
+        # exists and the mapping is up to date.
+        vector_dim = self._embedder.dimension if self._embedder else None
+        self._backend.initialize(vector_dimension=vector_dim)
+
         source_dir = source_dir.resolve()
         job_id = uuid.uuid4().hex[:12]
         # Create with total_files=0; the walker updates it as it discovers files
