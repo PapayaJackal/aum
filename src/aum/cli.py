@@ -24,6 +24,27 @@ def _setup(config: AumConfig) -> None:
     configure_logging(level=config.log_level, fmt=config.log_format)
 
 
+_MIN_JWT_SECRET_BYTES = 32
+
+
+def _ensure_jwt_secret(config: AumConfig) -> None:
+    """Validate or auto-generate the JWT signing secret."""
+    if not config.jwt_secret or config.jwt_secret == "change-me-in-production":
+        config.jwt_secret = secrets.token_urlsafe(48)
+        log.warning(
+            "no jwt_secret configured — generated a random secret; "
+            "sessions will not survive server restarts. "
+            "Set AUM_JWT_SECRET or jwt_secret in aum.toml for persistence."
+        )
+    elif len(config.jwt_secret.encode()) < _MIN_JWT_SECRET_BYTES:
+        click.echo(
+            f"Error: jwt_secret is {len(config.jwt_secret.encode())} bytes, "
+            f"minimum is {_MIN_JWT_SECRET_BYTES} bytes for {config.jwt_algorithm}.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+
 @click.group()
 @click.version_option(version=__version__)
 def main() -> None:
@@ -919,6 +940,8 @@ def serve(host: str | None, port: int | None) -> None:
     """Start the web server (API + frontend)."""
     config = _load_config()
     _setup(config)
+
+    _ensure_jwt_secret(config)
 
     import uvicorn
 
