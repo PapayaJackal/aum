@@ -238,7 +238,7 @@ class IngestPipeline:
         in_flight_lock = Lock()
         in_flight_count: list[int] = [0]
 
-        file_queue: Queue[Path | None] = Queue(maxsize=self._max_workers * 4)
+        file_queue: Queue[Path | None] = Queue(maxsize=1000)
 
         if explicit_paths is not None:
             # Feed explicit paths into the queue directly
