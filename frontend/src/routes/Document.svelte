@@ -58,7 +58,7 @@
   ]);
 
   // For email documents, show only these fields in priority, in this order.
-  const EMAIL_PRIORITY_ORDER = ["From", "To", "CC", "BCC", "Subject", "File Size"];
+  const EMAIL_PRIORITY_ORDER = ["From", "To", "CC", "BCC", "Subject", "Created", "File Size"];
   const EMAIL_PRIORITY = new Set(EMAIL_PRIORITY_ORDER);
 
   // Noisy internal keys to hide by default.
@@ -93,6 +93,14 @@
     return addr.trim().toLowerCase();
   }
 
+  const DATE_DISPLAY_KEYS = new Set(["Created", "Modified"]);
+
+  function formatLocalDate(value: string): string {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return value;
+    return d.toLocaleString();
+  }
+
   function humanFileSize(bytes: string | number): string {
     const n = typeof bytes === "string" ? parseInt(bytes, 10) : bytes;
     if (isNaN(n)) return String(bytes);
@@ -124,6 +132,7 @@
     facetLabel?: string;
     isEmail?: boolean;
     isFileSize?: boolean;
+    isDate?: boolean;
   };
 
   let isEmailDoc = $derived(
@@ -138,15 +147,25 @@
     const extra: MetaEntry[] = [];
     const seen = new Set<string>();
 
+    // Collect Created value to compare against Modified.
+    let createdValue: string | undefined;
+    for (const [key, value] of Object.entries(doc.metadata)) {
+      const d = displayKey(key);
+      if (d === "Created" && typeof value === "string") { createdValue = value; break; }
+    }
+
     for (const [key, value] of Object.entries(doc.metadata)) {
       if (isHidden(key)) continue;
       const display = displayKey(key);
       if (seen.has(display)) continue;
+      // Hide Modified if it matches Created (non-email docs only).
+      if (!isEmailDoc && display === "Modified" && typeof value === "string" && value === createdValue) continue;
       seen.add(display);
       const facetLabel = FACET_LABELS.has(key) ? key : undefined;
       const isEmail = EMAIL_KEYS.has(key);
       const isFileSize = display === "File Size";
-      const entry: MetaEntry = { key, display, value, facetLabel, isEmail, isFileSize };
+      const isDate = DATE_DISPLAY_KEYS.has(display);
+      const entry: MetaEntry = { key, display, value, facetLabel, isEmail, isFileSize, isDate };
       if (priorityNames.has(display)) {
         priority.push(entry);
       } else {
@@ -200,7 +219,9 @@
     </div>
 
     {#snippet metaValue(entry: MetaEntry)}
-      {#if entry.isFileSize}
+      {#if entry.isDate}
+        {formatLocalDate(entry.value as string)}
+      {:else if entry.isFileSize}
         {humanFileSize(entry.value as string)}
       {:else if entry.isEmail}
         {#if Array.isArray(entry.value)}
