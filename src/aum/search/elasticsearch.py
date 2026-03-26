@@ -184,7 +184,7 @@ class ElasticsearchBackend:
 
     def search_text(self, query: str, *, limit: int = 20, offset: int = 0, include_facets: bool = False) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         body: dict = {
-            "query": {"match": {"content": query}},
+            "query": {"match": {"content": {"query": query, "operator": "and"}}},
             "size": limit,
             "from": offset,
             "highlight": {"fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}}},
@@ -218,7 +218,7 @@ class ElasticsearchBackend:
         self, query: str, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         body: dict = {
-            "query": {"match": {"content": query}},
+            "query": {"match": {"content": {"query": query, "operator": "and"}}},
             "knn": {
                 "field": "embedding",
                 "query_vector": vector,
