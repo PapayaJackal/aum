@@ -96,5 +96,15 @@ AUTH_RATE_LIMITED = Counter(
     "Login attempts rejected by rate limiter",
 )
 
+# Documents
+DOCUMENT_VIEWS = Counter(
+    "aum_document_views_total",
+    "Total document detail views",
+)
+DOCUMENT_DOWNLOADS = Counter(
+    "aum_document_downloads_total",
+    "Total document downloads",
+)
+
 # Build info
 BUILD_INFO = Info("aum_build", "Build and version info")

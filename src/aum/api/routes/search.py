@@ -18,6 +18,7 @@ from aum.api.deps import (
 )
 from aum.auth.models import User
 from aum.auth.permissions import PermissionDeniedError, PermissionManager
+from aum.metrics import DOCUMENT_DOWNLOADS, DOCUMENT_VIEWS
 from aum.search.base import HIDDEN_METADATA_KEYS
 
 log = structlog.get_logger()
@@ -178,6 +179,8 @@ async def get_document(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    DOCUMENT_VIEWS.inc()
+
     attachments = [
         AttachmentResponse(doc_id=a.doc_id, display_path=a.display_path)
         for a in backend.find_attachments(doc.display_path)
@@ -229,6 +232,8 @@ async def download_document(
         raise HTTPException(status_code=404, detail="Document not found")
 
     file_path = _safe_file_path(doc.source_path)
+    DOCUMENT_DOWNLOADS.inc()
+    log.info("document download", doc_id=doc_id, index=idx)
     return FileResponse(path=str(file_path), filename=file_path.name)
 
 
