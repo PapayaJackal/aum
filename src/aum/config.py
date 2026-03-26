@@ -74,6 +74,7 @@ class AumConfig(BaseSettings):
     port: int = 8000
     metrics_port: int = 9090
     enable_docs: bool = False
+    cors_origins: list[str] = Field(default_factory=list)
 
     # Auth
     jwt_secret: str = ""

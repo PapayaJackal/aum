@@ -49,6 +49,9 @@ def _rate_limit_key(client_ip: str) -> str:
     return client_ip
 
 
+_CLEANUP_THRESHOLD = 1000
+
+
 def _check_rate_limit(client_ip: str) -> None:
     """Raise 429 if the IP has exceeded the failed-login threshold."""
     key = _rate_limit_key(client_ip)
@@ -56,10 +59,18 @@ def _check_rate_limit(client_ip: str) -> None:
     cutoff = now - _WINDOW_SECONDS
 
     with _login_lock:
+        # Periodic sweep of stale keys to prevent unbounded memory growth
+        if len(_login_failures) > _CLEANUP_THRESHOLD:
+            stale = [k for k, v in _login_failures.items() if not v or v[-1] <= cutoff]
+            for k in stale:
+                del _login_failures[k]
+
         timestamps = _login_failures[key]
-        # Prune old entries
+        # Prune old entries for this key
         _login_failures[key] = [t for t in timestamps if t > cutoff]
-        if len(_login_failures[key]) >= _MAX_FAILURES:
+        if not _login_failures[key]:
+            del _login_failures[key]
+        elif len(_login_failures[key]) >= _MAX_FAILURES:
             AUTH_RATE_LIMITED.inc()
             log.warning("login rate limited", client_ip=client_ip, rate_key=key)
             raise HTTPException(
