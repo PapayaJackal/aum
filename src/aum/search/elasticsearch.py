@@ -290,7 +290,12 @@ class ElasticsearchBackend:
             "query": query_body,
             "size": limit,
             "from": offset,
-            "highlight": {"pre_tags": ["<mark>"], "post_tags": ["</mark>"], "fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}}},
+            "highlight": {
+                "pre_tags": ["<mark>"],
+                "post_tags": ["</mark>"],
+                "max_analyzed_offset": 999_999,
+                "fields": {"content": {"fragment_size": 200, "number_of_fragments": 1}},
+            },
         }
         if include_facets:
             body["aggs"] = _FACET_AGGS
