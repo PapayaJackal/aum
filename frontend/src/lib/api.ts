@@ -25,29 +25,24 @@ async function _tryRefresh(): Promise<boolean> {
   }
 }
 
-async function request<T>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const token = getToken();
+/** Fetch with auth header and transparent token refresh on 401. */
+async function _authFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
+  const token = getToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  let res = await fetch(`${BASE}${path}`, { ...options, headers });
+  let res = await fetch(url, { ...options, headers });
 
   if (res.status === 401) {
-    // Attempt a transparent token refresh before giving up
     if (!_refreshing) _refreshing = _tryRefresh().finally(() => (_refreshing = null));
     const ok = await _refreshing;
     if (ok) {
-      // Retry the original request with the fresh token
       headers["Authorization"] = `Bearer ${getToken()}`;
-      res = await fetch(`${BASE}${path}`, { ...options, headers });
+      res = await fetch(url, { ...options, headers });
     }
     if (res.status === 401) {
       clearAuth();
@@ -55,6 +50,18 @@ async function request<T>(
       throw new Error("Unauthorized");
     }
   }
+
+  return res;
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const res = await _authFetch(`${BASE}${path}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers as Record<string, string>) },
+  });
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
@@ -163,19 +170,8 @@ export function getDocument(docId: string, index: string = ""): Promise<Document
 
 export async function downloadDocument(docId: string, index: string = ""): Promise<void> {
   const params = index ? `?index=${encodeURIComponent(index)}` : "";
-  const token = getToken();
-  const headers: Record<string, string> = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
+  const res = await _authFetch(`${BASE}/documents/${encodeURIComponent(docId)}/download${params}`);
 
-  const res = await fetch(`${BASE}/documents/${encodeURIComponent(docId)}/download${params}`, { headers });
-
-  if (res.status === 401) {
-    clearAuth();
-    window.location.hash = "#/login";
-    throw new Error("Unauthorized");
-  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(body.detail || res.statusText);
