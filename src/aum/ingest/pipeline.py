@@ -4,7 +4,7 @@ import hashlib
 import os
 import sys
 import time
-import uuid
+from aum.names import generate_name
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
@@ -179,7 +179,7 @@ class IngestPipeline:
         self._backend.initialize()
 
         source_dir = source_dir.resolve()
-        job_id = uuid.uuid4().hex[:12]
+        job_id = generate_name()
         total = len(file_paths)
         self._tracker.create_job(job_id, source_dir, total_files=total, index_name=self._index_name)
         self._tracker.update_total_files(job_id, total)
@@ -198,7 +198,7 @@ class IngestPipeline:
         self._backend.initialize()
 
         source_dir = source_dir.resolve()
-        job_id = uuid.uuid4().hex[:12]
+        job_id = generate_name()
         # Create with total_files=0; the walker updates it as it discovers files
         self._tracker.create_job(job_id, source_dir, total_files=0, index_name=self._index_name)
 

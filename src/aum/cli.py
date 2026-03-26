@@ -243,8 +243,9 @@ def _run_embed_job(
     Returns the completed IngestJob.
     """
     import time
-    import uuid
     from contextlib import nullcontext
+
+    from aum.names import generate_name
 
     from rich.console import Console as RichConsole
     from rich.live import Live
@@ -263,7 +264,7 @@ def _run_embed_job(
             return None
         scroll_source = search.scroll_unembedded(batch_size=bs)
 
-    job_id = uuid.uuid4().hex[:12]
+    job_id = generate_name()
     tracker.create_job(
         job_id, source_dir=Path("."), total_files=total,
         index_name=idx, job_type=JobType.EMBED,
@@ -647,12 +648,12 @@ def list_jobs(status: str | None) -> None:
         click.echo("No jobs found.")
         return
 
-    click.echo(f"{'JOB ID':<14} {'TYPE':<8} {'INDEX':<16} {'STATUS':<12} {'FILES':<8} {'OK':<8} {'EMPTY':<8} {'FAILED':<8} {'CREATED'}")
-    click.echo("-" * 108)
+    click.echo(f"{'JOB ID':<26} {'TYPE':<8} {'INDEX':<16} {'STATUS':<12} {'FILES':<8} {'OK':<8} {'EMPTY':<8} {'FAILED':<8} {'CREATED'}")
+    click.echo("-" * 120)
     for j in jobs:
         files = str(j.total_files) if j.total_files else "?"
         created = f"{j.created_at:%Y-%m-%d %H:%M}"
-        click.echo(f"{j.job_id:<14} {j.job_type.value:<8} {j.index_name:<16} {j.status.value:<12} {files:<8} {j.processed:<8} {j.empty:<8} {j.failed:<8} {created}")
+        click.echo(f"{j.job_id:<26} {j.job_type.value:<8} {j.index_name:<16} {j.status.value:<12} {files:<8} {j.processed:<8} {j.empty:<8} {j.failed:<8} {created}")
 
 
 @main.command("job")
