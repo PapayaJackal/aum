@@ -89,7 +89,7 @@ def make_tracker(config: AumConfig) -> JobTracker:
 
 
 def make_local_auth(config: AumConfig) -> LocalAuth:
-    return LocalAuth(_get_db(config))
+    return LocalAuth(_get_db(config), password_min_length=config.password_min_length)
 
 
 def make_token_manager(config: AumConfig) -> TokenManager:

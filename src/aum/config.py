@@ -80,6 +80,7 @@ class AumConfig(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 720
     refresh_token_expire_days: int = 7
+    password_min_length: int = 8
     oauth_providers: list[OAuthProvider] = Field(default_factory=list)
 
     # Logging
