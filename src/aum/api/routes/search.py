@@ -18,15 +18,17 @@ from aum.api.deps import (
 )
 from aum.auth.models import User
 from aum.auth.permissions import PermissionDeniedError, PermissionManager
+from aum.search.base import HIDDEN_METADATA_KEYS
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/api", tags=["search"])
 
 _INTERNAL_METADATA_KEYS = {"_aum_display_path", "_aum_extracted_from"}
+_EXCLUDED_METADATA_KEYS = _INTERNAL_METADATA_KEYS | HIDDEN_METADATA_KEYS
 
 
 def _clean_metadata(metadata: dict) -> dict:
-    return {k: v for k, v in metadata.items() if k not in _INTERNAL_METADATA_KEYS}
+    return {k: v for k, v in metadata.items() if k not in _EXCLUDED_METADATA_KEYS}
 
 
 class SearchResultResponse(BaseModel):
