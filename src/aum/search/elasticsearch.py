@@ -108,6 +108,7 @@ class ElasticsearchBackend:
             "properties": {
                 "source_path": {"type": "keyword"},
                 "display_path": {"type": "keyword"},
+                "extracted_from": {"type": "keyword"},
                 "content": {"type": "text", "analyzer": "standard"},
                 "metadata": {"type": "object", "enabled": False},
                 "meta": {
@@ -136,6 +137,7 @@ class ElasticsearchBackend:
         body: dict = {
             "source_path": str(document.source_path),
             "display_path": document.metadata.get("_aum_display_path", ""),
+            "extracted_from": document.metadata.get("_aum_extracted_from", ""),
             "content": document.content,
             "metadata": document.metadata,
             "meta": _extract_indexed_meta(document.metadata),
@@ -156,6 +158,7 @@ class ElasticsearchBackend:
             body: dict = {
                 "source_path": str(document.source_path),
                 "display_path": document.metadata.get("_aum_display_path", ""),
+                "extracted_from": document.metadata.get("_aum_extracted_from", ""),
                 "content": document.content,
                 "metadata": document.metadata,
                 "meta": _extract_indexed_meta(document.metadata),
@@ -263,9 +266,36 @@ class ElasticsearchBackend:
                 score=1.0,
                 snippet=source.get("content", ""),
                 metadata=metadata,
+                extracted_from=source.get("extracted_from", ""),
             )
         except NotFoundError:
             return None
+
+    def find_attachments(self, display_path: str) -> list[SearchResult]:
+        """Find documents that were extracted from the given display_path."""
+        body: dict = {
+            "query": {"term": {"extracted_from": display_path}},
+            "size": 200,
+        }
+        try:
+            resp = self._client.search(index=self._index, body=body)
+        except NotFoundError:
+            return []
+        results, _ = self._parse_hits(resp)
+        return results
+
+    def find_by_display_path(self, display_path: str) -> SearchResult | None:
+        """Find a single document by exact display_path."""
+        body: dict = {
+            "query": {"term": {"display_path": display_path}},
+            "size": 1,
+        }
+        try:
+            resp = self._client.search(index=self._index, body=body)
+        except NotFoundError:
+            return None
+        results, _ = self._parse_hits(resp)
+        return results[0] if results else None
 
     def list_indices(self) -> list[str]:
         try:
@@ -299,6 +329,7 @@ class ElasticsearchBackend:
                     score=hit.get("_score", 0.0),
                     snippet=snippet,
                     metadata=metadata,
+                    extracted_from=source.get("extracted_from", ""),
                 )
             )
         return results, total

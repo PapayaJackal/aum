@@ -98,11 +98,18 @@ export function search(
 
 // Documents
 
+export interface AttachmentRef {
+  doc_id: string;
+  display_path: string;
+}
+
 export interface DocumentDetail {
   doc_id: string;
   display_path: string;
   content: string;
   metadata: Record<string, string>;
+  attachments: AttachmentRef[];
+  extracted_from: AttachmentRef | null;
 }
 
 export function getDocument(docId: string, index: string = ""): Promise<DocumentDetail> {

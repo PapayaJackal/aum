@@ -47,7 +47,7 @@
       <button class="logout-btn" onclick={logout}>Logout</button>
     </nav>
   </header>
-  <main><Document {docId} index={docIndex} /></main>
+  <main><Document {docId} index={docIndex} qs={restQs} /></main>
 
 {:else}
   <Search>

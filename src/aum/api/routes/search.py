@@ -21,7 +21,7 @@ from aum.auth.permissions import PermissionDeniedError, PermissionManager
 log = structlog.get_logger()
 router = APIRouter(prefix="/api", tags=["search"])
 
-_INTERNAL_METADATA_KEYS = {"_aum_display_path"}
+_INTERNAL_METADATA_KEYS = {"_aum_display_path", "_aum_extracted_from"}
 
 
 def _clean_metadata(metadata: dict) -> dict:
@@ -42,11 +42,23 @@ class SearchResponse(BaseModel):
     facets: dict[str, list[str]] | None = None
 
 
+class AttachmentResponse(BaseModel):
+    doc_id: str
+    display_path: str
+
+
+class ExtractedFromResponse(BaseModel):
+    doc_id: str
+    display_path: str
+
+
 class DocumentResponse(BaseModel):
     doc_id: str
     display_path: str
     content: str
     metadata: dict[str, str | list[str]]
+    attachments: list[AttachmentResponse] = []
+    extracted_from: ExtractedFromResponse | None = None
 
 
 class IndicesResponse(BaseModel):
@@ -145,11 +157,26 @@ async def get_document(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    attachments = [
+        AttachmentResponse(doc_id=a.doc_id, display_path=a.display_path)
+        for a in backend.find_attachments(doc.display_path)
+    ]
+
+    extracted_from: ExtractedFromResponse | None = None
+    if doc.extracted_from:
+        parent = backend.find_by_display_path(doc.extracted_from)
+        if parent is not None:
+            extracted_from = ExtractedFromResponse(
+                doc_id=parent.doc_id, display_path=parent.display_path,
+            )
+
     return DocumentResponse(
         doc_id=doc.doc_id,
         display_path=doc.display_path,
         content=doc.snippet,
         metadata=_clean_metadata(doc.metadata),
+        attachments=attachments,
+        extracted_from=extracted_from,
     )
 
 

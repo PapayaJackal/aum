@@ -14,6 +14,7 @@ class SearchResult:
     score: float
     snippet: str
     metadata: dict[str, str | list[str]] = field(default_factory=dict)
+    extracted_from: str = ""
 
 
 class SearchBackend(Protocol):

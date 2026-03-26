@@ -1,11 +1,15 @@
 <script lang="ts">
   import { getDocument, downloadUrl, type DocumentDetail } from "../lib/api";
 
-  let { docId, index = "" }: { docId: string; index: string } = $props();
+  let { docId, index = "", qs = "" }: { docId: string; index: string; qs: string } = $props();
 
   let doc = $state<DocumentDetail | null>(null);
   let loading = $state(true);
   let error = $state("");
+
+  function docHref(id: string): string {
+    return `#/document/${encodeURIComponent(index)}/${id}${qs}`;
+  }
 
   $effect(() => {
     loading = true;
@@ -25,7 +29,11 @@
   <div class="doc-header">
     <div class="doc-title">
       <h2>{doc.display_path.split("/").pop()}</h2>
-      <p class="doc-path">{index}/{doc.display_path}</p>
+      {#if doc.extracted_from}
+        <p class="doc-path">Extracted from <a href={docHref(doc.extracted_from.doc_id)}>{doc.extracted_from.display_path}</a></p>
+      {:else}
+        <p class="doc-path">{index}/{doc.display_path}</p>
+      {/if}
     </div>
     <a class="download-btn" href={downloadUrl(docId, index)} download>Download original</a>
   </div>
@@ -48,6 +56,17 @@
     <h3>Content</h3>
     <pre>{doc.content}</pre>
   </div>
+
+  {#if doc.attachments.length > 0}
+    <div class="attachments-section">
+      <h3>Attachments</h3>
+      <ul>
+        {#each doc.attachments as att}
+          <li><a href={docHref(att.doc_id)}>{att.display_path.split("/").pop()}</a></li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -88,6 +107,54 @@
   .download-btn:hover {
     background: #4a7cf7;
     color: white;
+  }
+
+  .doc-path a {
+    color: #4a7cf7;
+    text-decoration: none;
+  }
+
+  .doc-path a:hover {
+    text-decoration: underline;
+  }
+
+  .attachments-section {
+    background: white;
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1rem 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  }
+
+  .attachments-section h3 {
+    margin: 0 0 0.5rem;
+    font-size: 0.95rem;
+    color: #666;
+  }
+
+  .attachments-section ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .attachments-section li {
+    padding: 0.3rem 0;
+    border-bottom: 1px solid #eee;
+    font-size: 0.9rem;
+  }
+
+  .attachments-section li:last-child {
+    border-bottom: none;
+  }
+
+  .attachments-section a {
+    color: #4a7cf7;
+    text-decoration: none;
+  }
+
+  .attachments-section a:hover {
+    text-decoration: underline;
   }
 
   .loading {

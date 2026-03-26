@@ -326,6 +326,9 @@ class IngestPipeline:
         ``/data/inbox/email.eml/attachment.pdf``).  For top-level documents
         it is unset.  In both cases we resolve it to a path relative to the
         source directory so the search API can return it directly.
+
+        Also relativizes ``_aum_extracted_from`` (the parent container's
+        display path) so it matches the parent document's stored display_path.
         """
         logical = doc.metadata.get("_aum_display_path") or str(doc.source_path)
         p = Path(logical)
@@ -334,6 +337,16 @@ class IngestPipeline:
         except ValueError:
             display = p.name
         doc.metadata["_aum_display_path"] = display
+
+        extracted_from = doc.metadata.get("_aum_extracted_from")
+        if extracted_from:
+            ef = Path(str(extracted_from))
+            try:
+                doc.metadata["_aum_extracted_from"] = str(ef.relative_to(source_dir))
+            except ValueError:
+                # Can't relativize — drop the field rather than leak an
+                # absolute path through the API.
+                del doc.metadata["_aum_extracted_from"]
 
     def _extract_one(
         self,
