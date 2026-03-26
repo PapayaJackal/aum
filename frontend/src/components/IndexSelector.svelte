@@ -49,9 +49,15 @@
       open = false;
     }
   }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && open) {
+      open = false;
+    }
+  }
 </script>
 
-<svelte:window onclick={handleClickOutside} />
+<svelte:window onclick={handleClickOutside} onkeydown={handleKeydown} />
 
 <div class="relative shrink-0" bind:this={dropdownEl}>
   <button type="button"
