@@ -38,7 +38,7 @@
 
 <div class="max-w-sm mx-auto mt-16 p-8 bg-white rounded-lg shadow-md">
   <h1 class="m-0 mb-1 text-center text-(--color-brand) text-5xl">&#x0950;</h1>
-  <p class="text-center text-gray-400 mt-0 mb-6">seek and ye shall find</p>
+  <p class="text-center text-gray-400 mt-0 mb-6">you know, for grep</p>
 
   <form onsubmit={handleLogin} class="flex flex-col gap-4">
     {#if error}
