@@ -1,16 +1,17 @@
 <script lang="ts">
   import { getDocument, downloadDocument, type DocumentDetail } from "../lib/api";
-  import { searchState } from "../lib/searchState.svelte";
   import { highlightTerms } from "../lib/highlight";
 
   let {
     docId,
     index = "",
+    highlightQuery = "",
     onClose,
     onNavigateDoc,
   }: {
     docId: string;
     index: string;
+    highlightQuery?: string;
     onClose: () => void;
     onNavigateDoc: (docId: string, index: string) => void;
   } = $props();
@@ -118,7 +119,7 @@
     const facets: Record<string, string[]> = {};
     facets[label] = [value];
     const params = new URLSearchParams();
-    params.set("q", searchState.query || "*");
+    params.set("q", highlightQuery || "*");
     params.set("facets", JSON.stringify(facets));
     return `#/?${params.toString()}`;
   }
@@ -195,7 +196,7 @@
   });
 
   let contentHtml = $derived(
-    doc ? highlightTerms(doc.content, searchState.query) : "",
+    doc ? highlightTerms(doc.content, highlightQuery) : "",
   );
 </script>
 

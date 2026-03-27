@@ -64,6 +64,7 @@ const _prefs = loadPrefs();
 
 export const searchState = $state<{
   query: string;
+  submittedQuery: string;
   searchType: "text" | "hybrid";
   selectedIndices: string[];
   results: SearchResult[];
@@ -78,6 +79,7 @@ export const searchState = $state<{
   indexSearchTypes: Record<string, "text" | "hybrid">;
 }>({
   query: "",
+  submittedQuery: "",
   searchType: _prefs.searchType,
   selectedIndices: _prefs.selectedIndices,
   results: [] as SearchResult[],
@@ -94,7 +96,7 @@ export const searchState = $state<{
 
 export function getSearchQs(): string {
   const params = new URLSearchParams();
-  if (searchState.query) params.set("q", searchState.query);
+  if (searchState.submittedQuery) params.set("q", searchState.submittedQuery);
   params.set("type", searchState.searchType);
   if (searchState.selectedIndices.length > 0) params.set("index", searchState.selectedIndices.join(","));
   if (searchState.currentPage > 1) params.set("page", String(searchState.currentPage));

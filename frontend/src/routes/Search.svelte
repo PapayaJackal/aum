@@ -83,6 +83,7 @@
     loading = true;
     error = "";
     searchState.searched = true;
+    searchState.submittedQuery = searchState.query;
     searchState.currentPage = page;
     const offset = (page - 1) * searchState.pageSize;
     try {
@@ -246,7 +247,7 @@
 <svelte:window onhashchange={onHashChange} />
 
 <svelte:head>
-  <title>{searchState.searched && searchState.query ? `aum - ${searchState.query}` : "aum"}</title>
+  <title>{searchState.submittedQuery ? `aum - ${searchState.submittedQuery}` : "aum"}</title>
 </svelte:head>
 
 {#snippet searchForm()}
@@ -350,6 +351,7 @@
             <Document
               docId={searchState.selectedDocId}
               index={searchState.selectedDocIndex}
+              highlightQuery={searchState.submittedQuery}
               onClose={closeSidebar}
               onNavigateDoc={navigateDoc}
             />
