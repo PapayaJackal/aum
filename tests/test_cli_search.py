@@ -290,9 +290,7 @@ class TestFilters:
         )
 
     def test_multiple_file_type_filters(self, runner, mock_backend):
-        result = runner.invoke(
-            main, ["search", "russia", "--file-type", "PDF", "--file-type", "Word"]
-        )
+        result = runner.invoke(main, ["search", "russia", "--file-type", "PDF", "--file-type", "Word"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["filters"]["File Type"] == ["PDF", "Word"]
@@ -304,14 +302,10 @@ class TestFilters:
         assert call_kwargs.kwargs["filters"]["Creator"] == ["Alice"]
 
     def test_email_filter(self, runner, mock_backend):
-        result = runner.invoke(
-            main, ["search", "russia", "--email", "alice@example.com"]
-        )
+        result = runner.invoke(main, ["search", "russia", "--email", "alice@example.com"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
-        assert call_kwargs.kwargs["filters"]["Email Addresses"] == [
-            "alice@example.com"
-        ]
+        assert call_kwargs.kwargs["filters"]["Email Addresses"] == ["alice@example.com"]
 
     def test_created_from_filter(self, runner, mock_backend):
         result = runner.invoke(main, ["search", "russia", "--created-from", "2020"])
@@ -408,12 +402,22 @@ class TestMultiIndex:
     def test_multi_index_shows_index_per_result(self, runner, mock_backend):
         results_with_index = [
             SearchResult(
-                doc_id="d1", source_path="/a", display_path="a.pdf",
-                score=5.0, snippet="text", metadata={}, index="idx1",
+                doc_id="d1",
+                source_path="/a",
+                display_path="a.pdf",
+                score=5.0,
+                snippet="text",
+                metadata={},
+                index="idx1",
             ),
             SearchResult(
-                doc_id="d2", source_path="/b", display_path="b.pdf",
-                score=4.0, snippet="text", metadata={}, index="idx2",
+                doc_id="d2",
+                source_path="/b",
+                display_path="b.pdf",
+                score=4.0,
+                snippet="text",
+                metadata={},
+                index="idx2",
             ),
         ]
         mock_backend.search_text.return_value = (results_with_index, 2, None)
@@ -425,8 +429,13 @@ class TestMultiIndex:
     def test_single_index_no_index_prefix(self, runner, mock_backend):
         results_with_index = [
             SearchResult(
-                doc_id="d1", source_path="/a", display_path="a.pdf",
-                score=5.0, snippet="text", metadata={}, index="myidx",
+                doc_id="d1",
+                source_path="/a",
+                display_path="a.pdf",
+                score=5.0,
+                snippet="text",
+                metadata={},
+                index="myidx",
             ),
         ]
         mock_backend.search_text.return_value = (results_with_index, 1, None)
@@ -442,7 +451,9 @@ class TestMultiIndex:
 
         result = runner.invoke(main, ["search", "test", "--type", "hybrid", "--index", "idx1", "--index", "idx2"])
         assert result.exit_code != 0
-        assert "no embeddings found for index 'idx1'" in result.output.lower() or "no embeddings" in result.output.lower()
+        assert (
+            "no embeddings found for index 'idx1'" in result.output.lower() or "no embeddings" in result.output.lower()
+        )
 
     def test_hybrid_multi_index_model_mismatch(self, runner, mock_backend, monkeypatch, tmp_path):
         mock_tracker = MagicMock()

@@ -92,8 +92,12 @@ class JobTracker:
             )
             self._conn.commit()
         log.info(
-            "created job", job_id=job_id, job_type=job_type.value,
-            source_dir=str(source_dir), index_name=index_name, total_files=total_files,
+            "created job",
+            job_id=job_id,
+            job_type=job_type.value,
+            source_dir=str(source_dir),
+            index_name=index_name,
+            total_files=total_files,
         )
         return IngestJob(
             job_id=job_id,
@@ -157,9 +161,7 @@ class JobTracker:
         return [self._row_to_job(row) for row in rows]
 
     def get_errors(self, job_id: str) -> list[IngestError]:
-        rows = self._conn.execute(
-            "SELECT * FROM job_errors WHERE job_id = ? ORDER BY timestamp", (job_id,)
-        ).fetchall()
+        rows = self._conn.execute("SELECT * FROM job_errors WHERE job_id = ? ORDER BY timestamp", (job_id,)).fetchall()
         return [
             IngestError(
                 file_path=Path(row["file_path"]),
@@ -205,8 +207,7 @@ class JobTracker:
             ).fetchall()
         else:
             rows = self._conn.execute(
-                "SELECT DISTINCT file_path FROM job_errors"
-                " WHERE job_id = ? AND error_type != 'EmptyExtraction'",
+                "SELECT DISTINCT file_path FROM job_errors WHERE job_id = ? AND error_type != 'EmptyExtraction'",
                 (job_id,),
             ).fetchall()
         return [Path(row["file_path"]) for row in rows]
@@ -246,4 +247,6 @@ class JobTracker:
                 (index_name, model, backend, dimension, now, model, backend, dimension, now),
             )
             self._conn.commit()
-        log.info("stored embedding model for index", index_name=index_name, model=model, backend=backend, dimension=dimension)
+        log.info(
+            "stored embedding model for index", index_name=index_name, model=model, backend=backend, dimension=dimension
+        )

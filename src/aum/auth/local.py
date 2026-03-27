@@ -72,9 +72,7 @@ class LocalAuth:
 
     def authenticate(self, username: str, password: str) -> User:
         AUTH_REQUESTS.labels(method="local").inc()
-        row = self._conn.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
-        ).fetchone()
+        row = self._conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
 
         if row is None:
             AUTH_FAILURES.labels(reason="user_not_found").inc()
@@ -93,9 +91,7 @@ class LocalAuth:
         # Rehash if argon2 params have changed
         if _hasher.check_needs_rehash(row["password_hash"]):
             new_hash = _hasher.hash(password)
-            self._conn.execute(
-                "UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, row["id"])
-            )
+            self._conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, row["id"]))
             self._conn.commit()
 
         return row_to_user(row)
@@ -105,9 +101,7 @@ class LocalAuth:
         return row_to_user(row) if row else None
 
     def get_user_by_username(self, username: str) -> User | None:
-        row = self._conn.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
-        ).fetchone()
+        row = self._conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         return row_to_user(row) if row else None
 
     def list_users(self) -> list[User]:
@@ -145,4 +139,3 @@ class LocalAuth:
         if updated:
             log.info("user admin status changed", username=username, is_admin=is_admin)
         return updated
-

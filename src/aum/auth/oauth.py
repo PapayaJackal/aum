@@ -109,11 +109,8 @@ class OAuthManager:
         candidate = username
         counter = 1
         while True:
-            row = self._conn.execute(
-                "SELECT 1 FROM users WHERE username = ?", (candidate,)
-            ).fetchone()
+            row = self._conn.execute("SELECT 1 FROM users WHERE username = ?", (candidate,)).fetchone()
             if row is None:
                 return candidate
             candidate = f"{username}_{counter}"
             counter += 1
-

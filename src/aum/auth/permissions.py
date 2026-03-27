@@ -23,9 +23,7 @@ class PermissionManager:
 
     def grant(self, username: str, index_name: str) -> bool:
         """Grant a user access to an index. Returns True if newly granted."""
-        row = self._conn.execute(
-            "SELECT id FROM users WHERE username = ?", (username,)
-        ).fetchone()
+        row = self._conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if row is None:
             raise ValueError(f"User not found: {username}")
 
@@ -42,9 +40,7 @@ class PermissionManager:
 
     def revoke(self, username: str, index_name: str) -> bool:
         """Revoke a user's access to an index. Returns True if was revoked."""
-        row = self._conn.execute(
-            "SELECT id FROM users WHERE username = ?", (username,)
-        ).fetchone()
+        row = self._conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if row is None:
             raise ValueError(f"User not found: {username}")
 

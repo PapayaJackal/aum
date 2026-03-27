@@ -84,10 +84,12 @@ class TestListIndices:
         app.dependency_overrides[get_oauth_manager] = lambda: None
         self.app = app
 
-        with patch(f"{_SEARCH}.get_config", return_value=config), \
-             patch(f"{_SEARCH}.get_permission_manager", return_value=permissions), \
-             patch(f"{_SEARCH}.make_search_backend", return_value=mock_backend), \
-             patch(f"{_DEPS}.make_tracker", return_value=mock_tracker):
+        with (
+            patch(f"{_SEARCH}.get_config", return_value=config),
+            patch(f"{_SEARCH}.get_permission_manager", return_value=permissions),
+            patch(f"{_SEARCH}.make_search_backend", return_value=mock_backend),
+            patch(f"{_DEPS}.make_tracker", return_value=mock_tracker),
+        ):
             self.client = TestClient(app)
             yield
 
@@ -125,10 +127,12 @@ class TestSearch:
         app.dependency_overrides[get_oauth_manager] = lambda: None
         self.app = app
 
-        with patch(f"{_SEARCH}.get_config", return_value=config), \
-             patch(f"{_SEARCH}.get_permission_manager", return_value=permissions), \
-             patch(f"{_SEARCH}.make_search_backend", return_value=mock_backend), \
-             patch(f"{_DEPS}.make_tracker", return_value=mock_tracker):
+        with (
+            patch(f"{_SEARCH}.get_config", return_value=config),
+            patch(f"{_SEARCH}.get_permission_manager", return_value=permissions),
+            patch(f"{_SEARCH}.make_search_backend", return_value=mock_backend),
+            patch(f"{_DEPS}.make_tracker", return_value=mock_tracker),
+        ):
             self.client = TestClient(app)
             yield
 
@@ -185,9 +189,11 @@ class TestGetDocument:
         app.dependency_overrides[get_oauth_manager] = lambda: None
         self.app = app
 
-        with patch(f"{_SEARCH}.get_config", return_value=config), \
-             patch(f"{_SEARCH}.get_permission_manager", return_value=permissions), \
-             patch(f"{_SEARCH}.make_search_backend", return_value=mock_backend):
+        with (
+            patch(f"{_SEARCH}.get_config", return_value=config),
+            patch(f"{_SEARCH}.get_permission_manager", return_value=permissions),
+            patch(f"{_SEARCH}.make_search_backend", return_value=mock_backend),
+        ):
             self.client = TestClient(app)
             yield
 
@@ -217,9 +223,11 @@ class TestDownloadDocument:
         app.dependency_overrides[get_current_user] = lambda: self.admin
         app.dependency_overrides[get_oauth_manager] = lambda: None
 
-        with patch(f"{_SEARCH}.get_config", return_value=config), \
-             patch(f"{_SEARCH}.get_permission_manager", return_value=permissions), \
-             patch(f"{_SEARCH}.make_search_backend", return_value=mock_backend):
+        with (
+            patch(f"{_SEARCH}.get_config", return_value=config),
+            patch(f"{_SEARCH}.get_permission_manager", return_value=permissions),
+            patch(f"{_SEARCH}.make_search_backend", return_value=mock_backend),
+        ):
             self.client = TestClient(app)
             yield
 

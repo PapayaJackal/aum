@@ -50,13 +50,15 @@ def _make_openai_handler(dimension: int = 1024):
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         texts = body["input"]
-        data = [
-            {"object": "embedding", "index": i, "embedding": [0.2] * dimension}
-            for i in range(len(texts))
-        ]
+        data = [{"object": "embedding", "index": i, "embedding": [0.2] * dimension} for i in range(len(texts))]
         return httpx.Response(
             200,
-            json={"object": "list", "data": data, "model": body["model"], "usage": {"prompt_tokens": 10, "total_tokens": 10}},
+            json={
+                "object": "list",
+                "data": data,
+                "model": body["model"],
+                "usage": {"prompt_tokens": 10, "total_tokens": 10},
+            },
         )
 
     return handler

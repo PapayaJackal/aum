@@ -19,7 +19,7 @@
       ? "Select dataset"
       : selectedIndices.length === 1
         ? selectedIndices[0]
-        : `${selectedIndices.length} datasets`
+        : `${selectedIndices.length} datasets`,
   );
 
   function toggle(name: string) {
@@ -31,9 +31,7 @@
     onchange(next);
   }
 
-  let allSelected = $derived(
-    indices.length > 0 && indices.every((i) => selectedIndices.includes(i.name))
-  );
+  let allSelected = $derived(indices.length > 0 && indices.every((i) => selectedIndices.includes(i.name)));
 
   function toggleAll() {
     if (allSelected) {
@@ -60,7 +58,8 @@
 <svelte:window onclick={handleClickOutside} onkeydown={handleKeydown} />
 
 <div class="relative shrink-0" bind:this={dropdownEl}>
-  <button type="button"
+  <button
+    type="button"
     class="flex items-center gap-1 px-2 py-[0.45rem] border-none rounded bg-white/90 text-sm cursor-pointer whitespace-nowrap text-gray-800 hover:bg-white"
     onclick={() => (open = !open)}
   >
@@ -69,9 +68,12 @@
   </button>
 
   {#if open}
-    <div class="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-md shadow-lg z-50 min-w-[180px] max-h-[300px] overflow-y-auto py-1">
+    <div
+      class="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-md shadow-lg z-50 min-w-[180px] max-h-[300px] overflow-y-auto py-1"
+    >
       {#if indices.length > 1}
-        <button type="button"
+        <button
+          type="button"
           class="block w-full text-left px-3 py-1.5 border-none bg-transparent text-sm text-(--color-accent) cursor-pointer border-b border-b-gray-200 mb-0.5 hover:bg-blue-50"
           onclick={toggleAll}
         >
@@ -88,7 +90,9 @@
           />
           <span class="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{idx.name}</span>
           {#if idx.has_embeddings}
-            <span class="text-[0.7rem] bg-green-50 text-green-700 px-1.5 py-0.5 rounded shrink-0" title="Has embeddings">hybrid</span>
+            <span class="text-[0.7rem] bg-green-50 text-green-700 px-1.5 py-0.5 rounded shrink-0" title="Has embeddings"
+              >hybrid</span
+            >
           {/if}
         </label>
       {/each}

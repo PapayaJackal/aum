@@ -76,7 +76,12 @@ def make_embedder(config: AumConfig):
 
 def make_search_backend(config: AumConfig, index: str | None = None) -> SearchBackend:
     if config.search_backend == "elasticsearch":
-        return ElasticsearchBackend(url=config.es_url, index=index or config.es_index, rrf=config.es_rrf, max_highlight_offset=config.es_max_highlight_offset)
+        return ElasticsearchBackend(
+            url=config.es_url,
+            index=index or config.es_index,
+            rrf=config.es_rrf,
+            max_highlight_offset=config.es_max_highlight_offset,
+        )
     raise ValueError(f"Unsupported search backend: {config.search_backend!r}")
 
 

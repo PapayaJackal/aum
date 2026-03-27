@@ -30,7 +30,6 @@
     </nav>
   </header>
   <main class="px-4"><Login /></main>
-
 {:else}
   <Search>
     {#snippet header(form)}
@@ -39,8 +38,8 @@
         {@render form()}
         <button
           class="bg-transparent border border-gray-500 text-gray-300 px-3 py-1 rounded cursor-pointer shrink-0 text-sm hover:border-white hover:text-white"
-          onclick={logout}
-        >Logout</button>
+          onclick={logout}>Logout</button
+        >
       </header>
     {/snippet}
   </Search>

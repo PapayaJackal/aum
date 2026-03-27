@@ -87,11 +87,11 @@ async def list_indices(
         perms = get_permission_manager()
         all_indices = [idx for idx in all_indices if perms.check(user, idx)]
     from aum.api.deps import make_tracker
+
     tracker = make_tracker(config)
     return IndicesResponse(
         indices=[
-            IndexInfo(name=idx, has_embeddings=tracker.get_embedding_model(idx) is not None)
-            for idx in all_indices
+            IndexInfo(name=idx, has_embeddings=tracker.get_embedding_model(idx) is not None) for idx in all_indices
         ]
     )
 
@@ -134,15 +134,30 @@ async def search(
     include_facets = offset == 0 or bool(parsed_filters)
 
     if type == "text":
-        results, total, facets = backend.search_text(q, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
+        results, total, facets = backend.search_text(
+            q, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters
+        )
     elif type == "hybrid":
         embedder = _get_embedder_for_indices(idx_list)
         vector = embedder.embed_query(q)
-        results, total, facets = backend.search_hybrid(q, vector, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters)
+        results, total, facets = backend.search_hybrid(
+            q, vector, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters
+        )
     else:
         raise HTTPException(status_code=400, detail=f"Unknown search type: {type}")
 
-    log.info("search completed", query=q, type=type, index=joined_index, limit=limit, offset=offset, results=len(results), total=total, facets_included=include_facets, filters=parsed_filters)
+    log.info(
+        "search completed",
+        query=q,
+        type=type,
+        index=joined_index,
+        limit=limit,
+        offset=offset,
+        results=len(results),
+        total=total,
+        facets_included=include_facets,
+        filters=parsed_filters,
+    )
 
     return SearchResponse(
         results=[
@@ -191,7 +206,8 @@ async def get_document(
         parent = backend.find_by_display_path(doc.extracted_from)
         if parent is not None:
             extracted_from = ExtractedFromResponse(
-                doc_id=parent.doc_id, display_path=parent.display_path,
+                doc_id=parent.doc_id,
+                display_path=parent.display_path,
             )
 
     return DocumentResponse(
@@ -271,8 +287,10 @@ def _get_embedder_for_indices(idx_list: list[str]):  # noqa: ANN202
         raise HTTPException(status_code=400, detail="No indices provided for embedding lookup.")
     idx_model, idx_backend, _ = model_info
     # Use a shallow copy to avoid mutating the @lru_cache'd config singleton
-    embed_config = config.model_copy(update={
-        "embeddings_model": idx_model,
-        "embeddings_backend": idx_backend,
-    })
+    embed_config = config.model_copy(
+        update={
+            "embeddings_model": idx_model,
+            "embeddings_backend": idx_backend,
+        }
+    )
     return make_embedder(embed_config)

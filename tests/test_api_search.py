@@ -17,10 +17,13 @@ class TestGetEmbedderForIndices:
         mock_tracker = MagicMock()
         mock_tracker.get_embedding_model.return_value = None
 
-        with patch("aum.api.routes.search.get_config") as mock_config, \
-             patch("aum.api.deps.make_tracker", return_value=mock_tracker):
+        with (
+            patch("aum.api.routes.search.get_config") as mock_config,
+            patch("aum.api.deps.make_tracker", return_value=mock_tracker),
+        ):
             mock_config.return_value = MagicMock()
             from fastapi import HTTPException
+
             with pytest.raises(HTTPException) as exc_info:
                 _get_embedder_for_indices(["idx1"])
             assert exc_info.value.status_code == 400
@@ -33,10 +36,13 @@ class TestGetEmbedderForIndices:
             None,
         ]
 
-        with patch("aum.api.routes.search.get_config") as mock_config, \
-             patch("aum.api.deps.make_tracker", return_value=mock_tracker):
+        with (
+            patch("aum.api.routes.search.get_config") as mock_config,
+            patch("aum.api.deps.make_tracker", return_value=mock_tracker),
+        ):
             mock_config.return_value = MagicMock()
             from fastapi import HTTPException
+
             with pytest.raises(HTTPException) as exc_info:
                 _get_embedder_for_indices(["idx1", "idx2"])
             assert exc_info.value.status_code == 400
@@ -49,10 +55,13 @@ class TestGetEmbedderForIndices:
             ("model-b", "ollama", 768),
         ]
 
-        with patch("aum.api.routes.search.get_config") as mock_config, \
-             patch("aum.api.deps.make_tracker", return_value=mock_tracker):
+        with (
+            patch("aum.api.routes.search.get_config") as mock_config,
+            patch("aum.api.deps.make_tracker", return_value=mock_tracker),
+        ):
             mock_config.return_value = MagicMock()
             from fastapi import HTTPException
+
             with pytest.raises(HTTPException) as exc_info:
                 _get_embedder_for_indices(["idx1", "idx2"])
             assert exc_info.value.status_code == 400
@@ -66,16 +75,20 @@ class TestGetEmbedderForIndices:
         ]
         mock_embedder = MagicMock()
 
-        with patch("aum.api.routes.search.get_config") as mock_config, \
-             patch("aum.api.deps.make_tracker", return_value=mock_tracker), \
-             patch("aum.api.deps.make_embedder", return_value=mock_embedder) as mock_make_embedder:
+        with (
+            patch("aum.api.routes.search.get_config") as mock_config,
+            patch("aum.api.deps.make_tracker", return_value=mock_tracker),
+            patch("aum.api.deps.make_embedder", return_value=mock_embedder) as mock_make_embedder,
+        ):
             cfg = MagicMock()
             cfg.model_copy.return_value = cfg
             mock_config.return_value = cfg
             result = _get_embedder_for_indices(["idx1", "idx2"])
             assert result is mock_embedder
             # Verify config was copied with correct model info, not mutated
-            cfg.model_copy.assert_called_once_with(update={
-                "embeddings_model": "model-a",
-                "embeddings_backend": "ollama",
-            })
+            cfg.model_copy.assert_called_once_with(
+                update={
+                    "embeddings_model": "model-a",
+                    "embeddings_backend": "ollama",
+                }
+            )

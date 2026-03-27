@@ -41,7 +41,7 @@ export function savePrefs() {
         selectedIndices: searchState.selectedIndices,
         searchType: searchState.searchType,
         indexSearchTypes: searchState.indexSearchTypes,
-      })
+      }),
     );
   } catch {}
 }

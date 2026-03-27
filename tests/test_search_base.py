@@ -21,10 +21,7 @@ class TestExtractEmail:
         assert extract_email('"Smith, Alice" <Alice.Smith@Corp.COM>') == "alice.smith@corp.com"
 
     def test_unquoted_last_first_with_comma(self):
-        assert (
-            extract_email("johnson, boris <boris.johnson.mp@parliament.uk>")
-            == "boris.johnson.mp@parliament.uk"
-        )
+        assert extract_email("johnson, boris <boris.johnson.mp@parliament.uk>") == "boris.johnson.mp@parliament.uk"
 
     def test_normalizes_to_lowercase(self):
         assert extract_email("USER@DOMAIN.COM") == "user@domain.com"

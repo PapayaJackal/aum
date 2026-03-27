@@ -54,10 +54,7 @@ async function _authFetch(url: string, options: RequestInit = {}): Promise<Respo
   return res;
 }
 
-async function request<T>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await _authFetch(`${BASE}${path}`, {
     ...options,
     headers: { "Content-Type": "application/json", ...(options.headers as Record<string, string>) },
@@ -79,19 +76,14 @@ export interface TokenResponse {
   token_type: string;
 }
 
-export function login(
-  username: string,
-  password: string,
-): Promise<TokenResponse> {
+export function login(username: string, password: string): Promise<TokenResponse> {
   return request("/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
 }
 
-export function refreshToken(
-  refresh_token: string,
-): Promise<TokenResponse> {
+export function refreshToken(refresh_token: string): Promise<TokenResponse> {
   return request("/auth/refresh", {
     method: "POST",
     body: JSON.stringify({ refresh_token }),

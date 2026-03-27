@@ -1,0 +1,19 @@
+[global]
+excludes = [
+  "testdata/**",
+  "data/**",
+  "*.lock",
+  "frontend/node_modules/**",
+  ".venv/**",
+  ".git/**",
+]
+
+[formatter.ruff-format]
+command = "uv"
+options = ["run", "ruff", "format"]
+includes = ["*.py"]
+
+[formatter.prettier]
+command = "./frontend/node_modules/.bin/prettier"
+options = ["--write"]
+includes = ["*.ts", "*.svelte", "*.js"]

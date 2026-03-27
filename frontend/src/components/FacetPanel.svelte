@@ -38,7 +38,11 @@
 
   // Date range helpers
   function dateRange(key: string): { min: number; max: number; lo: number; hi: number } {
-    const values = facets[key]?.map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b) ?? [];
+    const values =
+      facets[key]
+        ?.map(Number)
+        .filter((n) => !isNaN(n))
+        .sort((a, b) => a - b) ?? [];
     const min = values[0] ?? 2000;
     const max = values[values.length - 1] ?? new Date().getFullYear();
     const active = activeFacets[key];
@@ -62,7 +66,10 @@
   <div class="flex justify-between items-center mb-3">
     <h3 class="m-0 text-sm font-semibold">Filters</h3>
     {#if Object.keys(activeFacets).length > 0}
-      <button class="bg-transparent border-none text-indigo-500 text-xs cursor-pointer p-0 hover:underline" onclick={clearAll}>Clear</button>
+      <button
+        class="bg-transparent border-none text-indigo-500 text-xs cursor-pointer p-0 hover:underline"
+        onclick={clearAll}>Clear</button
+      >
     {/if}
   </div>
 

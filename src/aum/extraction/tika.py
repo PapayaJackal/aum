@@ -15,6 +15,7 @@ from aum.models import Document
 
 log = structlog.get_logger()
 
+
 def _condense_whitespace(text: str) -> str:
     """Collapse consecutive blank lines down to at most one.
 
@@ -95,9 +96,7 @@ class TikaExtractor:
         record_error: RecordErrorFn | None = None,
     ) -> list[Document]:
         if depth > self._max_depth:
-            raise ExtractionDepthError(
-                f"extraction depth limit ({self._max_depth}) exceeded at {file_path}"
-            )
+            raise ExtractionDepthError(f"extraction depth limit ({self._max_depth}) exceeded at {file_path}")
 
         log.debug("extracting document", file_path=str(file_path), depth=depth)
         start = time.monotonic()
@@ -110,8 +109,7 @@ class TikaExtractor:
         try:
             unpack_parsed, attachment_paths = self._unpack(file_path)
         except ExtractionError as exc:
-            log.warning("unpack failed, will fall back to direct extraction",
-                        file_path=str(file_path), error=str(exc))
+            log.warning("unpack failed, will fall back to direct extraction", file_path=str(file_path), error=str(exc))
 
         content = _condense_whitespace((unpack_parsed.get("content") or "").strip())
         raw_metadata = unpack_parsed.get("metadata") or {}
@@ -130,8 +128,7 @@ class TikaExtractor:
                     # to index — propagate so the pipeline records a job failure.
                     EXTRACTION_DURATION.observe(time.monotonic() - start)
                     raise
-                log.warning("container extraction failed",
-                            file_path=str(file_path), error=str(exc))
+                log.warning("container extraction failed", file_path=str(file_path), error=str(exc))
 
         EXTRACTION_DURATION.observe(time.monotonic() - start)
 
@@ -142,11 +139,13 @@ class TikaExtractor:
         if _extracted_from is not None:
             metadata["_aum_extracted_from"] = _extracted_from
         if content:
-            documents.append(Document(
-                source_path=file_path,
-                content=content,
-                metadata=metadata,
-            ))
+            documents.append(
+                Document(
+                    source_path=file_path,
+                    content=content,
+                    metadata=metadata,
+                )
+            )
 
         # Recursively extract each attachment.
         # ExtractionDepthError is not caught here — it propagates to the pipeline
@@ -155,12 +154,15 @@ class TikaExtractor:
         for att_path in attachment_paths:
             att_display = container_display / att_path.name
             try:
-                documents.extend(self._extract_recursive(
-                    att_path, depth=depth + 1,
-                    _display_path=att_display,
-                    _extracted_from=str(container_display),
-                    record_error=record_error,
-                ))
+                documents.extend(
+                    self._extract_recursive(
+                        att_path,
+                        depth=depth + 1,
+                        _display_path=att_display,
+                        _extracted_from=str(container_display),
+                        record_error=record_error,
+                    )
+                )
             except ExtractionDepthError:
                 raise
             except ExtractionError as exc:
@@ -210,7 +212,9 @@ class TikaExtractor:
         """
         try:
             raw = tika_parse1(
-                "unpack", str(file_path), self._server_url,
+                "unpack",
+                str(file_path),
+                self._server_url,
                 responseMimeType="application/x-tar",
                 services={"meta": "/meta", "text": "/tika", "all": "/rmeta/xml", "unpack": "/unpack/all"},
                 rawResponse=True,
@@ -225,7 +229,9 @@ class TikaExtractor:
             ) from exc
 
         if status != 200 and not parsed:
-            reason = response_bytes.decode("utf-8", errors="replace").strip()[:200] if response_bytes else "empty response"
+            reason = (
+                response_bytes.decode("utf-8", errors="replace").strip()[:200] if response_bytes else "empty response"
+            )
             EXTRACTION_ERRORS.labels(error_type="UnpackError").inc()
             raise ExtractionError(f"Tika unpack failed for {file_path} (HTTP {status}): {reason}")
 

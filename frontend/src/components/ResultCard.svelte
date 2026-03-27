@@ -36,8 +36,11 @@
   }
 </script>
 
-<button type="button"
-  class="block w-full text-left font-[inherit] bg-white p-4 rounded-md shadow-sm no-underline text-inherit border-2 cursor-pointer transition-[box-shadow,border-color] duration-150 hover:shadow-md {isSelected ? 'border-(--color-accent) bg-blue-50' : 'border-transparent'}"
+<button
+  type="button"
+  class="block w-full text-left font-[inherit] bg-white p-4 rounded-md shadow-sm no-underline text-inherit border-2 cursor-pointer transition-[box-shadow,border-color] duration-150 hover:shadow-md {isSelected
+    ? 'border-(--color-accent) bg-blue-50'
+    : 'border-transparent'}"
   onclick={handleClick}
 >
   <div class="flex justify-between items-center mb-2">
@@ -53,9 +56,15 @@
 
   <div class="flex justify-between items-center text-xs text-gray-400 gap-2">
     {#if hasPathHighlight}
-      <span class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500" title={index + "/" + result.display_path}>{@html safeIndex + "/" + hlDirPart + hlFilename}</span>
+      <span
+        class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500"
+        title={index + "/" + result.display_path}>{@html safeIndex + "/" + hlDirPart + hlFilename}</span
+      >
     {:else}
-      <span class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500" title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span>
+      <span
+        class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500"
+        title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span
+      >
     {/if}
     <div class="flex gap-1 shrink-0">
       {#if multiIndex && index}

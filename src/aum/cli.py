@@ -288,8 +288,11 @@ def _run_embed_job(
 
     job_id = generate_name()
     tracker.create_job(
-        job_id, source_dir=Path("."), total_files=total,
-        index_name=idx, job_type=JobType.EMBED,
+        job_id,
+        source_dir=Path("."),
+        total_files=total,
+        index_name=idx,
+        job_type=JobType.EMBED,
     )
 
     click.echo(
@@ -373,7 +376,14 @@ def _run_embed_job(
                 tracker.update_progress(job_id, extracted=0, processed=embedded, failed=failed)
                 elapsed = time.monotonic() - job_start
                 rate = embedded / elapsed if elapsed > 0 else 0
-                log.info("embedding batch complete", job_id=job_id, embedded=embedded, failed=failed, total=total, rate=f"{rate:.1f} docs/s")
+                log.info(
+                    "embedding batch complete",
+                    job_id=job_id,
+                    embedded=embedded,
+                    failed=failed,
+                    total=total,
+                    rate=f"{rate:.1f} docs/s",
+                )
                 if live is not None:
                     live.update(_make_progress(total, embedded + failed, failed, job_start))
 
@@ -403,7 +413,9 @@ def _run_embed_job(
 
 @main.command()
 @click.argument("job_id")
-@click.option("--include-empty/--no-include-empty", default=True, help="Retry files with empty extractions (default: yes)")
+@click.option(
+    "--include-empty/--no-include-empty", default=True, help="Retry files with empty extractions (default: yes)"
+)
 @click.option("--batch-size", default=None, type=int, help="Override batch size")
 @click.option("--workers", default=None, type=int, help="Override worker count (ingest only)")
 @click.option("--ocr/--no-ocr", default=None, help="Enable or disable OCR (ingest only)")
@@ -570,7 +582,9 @@ def search(
     total: int
     facets: dict[str, list[str]] | None
     if search_type == "text":
-        results, total, facets = backend.search_text(query, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
+        results, total, facets = backend.search_text(
+            query, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters
+        )
     elif search_type == "hybrid":
         from aum.api.deps import make_embedder, make_tracker
 
@@ -581,7 +595,9 @@ def search(
         for idx in idx_list:
             prev = tracker.get_embedding_model(idx)
             if prev is None:
-                click.echo(f"Error: no embeddings found for index '{idx}'. Run 'aum embed --index {idx}' first.", err=True)
+                click.echo(
+                    f"Error: no embeddings found for index '{idx}'. Run 'aum embed --index {idx}' first.", err=True
+                )
                 sys.exit(1)
             if model_info is None:
                 model_info = prev
@@ -604,7 +620,9 @@ def search(
         config.embeddings_backend = prev_backend
         embedder = make_embedder(config)
         vector = embedder.embed_query(query)
-        results, total, facets = backend.search_hybrid(query, vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters)
+        results, total, facets = backend.search_hybrid(
+            query, vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters
+        )
     else:
         results, total, facets = [], 0, None
 
@@ -691,12 +709,16 @@ def list_jobs(status: str | None) -> None:
         click.echo("No jobs found.")
         return
 
-    click.echo(f"{'JOB ID':<26} {'TYPE':<8} {'INDEX':<16} {'STATUS':<12} {'FILES':<8} {'OK':<8} {'EMPTY':<8} {'FAILED':<8} {'CREATED'}")
+    click.echo(
+        f"{'JOB ID':<26} {'TYPE':<8} {'INDEX':<16} {'STATUS':<12} {'FILES':<8} {'OK':<8} {'EMPTY':<8} {'FAILED':<8} {'CREATED'}"
+    )
     click.echo("-" * 120)
     for j in jobs:
         files = str(j.total_files) if j.total_files else "?"
         created = f"{j.created_at:%Y-%m-%d %H:%M}"
-        click.echo(f"{j.job_id:<26} {j.job_type.value:<8} {j.index_name:<16} {j.status.value:<12} {files:<8} {j.processed:<8} {j.empty:<8} {j.failed:<8} {created}")
+        click.echo(
+            f"{j.job_id:<26} {j.job_type.value:<8} {j.index_name:<16} {j.status.value:<12} {files:<8} {j.processed:<8} {j.empty:<8} {j.failed:<8} {created}"
+        )
 
 
 @main.command("job")

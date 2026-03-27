@@ -73,8 +73,8 @@ class TestContainerDir:
         # structure: /data/extracted / myindex / XX / XX / XXXXXXXXXXXXXXXX
         assert parts[-5] == "extracted"
         assert parts[-4] == "myindex"
-        assert len(parts[-3]) == 2   # first shard
-        assert len(parts[-2]) == 2   # second shard
+        assert len(parts[-3]) == 2  # first shard
+        assert len(parts[-2]) == 2  # second shard
         assert len(parts[-1]) == 16  # full hash prefix
         assert parts[-1].startswith(parts[-3])
         assert parts[-1][2:4] == parts[-2]

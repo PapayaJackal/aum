@@ -2,7 +2,13 @@
   import type { Snippet } from "svelte";
   import { onMount, untrack } from "svelte";
   import { search, listIndices, type IndexInfo } from "../lib/api";
-  import { searchState, getSearchQs, savePrefs, saveIndexSearchType, getIndexSearchType } from "../lib/searchState.svelte";
+  import {
+    searchState,
+    getSearchQs,
+    savePrefs,
+    saveIndexSearchType,
+    getIndexSearchType,
+  } from "../lib/searchState.svelte";
   import ResultList from "../components/ResultList.svelte";
   import FacetPanel from "../components/FacetPanel.svelte";
   import IndexSelector from "../components/IndexSelector.svelte";
@@ -25,7 +31,10 @@
         }
         _syncSearchType();
       })
-      .catch(() => { indices = []; error = "Failed to load indices"; });
+      .catch(() => {
+        indices = [];
+        error = "Failed to load indices";
+      });
   });
 
   let indices = $state<IndexInfo[]>([]);
@@ -42,7 +51,7 @@
   // Hybrid is enabled only if ALL selected indices have embeddings
   let hybridEnabled = $derived(
     searchState.selectedIndices.length > 0 &&
-    searchState.selectedIndices.every((name) => indices.find((i) => i.name === name)?.has_embeddings)
+      searchState.selectedIndices.every((name) => indices.find((i) => i.name === name)?.has_embeddings),
   );
 
   let loading = $state(false);
@@ -92,7 +101,14 @@
         searchState.activeFacets = {};
         prevFacetsJson = "{}";
       }
-      const res = await search(searchState.query, searchState.searchType, searchState.pageSize, joinedIndex, offset, activeFilters);
+      const res = await search(
+        searchState.query,
+        searchState.searchType,
+        searchState.pageSize,
+        joinedIndex,
+        offset,
+        activeFilters,
+      );
       searchState.results = res.results;
       searchState.total = res.total;
       if (res.facets !== null) {
@@ -126,7 +142,9 @@
     searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
     const facetsStr = params.get("facets");
     if (facetsStr) {
-      try { searchState.activeFacets = JSON.parse(facetsStr); } catch {}
+      try {
+        searchState.activeFacets = JSON.parse(facetsStr);
+      } catch {}
     } else {
       searchState.activeFacets = {};
     }
@@ -166,7 +184,9 @@
     searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
     const facetsStr = params.get("facets");
     if (facetsStr) {
-      try { searchState.activeFacets = JSON.parse(facetsStr); } catch {}
+      try {
+        searchState.activeFacets = JSON.parse(facetsStr);
+      } catch {}
     } else {
       searchState.activeFacets = {};
     }
@@ -195,7 +215,8 @@
   }
 
   function handleSearchTypeChange() {
-    if (searchState.selectedIndices.length > 0) saveIndexSearchType(searchState.selectedIndices, searchState.searchType);
+    if (searchState.selectedIndices.length > 0)
+      saveIndexSearchType(searchState.selectedIndices, searchState.searchType);
     savePrefs();
     if (searchState.searched) doSearch(1);
   }
@@ -236,8 +257,10 @@
   $effect(() => {
     if (!sentinel) return;
     const observer = new IntersectionObserver(
-      ([entry]) => { toolbarStuck = !entry.isIntersecting; },
-      { threshold: 1 }
+      ([entry]) => {
+        toolbarStuck = !entry.isIntersecting;
+      },
+      { threshold: 1 },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
@@ -259,28 +282,43 @@
       class="flex-1 px-3 py-[0.45rem] border-none rounded bg-white/95 text-gray-800 text-base min-w-0 focus:outline-2 focus:outline-(--color-accent)"
     />
     {#if indices.length > 0}
-      <IndexSelector
-        {indices}
-        selectedIndices={searchState.selectedIndices}
-        onchange={handleIndicesChange}
-      />
+      <IndexSelector {indices} selectedIndices={searchState.selectedIndices} onchange={handleIndicesChange} />
     {/if}
-    <div class="flex shrink-0 rounded overflow-hidden border {hybridEnabled ? 'border-white/40' : 'border-white/40 opacity-50'}">
+    <div
+      class="flex shrink-0 rounded overflow-hidden border {hybridEnabled
+        ? 'border-white/40'
+        : 'border-white/40 opacity-50'}"
+    >
       <button
         type="button"
-        class="px-3 py-[0.45rem] border-none rounded-none text-xs cursor-pointer shrink-0 {searchState.searchType === 'text' ? 'bg-white/90 text-(--color-brand) font-medium' : 'bg-white/15 text-white/85'} disabled:cursor-not-allowed hover:enabled:bg-white/25"
+        class="px-3 py-[0.45rem] border-none rounded-none text-xs cursor-pointer shrink-0 {searchState.searchType ===
+        'text'
+          ? 'bg-white/90 text-(--color-brand) font-medium'
+          : 'bg-white/15 text-white/85'} disabled:cursor-not-allowed hover:enabled:bg-white/25"
         disabled={!hybridEnabled && searchState.searchType !== "text"}
-        onclick={() => { searchState.searchType = "text"; handleSearchTypeChange(); }}
-      >Full text</button>
+        onclick={() => {
+          searchState.searchType = "text";
+          handleSearchTypeChange();
+        }}>Full text</button
+      >
       <button
         type="button"
-        class="px-3 py-[0.45rem] border-none rounded-none text-xs cursor-pointer shrink-0 {searchState.searchType === 'hybrid' ? 'bg-white/90 text-(--color-brand) font-medium' : 'bg-white/15 text-white/85'} disabled:cursor-not-allowed hover:enabled:bg-white/25"
+        class="px-3 py-[0.45rem] border-none rounded-none text-xs cursor-pointer shrink-0 {searchState.searchType ===
+        'hybrid'
+          ? 'bg-white/90 text-(--color-brand) font-medium'
+          : 'bg-white/15 text-white/85'} disabled:cursor-not-allowed hover:enabled:bg-white/25"
         disabled={!hybridEnabled}
-        onclick={() => { searchState.searchType = "hybrid"; handleSearchTypeChange(); }}
-      >Hybrid</button>
+        onclick={() => {
+          searchState.searchType = "hybrid";
+          handleSearchTypeChange();
+        }}>Hybrid</button
+      >
     </div>
-    <button type="submit" disabled={loading || !searchState.query.trim()}
-      class="px-4 py-[0.45rem] bg-(--color-accent) text-white border-none rounded text-sm cursor-pointer shrink-0 hover:enabled:bg-(--color-accent-hover) disabled:opacity-50 disabled:cursor-not-allowed">
+    <button
+      type="submit"
+      disabled={loading || !searchState.query.trim()}
+      class="px-4 py-[0.45rem] bg-(--color-accent) text-white border-none rounded text-sm cursor-pointer shrink-0 hover:enabled:bg-(--color-accent-hover) disabled:opacity-50 disabled:cursor-not-allowed"
+    >
       {loading ? "..." : "Search"}
     </button>
   </form>
@@ -296,40 +334,52 @@
   {#if searchState.searched}
     <div class="flex gap-4 mt-3 {sidebarOpen ? 'sidebar-open' : ''}">
       {#if Object.keys(facets).length > 0}
-        <aside class="shrink-0 basis-[220px] max-w-[220px] min-w-0 sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto">
+        <aside
+          class="shrink-0 basis-[220px] max-w-[220px] min-w-0 sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
+        >
           <FacetPanel {facets} bind:activeFacets={searchState.activeFacets} dateFacets={["Created"]} />
         </aside>
       {/if}
       <div class="flex-1 min-w-0 {sidebarOpen ? 'max-w-[35%] shrink-0 basis-[35%]' : ''}">
         <div bind:this={sentinel} class="relative -top-10 h-0 pointer-events-none"></div>
-        <div class="flex items-center justify-between gap-3 mb-3 flex-wrap sticky top-10 bg-gray-100 z-10 {toolbarStuck ? 'py-2.5 px-3 -mx-3' : 'py-1.5'}">
+        <div
+          class="flex items-center justify-between gap-3 mb-3 flex-wrap sticky top-10 bg-gray-100 z-10 {toolbarStuck
+            ? 'py-2.5 px-3 -mx-3'
+            : 'py-1.5'}"
+        >
           <p class="text-gray-400 text-sm m-0">
             {searchState.total} result{searchState.total !== 1 ? "s" : ""}
           </p>
           <div class="flex items-center gap-1 flex-wrap">
             <button
-              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed {searchState.currentPage <= 1 ? '' : ''}"
+              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed {searchState.currentPage <=
+              1
+                ? ''
+                : ''}"
               disabled={searchState.currentPage <= 1 || loading}
-              onclick={() => doSearch(searchState.currentPage - 1, false)}
-            >&lsaquo; Prev</button>
+              onclick={() => doSearch(searchState.currentPage - 1, false)}>&lsaquo; Prev</button
+            >
 
             {#each pageNumbers(searchState.currentPage, totalPages) as p}
               {#if p === "..."}
                 <span class="px-1 py-1 text-gray-400 text-sm">&hellip;</span>
               {:else}
                 <button
-                  class="px-2.5 py-1 text-sm border rounded cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed {p === searchState.currentPage ? 'bg-(--color-accent) text-white border-(--color-accent)' : 'bg-gray-100 text-gray-800 border-gray-300 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent)'}"
+                  class="px-2.5 py-1 text-sm border rounded cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed {p ===
+                  searchState.currentPage
+                    ? 'bg-(--color-accent) text-white border-(--color-accent)'
+                    : 'bg-gray-100 text-gray-800 border-gray-300 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent)'}"
                   disabled={loading}
-                  onclick={() => doSearch(p, false)}
-                >{p}</button>
+                  onclick={() => doSearch(p, false)}>{p}</button
+                >
               {/if}
             {/each}
 
             <button
               class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed"
               disabled={searchState.currentPage >= totalPages || loading}
-              onclick={() => doSearch(searchState.currentPage + 1, false)}
-            >Next &rsaquo;</button>
+              onclick={() => doSearch(searchState.currentPage + 1, false)}>Next &rsaquo;</button
+            >
 
             <select
               class="py-1 px-1.5 border border-gray-300 rounded bg-gray-100 text-sm ml-2 cursor-pointer"
@@ -346,7 +396,9 @@
       </div>
 
       {#if sidebarOpen}
-        <aside class="flex-1 min-w-0 bg-gray-50 border-l border-gray-300 rounded-md shadow-[-2px_0_8px_rgba(0,0,0,0.05)] sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto">
+        <aside
+          class="flex-1 min-w-0 bg-gray-50 border-l border-gray-300 rounded-md shadow-[-2px_0_8px_rgba(0,0,0,0.05)] sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
+        >
           {#key searchState.selectedDocId}
             <Document
               docId={searchState.selectedDocId}

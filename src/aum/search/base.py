@@ -31,6 +31,7 @@ def extract_email(raw: str) -> str | None:
         return stripped.lower()
     return None
 
+
 # ---------------------------------------------------------------------------
 # MIME-type aliases – shown instead of raw content-type strings in facets
 # and search results.
@@ -182,19 +183,38 @@ class SearchBackend(Protocol):
         ...
 
     def search_text(
-        self, query: str, *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        include_facets: bool = False,
+        filters: dict[str, list[str]] | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         """Full-text keyword search. Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...
 
     def search_vector(
-        self, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None
+        self,
+        vector: list[float],
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        include_facets: bool = False,
+        filters: dict[str, list[str]] | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         """Vector similarity search (kNN). Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...
 
     def search_hybrid(
-        self, query: str, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None
+        self,
+        query: str,
+        vector: list[float],
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        include_facets: bool = False,
+        filters: dict[str, list[str]] | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         """Combined keyword + vector search. Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...

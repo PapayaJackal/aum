@@ -47,18 +47,31 @@
 
     <label class="flex flex-col gap-1 text-sm font-medium">
       Username
-      <input type="text" bind:value={username} required autocomplete="username"
-        class="p-2 border border-gray-300 rounded text-base focus:outline-none focus:border-(--color-brand)" />
+      <input
+        type="text"
+        bind:value={username}
+        required
+        autocomplete="username"
+        class="p-2 border border-gray-300 rounded text-base focus:outline-none focus:border-(--color-brand)"
+      />
     </label>
 
     <label class="flex flex-col gap-1 text-sm font-medium">
       Password
-      <input type="password" bind:value={password} required autocomplete="current-password"
-        class="p-2 border border-gray-300 rounded text-base focus:outline-none focus:border-(--color-brand)" />
+      <input
+        type="password"
+        bind:value={password}
+        required
+        autocomplete="current-password"
+        class="p-2 border border-gray-300 rounded text-base focus:outline-none focus:border-(--color-brand)"
+      />
     </label>
 
-    <button type="submit" disabled={loading}
-      class="p-2.5 bg-(--color-brand) text-white border-none rounded text-base cursor-pointer hover:bg-(--color-brand-hover) disabled:opacity-60 disabled:cursor-not-allowed">
+    <button
+      type="submit"
+      disabled={loading}
+      class="p-2.5 bg-(--color-brand) text-white border-none rounded text-base cursor-pointer hover:bg-(--color-brand-hover) disabled:opacity-60 disabled:cursor-not-allowed"
+    >
       {loading ? "Signing in..." : "Sign in"}
     </button>
   </form>
@@ -67,8 +80,10 @@
     <div class="login-divider">or</div>
     <div class="flex flex-col gap-2">
       {#each providers as provider}
-        <button onclick={() => oauthLogin(provider)}
-          class="p-2.5 bg-white border border-gray-300 rounded text-base cursor-pointer capitalize hover:bg-gray-50 hover:border-gray-400">
+        <button
+          onclick={() => oauthLogin(provider)}
+          class="p-2.5 bg-white border border-gray-300 rounded text-base cursor-pointer capitalize hover:bg-gray-50 hover:border-gray-400"
+        >
           Sign in with {provider}
         </button>
       {/each}

@@ -141,7 +141,6 @@ def _walk_files(
     return count
 
 
-
 class IngestPipeline:
     """Orchestrates document ingestion with streaming file discovery.
 
@@ -229,7 +228,7 @@ class IngestPipeline:
         empty = 0
         extraction_time = 0.0
         timing_count = 0
-        files_done = 0     # all completed futures, including failures (for progress bar)
+        files_done = 0  # all completed futures, including failures (for progress bar)
 
         # Single-element list so the walker thread can update it without a lock
         discovered: list[int] = [0]
@@ -332,15 +331,31 @@ class IngestPipeline:
                             failed += n_failed
                             batch = []
                             self._tracker.update_progress(job_id, extracted, processed, failed, empty)
-                            log.info("batch complete", job_id=job_id, extracted=extracted, processed=processed, failed=failed, empty=empty)
+                            log.info(
+                                "batch complete",
+                                job_id=job_id,
+                                extracted=extracted,
+                                processed=processed,
+                                failed=failed,
+                                empty=empty,
+                            )
 
                         # Update live display
                         if live is not None:
-                            live.update(_make_progress_line(
-                                job_start, discovered[0], walker_done, files_done,
-                                in_flight_count[0], processed, failed, empty,
-                                timing_count, extraction_time,
-                            ))
+                            live.update(
+                                _make_progress_line(
+                                    job_start,
+                                    discovered[0],
+                                    walker_done,
+                                    files_done,
+                                    in_flight_count[0],
+                                    processed,
+                                    failed,
+                                    empty,
+                                    timing_count,
+                                    extraction_time,
+                                )
+                            )
 
                         # Exit when walker is done and all futures are collected
                         if walker_done and not pending_futures:
@@ -356,7 +371,9 @@ class IngestPipeline:
             walker.join(timeout=5)
             elapsed = time.monotonic() - job_start
             self._tracker.complete_job(job_id, JobStatus.COMPLETED)
-            log.info("ingest complete", job_id=job_id, extracted=extracted, processed=processed, failed=failed, empty=empty)
+            log.info(
+                "ingest complete", job_id=job_id, extracted=extracted, processed=processed, failed=failed, empty=empty
+            )
 
         except Exception:
             elapsed = time.monotonic() - job_start

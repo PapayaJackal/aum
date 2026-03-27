@@ -156,7 +156,13 @@ def _build_filter_clauses(filters: dict[str, list[str]]) -> list[dict]:
 class ElasticsearchBackend:
     """Search backend using Elasticsearch with optional kNN vector search."""
 
-    def __init__(self, url: str = "http://localhost:9200", index: str = "aum", rrf: bool = False, max_highlight_offset: int = 10_000_000) -> None:
+    def __init__(
+        self,
+        url: str = "http://localhost:9200",
+        index: str = "aum",
+        rrf: bool = False,
+        max_highlight_offset: int = 10_000_000,
+    ) -> None:
         self._client = Elasticsearch(url)
         self._index = index
         self._vector_dimension: int | None = None
@@ -291,7 +297,15 @@ class ElasticsearchBackend:
         log.warning("elasticsearch bulk indexing had errors", failed_count=len(failures))
         return failures
 
-    def search_text(self, query: str, *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+    def search_text(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        include_facets: bool = False,
+        filters: dict[str, list[str]] | None = None,
+    ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         should_clauses: list[dict] = [
             {"match": {"content": {"query": query, "operator": "and", "boost": 2}}},
             {"match": {"display_path": {"query": query, "operator": "and"}}},
@@ -325,7 +339,15 @@ class ElasticsearchBackend:
         facets = _parse_facets(resp) if include_facets else None
         return results, total, facets
 
-    def search_vector(self, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
+    def search_vector(
+        self,
+        vector: list[float],
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        include_facets: bool = False,
+        filters: dict[str, list[str]] | None = None,
+    ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         filter_clauses = _build_filter_clauses(filters) if filters else []
         knn_body: dict = {
             "field": "chunks.embedding",
@@ -348,7 +370,14 @@ class ElasticsearchBackend:
         return results, total, facets
 
     def search_hybrid(
-        self, query: str, vector: list[float], *, limit: int = 20, offset: int = 0, include_facets: bool = False, filters: dict[str, list[str]] | None = None
+        self,
+        query: str,
+        vector: list[float],
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        include_facets: bool = False,
+        filters: dict[str, list[str]] | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         should_clauses: list[dict] = [
             {"match": {"content": {"query": query, "operator": "and", "boost": 2}}},
