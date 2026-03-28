@@ -3,12 +3,27 @@
 import io
 import zipfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
+import httpx
 import pytest
 
-from aum.extraction.base import ExtractionError
-from aum.extraction.tika import TikaExtractor, _condense_whitespace, _container_dir, _parse_zip_response
+from aum.extraction.base import ExtractionDepthError, ExtractionError
+from aum.extraction.tika import (
+    TIKA_CONTENT_KEY,
+    TikaExtractor,
+    _condense_whitespace,
+    _container_dir,
+    _find_container_paths,
+    _parse_unpack_zip,
+)
+
+_ERP_KEY = "X-TIKA:embedded_resource_path"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 class TestCondenseWhitespace:
@@ -94,102 +109,89 @@ class TestContainerDir:
         assert _container_dir(Path("/ex"), "idx", file_path) == _container_dir(Path("/ex"), "idx", file_path)
 
 
-def _make_zip_response(
-    text: str = "",
-    metadata: dict | None = None,
-    attachments: dict[str, bytes] | None = None,
-) -> tuple[int, bytes]:
-    """Build a fake Tika /unpack/all zip response for testing."""
+# ---------------------------------------------------------------------------
+# _parse_unpack_zip
+# ---------------------------------------------------------------------------
+
+
+def _make_unpack_zip(attachments: dict[str, bytes] | None = None) -> bytes:
+    """Build a fake /unpack/all zip response."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        if text:
-            zf.writestr("__TEXT__", text.encode("utf-8"))
-        if metadata:
-            csv_buf = io.StringIO()
-            import csv
-
-            writer = csv.writer(csv_buf)
-            for k, v in metadata.items():
-                if isinstance(v, list):
-                    writer.writerow([k, *v])
-                else:
-                    writer.writerow([k, v])
-            zf.writestr("__METADATA__", csv_buf.getvalue().encode("utf-8"))
         for name, data in (attachments or {}).items():
             zf.writestr(name, data)
-    return (200, buf.getvalue())
+    return buf.getvalue()
 
 
-class TestParseZipResponse:
-    """Tests for _parse_zip_response()."""
+class TestParseUnpackZip:
+    """Tests for _parse_unpack_zip()."""
 
-    def test_empty_response(self) -> None:
-        assert _parse_zip_response((200, b"")) == {}
-        assert _parse_zip_response((200, None)) == {}
+    def test_empty_data(self) -> None:
+        assert _parse_unpack_zip(b"") == {}
 
-    def test_text_and_metadata(self) -> None:
-        raw = _make_zip_response(
-            text="Hello world",
-            metadata={"Author": "Test", "dc:title": "My Doc"},
-        )
-        parsed = _parse_zip_response(raw)
-        assert parsed["content"] == "Hello world"
-        assert parsed["metadata"]["Author"] == "Test"
-        assert parsed["metadata"]["dc:title"] == "My Doc"
+    def test_extracts_attachments(self) -> None:
+        data = _make_unpack_zip({"report.pdf": b"pdf-bytes", "image.png": b"png-bytes"})
+        result = _parse_unpack_zip(data)
+        assert result["report.pdf"] == b"pdf-bytes"
+        assert result["image.png"] == b"png-bytes"
+        assert len(result) == 2
 
-    def test_multivalue_metadata(self) -> None:
-        raw = _make_zip_response(metadata={"Keywords": ["foo", "bar", "baz"]})
-        parsed = _parse_zip_response(raw)
-        assert parsed["metadata"]["Keywords"] == ["foo", "bar", "baz"]
-
-    def test_attachments_extracted(self) -> None:
-        raw = _make_zip_response(
-            text="container text",
-            attachments={
+    def test_skips_metadata_sidecars(self) -> None:
+        data = _make_unpack_zip(
+            {
                 "report.pdf": b"pdf-bytes",
-                "image.png": b"png-bytes",
-            },
+                "report.pdf.metadata.json": b'{"Author": "Test"}',
+            }
         )
-        parsed = _parse_zip_response(raw)
-        assert parsed["attachments"]["report.pdf"] == b"pdf-bytes"
-        assert parsed["attachments"]["image.png"] == b"png-bytes"
-        assert len(parsed["attachments"]) == 2
+        result = _parse_unpack_zip(data)
+        assert "report.pdf" in result
+        assert "report.pdf.metadata.json" not in result
 
-    def test_long_filename_attachment(self) -> None:
-        """ZIP format has no 100-byte filename limit — this is the whole point."""
+    def test_long_filename(self) -> None:
         long_name = "a" * 200 + ".pdf"
-        raw = _make_zip_response(
-            text="text",
-            attachments={long_name: b"data"},
-        )
-        parsed = _parse_zip_response(raw)
-        assert parsed["attachments"][long_name] == b"data"
+        data = _make_unpack_zip({long_name: b"data"})
+        result = _parse_unpack_zip(data)
+        assert result[long_name] == b"data"
 
-    def test_no_text_entry(self) -> None:
-        raw = _make_zip_response(metadata={"Author": "X"})
-        parsed = _parse_zip_response(raw)
-        assert parsed["content"] == ""
-        assert parsed["metadata"]["Author"] == "X"
 
-    def test_no_metadata_entry(self) -> None:
-        raw = _make_zip_response(text="just text")
-        parsed = _parse_zip_response(raw)
-        assert parsed["content"] == "just text"
-        assert parsed["metadata"] == {}
+# ---------------------------------------------------------------------------
+# _find_container_paths
+# ---------------------------------------------------------------------------
 
-    def test_null_bytes_in_metadata_stripped(self) -> None:
-        """Tika may emit null bytes in metadata CSV (TIKA-3070)."""
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("__METADATA__", "Author,Test\x00Value\n")
-        raw = (200, buf.getvalue())
-        parsed = _parse_zip_response(raw)
-        assert parsed["metadata"]["Author"] == "TestValue"
+
+class TestFindContainerPaths:
+    def test_flat_attachments(self) -> None:
+        parts = [
+            {},
+            {_ERP_KEY: "/report.pdf"},
+            {_ERP_KEY: "/image.png"},
+        ]
+        assert _find_container_paths(parts) == set()
+
+    def test_nested_attachments(self) -> None:
+        parts = [
+            {},
+            {_ERP_KEY: "/archive.zip"},
+            {_ERP_KEY: "/archive.zip/doc.txt"},
+        ]
+        assert _find_container_paths(parts) == {"/archive.zip"}
+
+    def test_deeply_nested(self) -> None:
+        parts = [
+            {},
+            {_ERP_KEY: "/a.zip"},
+            {_ERP_KEY: "/a.zip/b.tar"},
+            {_ERP_KEY: "/a.zip/b.tar/c.txt"},
+        ]
+        assert _find_container_paths(parts) == {"/a.zip", "/a.zip/b.tar"}
+
+
+# ---------------------------------------------------------------------------
+# TikaExtractor header tests
+# ---------------------------------------------------------------------------
 
 
 class TestTikaHeaders:
-    """Tests for OCR header propagation."""
-
     def test_ocr_enabled_sets_language(self):
         ext = TikaExtractor(ocr_enabled=True, ocr_language="deu")
         headers = ext._tika_headers()
@@ -202,93 +204,388 @@ class TestTikaHeaders:
         assert headers["X-Tika-OCRskipOcr"] == "true"
         assert "X-Tika-OCRLanguage" not in headers
 
-    def test_skip_embedded_header(self):
-        ext = TikaExtractor(ocr_enabled=True, ocr_language="eng")
-        headers = ext._tika_headers(skip_embedded=True)
-        assert headers["X-Tika-Skip-Embedded"] == "true"
-        assert headers["X-Tika-OCRLanguage"] == "eng"
 
-    def test_unpack_passes_headers(self, tmp_path: Path):
-        """The _unpack method must pass OCR headers to tika_parse1."""
-        source = tmp_path / "doc.pdf"
-        source.write_bytes(b"test")
-
-        ext = TikaExtractor(ocr_enabled=True, ocr_language="fra", extract_dir=str(tmp_path / "ex"))
-
-        with patch("aum.extraction.tika.tika_parse1") as mock_parse1:
-            mock_parse1.return_value = (200, b"")
-            with patch("aum.extraction.tika._parse_zip_response", return_value={"content": "text", "metadata": {}}):
-                ext._unpack(source)
-
-        mock_parse1.assert_called_once()
-        call_kwargs = mock_parse1.call_args
-        passed_headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers")
-        # tika_parse1 is called positionally, check kwargs
-        if passed_headers is None:
-            # All args might be positional — headers are passed as a kwarg
-            passed_headers = call_kwargs.kwargs["headers"]
-        assert passed_headers["X-Tika-OCRLanguage"] == "fra"
+# ---------------------------------------------------------------------------
+# Fake httpx responses
+# ---------------------------------------------------------------------------
 
 
-class TestTikaExtractorEmptyContent:
-    """Tests for the empty-content detection in TikaExtractor."""
+def _rmeta_response(parts: list[dict]) -> httpx.Response:
+    return httpx.Response(200, json=parts)
 
+
+def _unpack_response(attachments: dict[str, bytes] | None = None, status: int = 200) -> httpx.Response:
+    if status == 204:
+        return httpx.Response(204, content=b"")
+    return httpx.Response(status, content=_make_unpack_zip(attachments))
+
+
+# ---------------------------------------------------------------------------
+# Full extraction tests
+# ---------------------------------------------------------------------------
+
+
+class TestTikaExtractor:
     def _make_extractor(self, tmp_path: Path) -> TikaExtractor:
         return TikaExtractor(
             server_url="http://localhost:9998",
             extract_dir=str(tmp_path / "extracted"),
         )
 
-    def test_nonempty_file_no_text_returns_placeholder_and_records_error(self, tmp_path: Path) -> None:
-        """A non-zero-size file that Tika returns no content for should still be
-        indexed (with empty content for metadata) and record a failure."""
+    # -- Simple documents --------------------------------------------------
+
+    def test_simple_document_no_embedded(self, tmp_path: Path) -> None:
+        """A plain document makes one /rmeta call only — no /unpack."""
+        source = tmp_path / "doc.pdf"
+        source.write_bytes(b"some content")
+
+        extractor = self._make_extractor(tmp_path)
+        resp = _rmeta_response(
+            [
+                {
+                    TIKA_CONTENT_KEY: "Hello world",
+                    "dc:title": "My Doc",
+                    "Content-Type": "application/pdf",
+                }
+            ]
+        )
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.return_value = resp
+            docs = extractor.extract(source)
+
+        assert len(docs) == 1
+        assert docs[0].content == "Hello world"
+        assert docs[0].metadata["dc:title"] == "My Doc"
+        assert TIKA_CONTENT_KEY not in docs[0].metadata
+        assert mock_client.put.call_count == 1
+
+    # -- Embedded documents ------------------------------------------------
+
+    def test_document_with_embedded_calls_unpack(self, tmp_path: Path) -> None:
+        """A document with embedded files calls /rmeta then /unpack."""
+        source = tmp_path / "email.eml"
+        source.write_bytes(b"email content")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Email body", "Content-Type": "message/rfc822"},
+                {
+                    TIKA_CONTENT_KEY: "Attachment text",
+                    "resourceName": "report.pdf",
+                    _ERP_KEY: "/report.pdf",
+                    "Content-Type": "application/pdf",
+                },
+            ]
+        )
+        unpack = _unpack_response({"report.pdf": b"pdf-bytes"})
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack]
+            docs = extractor.extract(source)
+
+        assert len(docs) == 2
+        assert docs[0].content == "Email body"
+        assert docs[1].content == "Attachment text"
+        assert docs[1].metadata["_aum_extracted_from"] == str(source)
+        assert mock_client.put.call_count == 2
+
+    def test_embedded_doc_source_is_unpacked_file(self, tmp_path: Path) -> None:
+        """Embedded docs should have source_path pointing to the unpacked file."""
+        source = tmp_path / "archive.zip"
+        source.write_bytes(b"zip content")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Archive", "Content-Type": "application/zip"},
+                {TIKA_CONTENT_KEY: "Inner doc", "resourceName": "inner.txt", _ERP_KEY: "/inner.txt"},
+            ]
+        )
+        unpack = _unpack_response({"inner.txt": b"inner content"})
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack]
+            docs = extractor.extract(source)
+
+        assert docs[1].source_path.name == "inner.txt"
+        assert docs[1].source_path.read_bytes() == b"inner content"
+
+    # -- Nested (recursive) unpack -----------------------------------------
+
+    def test_nested_attachments_unpacked_recursively(self, tmp_path: Path) -> None:
+        """email.eml → archive.zip → doc.txt: all three levels are indexed
+        and doc.txt has a downloadable unpacked file."""
+        source = tmp_path / "email.eml"
+        source.write_bytes(b"email")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Email body"},
+                {TIKA_CONTENT_KEY: "Archive listing", "resourceName": "archive.zip", _ERP_KEY: "/archive.zip"},
+                {TIKA_CONTENT_KEY: "Deep doc", "resourceName": "doc.txt", _ERP_KEY: "/archive.zip/doc.txt"},
+            ]
+        )
+        # First /unpack on the email → immediate child: archive.zip
+        unpack_email = _unpack_response({"archive.zip": b"fake-zip"})
+        # Second /unpack on archive.zip → its child: doc.txt
+        unpack_archive = _unpack_response({"doc.txt": b"deep content"})
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack_email, unpack_archive]
+            docs = extractor.extract(source)
+
+        assert len(docs) == 3
+        assert docs[0].content == "Email body"
+        assert docs[1].content == "Archive listing"
+        assert docs[2].content == "Deep doc"
+
+        # Nested doc has correct display path and extracted_from
+        assert docs[2].metadata["_aum_display_path"] == str(source / "archive.zip/doc.txt")
+        assert docs[2].metadata["_aum_extracted_from"] == str(source / "archive.zip")
+
+        # Has a real unpacked file
+        assert docs[2].source_path.name == "doc.txt"
+        assert docs[2].source_path.read_bytes() == b"deep content"
+
+    def test_depth_limit_raises(self, tmp_path: Path) -> None:
+        """Exceeding max_depth raises ExtractionDepthError."""
+        source = tmp_path / "deep.zip"
+        source.write_bytes(b"zip")
+
+        extractor = TikaExtractor(
+            server_url="http://localhost:9998",
+            extract_dir=str(tmp_path / "extracted"),
+            max_depth=1,
+        )
+        # Nesting: /a.zip/b.zip/c.txt → depth 2 exceeds max_depth=1
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Root"},
+                {_ERP_KEY: "/a.zip", "resourceName": "a.zip"},
+                {_ERP_KEY: "/a.zip/b.zip", "resourceName": "b.zip"},
+                {_ERP_KEY: "/a.zip/b.zip/c.txt", "resourceName": "c.txt", TIKA_CONTENT_KEY: "Deep"},
+            ]
+        )
+        unpack_root = _unpack_response({"a.zip": b"fake"})
+        unpack_a = _unpack_response({"b.zip": b"fake2"})
+        # b.zip unpack would be depth=2 which exceeds max_depth=1
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack_root, unpack_a, _unpack_response({"c.txt": b"x"})]
+            with pytest.raises(ExtractionDepthError):
+                extractor.extract(source)
+
+    # -- Unpack failure fallback -------------------------------------------
+
+    def test_unpack_failure_still_returns_text(self, tmp_path: Path) -> None:
+        """If /unpack fails, we still return docs from /rmeta (just no download files)."""
+        source = tmp_path / "email.eml"
+        source.write_bytes(b"email")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Body"},
+                {TIKA_CONTENT_KEY: "Attachment", "resourceName": "att.pdf", _ERP_KEY: "/att.pdf"},
+            ]
+        )
+        unpack_fail = httpx.Response(500, text="Internal Server Error")
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack_fail]
+            docs = extractor.extract(source)
+
+        assert len(docs) == 2
+        assert docs[0].content == "Body"
+        assert docs[1].content == "Attachment"
+        # Falls back to container as source
+        assert docs[1].source_path == source
+
+    def test_unpack_204_no_content(self, tmp_path: Path) -> None:
+        """If /unpack returns 204, no attachments are saved."""
+        source = tmp_path / "email.eml"
+        source.write_bytes(b"email")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Body"},
+                {TIKA_CONTENT_KEY: "Inline image", "resourceName": "img.png", _ERP_KEY: "/img.png"},
+            ]
+        )
+        unpack = httpx.Response(204, content=b"")
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack]
+            docs = extractor.extract(source)
+
+        assert len(docs) == 2
+        assert docs[1].source_path == source  # falls back
+
+    # -- Embedded docs with empty content ------------------------------------
+
+    def test_embedded_doc_with_no_content_still_indexed(self, tmp_path: Path) -> None:
+        """Binary attachments (images etc.) with no text are still indexed
+        so they appear in the parent's attachment list and are searchable
+        by metadata.  They should also be counted as empty."""
+        source = tmp_path / "email.eml"
+        source.write_bytes(b"email")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Email body"},
+                {"resourceName": "photo.jpg", _ERP_KEY: "/photo.jpg", "Content-Type": "image/jpeg"},  # no text
+            ]
+        )
+        unpack = _unpack_response({"photo.jpg": b"jpeg-bytes"})
+        errors: list[tuple] = []
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack]
+            docs = extractor.extract(source, record_error=lambda p, et, msg: errors.append((p, et, msg)))
+
+        assert len(docs) == 2
+        assert docs[0].content == "Email body"
+        assert docs[1].content == ""
+        assert docs[1].metadata["Content-Type"] == "image/jpeg"
+        assert docs[1].metadata["_aum_extracted_from"] == str(source)
+        # The image attachment should be recorded as empty
+        assert len(errors) == 1
+        assert errors[0][1] == "EmptyExtraction"
+
+    # -- Container metadata with empty content and embedded docs -----------
+
+    def test_container_with_empty_content_and_embedded_docs(self, tmp_path: Path) -> None:
+        """Container with no text but embedded docs: container still indexed."""
+        source = tmp_path / "email.eml"
+        source.write_bytes(b"email content")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {"Content-Type": "message/rfc822"},  # no text
+                {TIKA_CONTENT_KEY: "Attachment text", "resourceName": "report.pdf", _ERP_KEY: "/report.pdf"},
+            ]
+        )
+        unpack = _unpack_response({"report.pdf": b"pdf-bytes"})
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack]
+            docs = extractor.extract(source)
+
+        assert len(docs) == 2
+        assert docs[0].content == ""
+        assert docs[0].metadata["Content-Type"] == "message/rfc822"
+        assert docs[1].content == "Attachment text"
+
+    # -- Empty file handling -----------------------------------------------
+
+    def test_empty_extraction_records_error(self, tmp_path: Path) -> None:
+        """A non-zero file with no text records EmptyExtraction and is still indexed."""
         source = tmp_path / "doc.pdf"
         source.write_bytes(b"some binary content")
 
         extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response([{"Content-Type": "application/pdf"}])
         errors: list[tuple] = []
 
-        with (
-            patch.object(extractor, "_unpack", return_value=({"content": "", "metadata": {}}, [])),
-            patch.object(extractor, "_extract_container", return_value=None),
-        ):
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.return_value = rmeta
             docs = extractor.extract(source, record_error=lambda p, et, msg: errors.append((p, et, msg)))
 
         assert len(docs) == 1
         assert docs[0].content == ""
-        assert docs[0].source_path == source
+        assert docs[0].metadata["Content-Type"] == "application/pdf"
         assert len(errors) == 1
         assert errors[0][1] == "EmptyExtraction"
 
-    def test_zero_length_file_no_text_returns_placeholder_no_error(self, tmp_path: Path) -> None:
-        """A zero-byte file with no extracted text gets a placeholder but no failure recorded."""
+    def test_zero_length_file_no_error(self, tmp_path: Path) -> None:
+        """A zero-byte file gets a placeholder but no failure recorded."""
         source = tmp_path / "empty.pdf"
         source.write_bytes(b"")
 
         extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response([{"Content-Type": "application/pdf"}])
         errors: list[tuple] = []
 
-        with (
-            patch.object(extractor, "_unpack", return_value=({"content": "", "metadata": {}}, [])),
-            patch.object(extractor, "_extract_container", return_value=None),
-        ):
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.return_value = rmeta
             docs = extractor.extract(source, record_error=lambda p, et, msg: errors.append((p, et, msg)))
 
         assert len(docs) == 1
         assert docs[0].content == ""
         assert errors == []
 
-    def test_file_with_text_is_not_affected(self, tmp_path: Path) -> None:
-        """Files that produce content are unaffected by the empty-content check."""
+    def test_empty_rmeta_response_treated_as_empty_extraction(self, tmp_path: Path) -> None:
+        """Tika returning [] should produce a placeholder, not raise."""
+        source = tmp_path / "weird.bin"
+        source.write_bytes(b"something")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response([])
+        errors: list[tuple] = []
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.return_value = rmeta
+            docs = extractor.extract(source, record_error=lambda p, et, msg: errors.append((p, et, msg)))
+
+        assert len(docs) == 1
+        assert docs[0].content == ""
+        assert len(errors) == 1
+        assert errors[0][1] == "EmptyExtraction"
+
+    # -- Error handling ----------------------------------------------------
+
+    def test_rmeta_http_error_raises(self, tmp_path: Path) -> None:
         source = tmp_path / "doc.pdf"
-        source.write_bytes(b"some binary content")
+        source.write_bytes(b"data")
 
         extractor = self._make_extractor(tmp_path)
 
-        with (
-            patch.object(extractor, "_unpack", return_value=({"content": "Hello world", "metadata": {}}, [])),
-            patch.object(extractor, "_extract_container", return_value=None),
-        ):
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.return_value = httpx.Response(422, text="Parse error")
+            with pytest.raises(ExtractionError, match="HTTP 422"):
+                extractor.extract(source)
+
+    def test_rmeta_connection_error_raises(self, tmp_path: Path) -> None:
+        source = tmp_path / "doc.pdf"
+        source.write_bytes(b"data")
+
+        extractor = self._make_extractor(tmp_path)
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = httpx.ConnectError("connection refused")
+            with pytest.raises(ExtractionError, match="request failed"):
+                extractor.extract(source)
+
+    def test_tika_internal_keys_stripped(self, tmp_path: Path) -> None:
+        """X-TIKA: internal keys should not appear in document metadata."""
+        source = tmp_path / "doc.pdf"
+        source.write_bytes(b"data")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {
+                    TIKA_CONTENT_KEY: "text",
+                    "X-TIKA:Parsed-By": "org.apache.tika.parser.DefaultParser",
+                    "X-TIKA:parse_time_millis": "42",
+                    _ERP_KEY: "/something",
+                    "dc:title": "Kept",
+                }
+            ]
+        )
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.return_value = rmeta
             docs = extractor.extract(source)
-            assert len(docs) == 1
-            assert docs[0].content == "Hello world"
+
+        assert "dc:title" in docs[0].metadata
+        assert TIKA_CONTENT_KEY not in docs[0].metadata
+        assert "X-TIKA:Parsed-By" not in docs[0].metadata
+        assert "X-TIKA:parse_time_millis" not in docs[0].metadata
+        assert _ERP_KEY not in docs[0].metadata

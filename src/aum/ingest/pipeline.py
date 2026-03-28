@@ -366,7 +366,10 @@ class IngestPipeline:
                         n_processed, n_failed, _, _ = self._flush_batch(job_id, batch)
                         processed += n_processed
                         failed += n_failed
-                        self._tracker.update_progress(job_id, extracted, processed, failed, empty)
+
+                    # Always persist final counts — the empty/failed counters
+                    # may have changed after the last mid-loop batch flush.
+                    self._tracker.update_progress(job_id, extracted, processed, failed, empty)
 
             walker.join(timeout=5)
             elapsed = time.monotonic() - job_start

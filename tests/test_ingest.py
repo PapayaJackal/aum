@@ -1,7 +1,10 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
+from aum.extraction.base import RecordErrorFn
+from aum.ingest.pipeline import IngestPipeline
 from aum.ingest.tracker import JobTracker
-from aum.models import JobStatus, JobType
+from aum.models import Document, JobStatus, JobType
 
 
 class TestJobTracker:
@@ -153,3 +156,118 @@ class TestEmbeddingModelTracking:
         tracker.set_embedding_model("idx2", "model-b", "openai", 1024)
         assert tracker.get_embedding_model("idx1") == ("model-a", "ollama", 768)
         assert tracker.get_embedding_model("idx2") == ("model-b", "openai", 1024)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline integration tests (real tracker, mock extractor + backend)
+# ---------------------------------------------------------------------------
+
+
+def _stub_extractor(extract_fn):
+    """Create a mock Extractor that delegates to extract_fn."""
+    ext = MagicMock()
+    ext.extract.side_effect = extract_fn
+    ext.supports.return_value = True
+    return ext
+
+
+def _stub_backend():
+    """Create a mock SearchBackend that always succeeds."""
+    backend = MagicMock()
+    backend.index_batch.return_value = []  # no failures
+    return backend
+
+
+class TestPipelineEmptyFiles:
+    """Verify empty-file counting and error recording flow end-to-end
+    through IngestPipeline with a real JobTracker."""
+
+    def test_empty_file_counted_and_error_logged(self, tmp_path: Path, tracker: JobTracker) -> None:
+        """A non-zero file that produces no text should:
+        - have empty=1 in job stats
+        - have an EmptyExtraction error in the tracker
+        - still be indexed (1 document)
+        """
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "scan.pdf").write_bytes(b"binary content, no text")
+
+        def fake_extract(file_path: Path, record_error: RecordErrorFn | None = None) -> list[Document]:
+            doc = Document(source_path=file_path, content="", metadata={"Content-Type": "application/pdf"})
+            if record_error is not None:
+                record_error(file_path, "EmptyExtraction", f"no text for {file_path}")
+            return [doc]
+
+        pipeline = IngestPipeline(
+            extractor=_stub_extractor(fake_extract),
+            search_backend=_stub_backend(),
+            tracker=tracker,
+            batch_size=10,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run(docs_dir)
+
+        # Reload job from DB to verify persisted state
+        job = tracker.get_job(job.job_id, include_errors=True)
+        assert job is not None
+        assert job.empty == 1, f"expected empty=1, got empty={job.empty}"
+        assert job.processed == 1
+        assert len(job.errors) == 1
+        assert job.errors[0].error_type == "EmptyExtraction"
+
+    def test_multiple_empty_files(self, tmp_path: Path, tracker: JobTracker) -> None:
+        """Multiple empty files should all be counted."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        for i in range(3):
+            (docs_dir / f"empty_{i}.bin").write_bytes(b"x" * (i + 1))
+
+        def fake_extract(file_path: Path, record_error: RecordErrorFn | None = None) -> list[Document]:
+            doc = Document(source_path=file_path, content="", metadata={})
+            if record_error is not None:
+                record_error(file_path, "EmptyExtraction", "no text")
+            return [doc]
+
+        pipeline = IngestPipeline(
+            extractor=_stub_extractor(fake_extract),
+            search_backend=_stub_backend(),
+            tracker=tracker,
+            batch_size=10,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run(docs_dir)
+
+        job = tracker.get_job(job.job_id, include_errors=True)
+        assert job is not None
+        assert job.empty == 3
+        assert job.processed == 3
+        assert len(job.errors) == 3
+
+    def test_nested_docs_all_indexed(self, tmp_path: Path, tracker: JobTracker) -> None:
+        """A container with 2 embedded docs should index 3 documents total."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "email.eml").write_bytes(b"email")
+
+        def fake_extract(file_path: Path, record_error: RecordErrorFn | None = None) -> list[Document]:
+            return [
+                Document(source_path=file_path, content="Email body", metadata={}),
+                Document(
+                    source_path=file_path, content="Attachment 1", metadata={"_aum_extracted_from": str(file_path)}
+                ),
+                Document(source_path=file_path, content="", metadata={"_aum_extracted_from": str(file_path)}),
+            ]
+
+        pipeline = IngestPipeline(
+            extractor=_stub_extractor(fake_extract),
+            search_backend=_stub_backend(),
+            tracker=tracker,
+            batch_size=10,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run(docs_dir)
+
+        job = tracker.get_job(job.job_id)
+        assert job is not None
+        assert job.processed == 3
+        assert job.extracted == 2  # 3 docs - 1 container = 2 extracted

@@ -1,21 +1,38 @@
 from __future__ import annotations
 
-import csv
 import hashlib
 import io
 import time
 import zipfile
 from pathlib import Path
 
+import httpx
 import structlog
-from tika import parser as tika_parser
-from tika.tika import parse1 as tika_parse1
 
 from aum.extraction.base import ExtractionDepthError, ExtractionError, RecordErrorFn
 from aum.metrics import EXTRACTION_DURATION, EXTRACTION_ERRORS
 from aum.models import Document
 
 log = structlog.get_logger()
+
+# Metadata key where Tika stores extracted text in /rmeta responses.
+TIKA_CONTENT_KEY = "X-TIKA:content"
+
+# Metadata key for the hierarchical path of an embedded resource.
+_EMBEDDED_RESOURCE_PATH_KEY = "X-TIKA:embedded_resource_path"
+
+# Tika metadata keys that are internal and should not be forwarded.
+_TIKA_INTERNAL_KEYS = frozenset(
+    {
+        TIKA_CONTENT_KEY,
+        _EMBEDDED_RESOURCE_PATH_KEY,
+        "X-TIKA:content_handler",
+        "X-TIKA:content_handler_type",
+        "X-TIKA:parse_time_millis",
+        "X-TIKA:Parsed-By",
+        "X-TIKA:Parsed-By-Full-Set",
+    }
+)
 
 
 def _condense_whitespace(text: str) -> str:
@@ -41,56 +58,13 @@ def _condense_whitespace(text: str) -> str:
 def _normalize_metadata(raw: dict) -> dict[str, str | list[str]]:
     metadata: dict[str, str | list[str]] = {}
     for key, value in raw.items():
+        if key in _TIKA_INTERNAL_KEYS:
+            continue
         if isinstance(value, list):
             metadata[key] = [str(v) for v in value]
         else:
             metadata[key] = str(value)
     return metadata
-
-
-def _parse_zip_response(raw: tuple[int, bytes]) -> dict:
-    """Parse Tika's /unpack/all zip response into the same dict format as
-    tika-python's ``unpack._parse()`` (content, metadata, attachments).
-
-    Tika's ZipWriter produces a zip with ``__TEXT__`` (UTF-8 document text),
-    ``__METADATA__`` (CSV key-value pairs), and any embedded files as
-    additional entries.
-    """
-    parsed: dict = {}
-    if not raw or raw[1] is None or raw[1] == b"":
-        return parsed
-
-    with zipfile.ZipFile(io.BytesIO(raw[1])) as zf:
-        names = set(zf.namelist())
-
-        # Metadata (CSV: key,value[,value...])
-        metadata: dict[str, str | list[str]] = {}
-        if "__METADATA__" in names:
-            names.discard("__METADATA__")
-            with zf.open("__METADATA__") as f:
-                # Strip null bytes that Tika may emit (TIKA-3070).
-                lines = (line.replace("\0", "") for line in io.TextIOWrapper(f, encoding="utf-8"))
-                reader = csv.reader(lines)
-                for row in reader:
-                    if len(row) >= 2:
-                        metadata[row[0]] = row[1:] if len(row) > 2 else row[1]
-
-        # Text content
-        content = ""
-        if "__TEXT__" in names:
-            names.discard("__TEXT__")
-            content = zf.read("__TEXT__").decode("utf-8")
-
-        # Remaining entries are attachments
-        attachments: dict[str, bytes] = {}
-        for name in names:
-            attachments[name] = zf.read(name)
-
-        parsed["content"] = content
-        parsed["metadata"] = metadata
-        parsed["attachments"] = attachments
-
-    return parsed
 
 
 def _container_dir(extract_dir: Path, index_name: str, file_path: Path) -> Path:
@@ -104,11 +78,57 @@ def _container_dir(extract_dir: Path, index_name: str, file_path: Path) -> Path:
     return extract_dir / index_name / file_hash[:2] / file_hash[2:4] / file_hash
 
 
+def _parse_unpack_zip(data: bytes) -> dict[str, bytes]:
+    """Parse the zip returned by /unpack/all into {filename: bytes}.
+
+    Skips per-file .metadata.json sidecars and the original document
+    (which we already have on disk).
+    """
+    attachments: dict[str, bytes] = {}
+    if not data:
+        return attachments
+
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for name in zf.namelist():
+            # Skip metadata sidecars produced when includeMetadataInZip=true
+            if name.endswith(".metadata.json"):
+                continue
+            attachments[name] = zf.read(name)
+
+    return attachments
+
+
+def _find_container_paths(parts: list[dict]) -> set[str]:
+    """Identify which embedded_resource_paths are containers (have children).
+
+    A path is a container if any deeper path starts with it.  For example
+    if the parts contain ``/archive.zip/doc.txt``, then ``/archive.zip``
+    is a container.
+    """
+    all_paths: list[str] = []
+    for part in parts[1:]:
+        erp = part.get(_EMBEDDED_RESOURCE_PATH_KEY, "")
+        if erp:
+            all_paths.append(erp)
+
+    containers: set[str] = set()
+    for path in all_paths:
+        # Walk up the path to mark every ancestor as a container.
+        # e.g. "/a.zip/b.tar/c.txt" → "/a.zip/b.tar" and "/a.zip" are containers.
+        segments = [s for s in path.split("/") if s]
+        for depth in range(1, len(segments)):
+            containers.add("/" + "/".join(segments[:depth]))
+    return containers
+
+
 class TikaExtractor:
     """Extract text and metadata from documents using Apache Tika.
 
-    Handles embedded/attached documents (e.g. email attachments, files inside
-    archives) by unpacking them to disk and recursively extracting each one.
+    Uses Tika's HTTP API directly via httpx:
+    - ``/rmeta/text`` for recursive text + metadata extraction (one JSON
+      entry per document, including all embedded docs at every depth).
+    - ``/unpack/all`` to retrieve raw embedded files for download, called
+      recursively on containers so nested attachments are also available.
     """
 
     def __init__(
@@ -121,247 +141,262 @@ class TikaExtractor:
         max_depth: int = 5,
         request_timeout: int = 300,
     ) -> None:
-        self._server_url = server_url
+        self._server_url = server_url.rstrip("/")
         self._ocr_enabled = ocr_enabled
         self._ocr_language = ocr_language
         self._extract_dir = Path(extract_dir)
         self._index_name = index_name
         self._max_depth = max_depth
         self._request_timeout = request_timeout
+        self._client = httpx.Client(timeout=request_timeout)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def extract(
         self,
         file_path: Path,
         record_error: RecordErrorFn | None = None,
     ) -> list[Document]:
-        return self._extract_recursive(file_path, depth=0, record_error=record_error)
+        """Extract text, metadata, and embedded documents from *file_path*.
 
-    def _extract_recursive(
-        self,
-        file_path: Path,
-        depth: int,
-        _display_path: Path | None = None,
-        _extracted_from: str | None = None,
-        record_error: RecordErrorFn | None = None,
-    ) -> list[Document]:
-        if depth > self._max_depth:
-            raise ExtractionDepthError(f"extraction depth limit ({self._max_depth}) exceeded at {file_path}")
-
-        log.debug("extracting document", file_path=str(file_path), depth=depth)
+        Returns one Document per content part (container + each embedded doc).
+        """
+        log.debug("extracting document", file_path=str(file_path))
         start = time.monotonic()
 
-        # Primary path: one unpack call gives us the container's own text (__TEXT__),
-        # its metadata (__METADATA__), and the raw embedded files — all in one shot.
-        # The __TEXT__ content naturally excludes embedded document text.
-        unpack_parsed: dict = {}
-        attachment_paths: list[Path] = []
         try:
-            unpack_parsed, attachment_paths = self._unpack(file_path)
-        except ExtractionError as exc:
-            log.warning("unpack failed, will fall back to direct extraction", file_path=str(file_path), error=str(exc))
+            parts = self._rmeta(file_path)
+        except ExtractionError:
+            EXTRACTION_DURATION.observe(time.monotonic() - start)
+            raise
 
-        content = _condense_whitespace((unpack_parsed.get("content") or "").strip())
-        raw_metadata = unpack_parsed.get("metadata") or {}
+        if not parts:
+            # Tika returned an empty list — treat as a parseable file with no
+            # content so we still index its metadata and count it properly.
+            parts = [{}]
 
-        # Fallback: if unpack produced no text (failed or file has no attachments
-        # and Tika skipped __TEXT__), call the parser directly with skip-embedded.
-        if not content:
+        has_embedded = len(parts) > 1
+
+        # Recursively unpack embedded files so they are available for download.
+        # Uses the /rmeta tree to know which attachments are themselves
+        # containers that need further unpacking.
+        attachment_map: dict[str, Path] = {}  # embedded_resource_path → local path
+        if has_embedded:
+            container_paths = _find_container_paths(parts)
             try:
-                fallback = self._extract_container(file_path)
-                if fallback is not None:
-                    content = fallback.content
-                    raw_metadata = fallback.metadata  # type: ignore[assignment]
-            except ExtractionError as exc:
-                if not attachment_paths:
-                    # Both unpack and direct extraction failed and there's nothing
-                    # to index — propagate so the pipeline records a job failure.
-                    EXTRACTION_DURATION.observe(time.monotonic() - start)
-                    raise
-                log.warning("container extraction failed", file_path=str(file_path), error=str(exc))
-
-        EXTRACTION_DURATION.observe(time.monotonic() - start)
-
-        documents: list[Document] = []
-        metadata = _normalize_metadata(raw_metadata) if isinstance(raw_metadata, dict) else raw_metadata
-        if _display_path is not None:
-            metadata = {**metadata, "_aum_display_path": str(_display_path)}
-        if _extracted_from is not None:
-            metadata["_aum_extracted_from"] = _extracted_from
-        if content:
-            documents.append(
-                Document(
-                    source_path=file_path,
-                    content=content,
-                    metadata=metadata,
-                )
-            )
-
-        # Recursively extract each attachment.
-        # ExtractionDepthError is not caught here — it propagates to the pipeline
-        # so it's recorded as a job failure rather than silently swallowed.
-        container_display = _display_path or file_path
-        for att_path in attachment_paths:
-            att_display = container_display / att_path.name
-            try:
-                documents.extend(
-                    self._extract_recursive(
-                        att_path,
-                        depth=depth + 1,
-                        _display_path=att_display,
-                        _extracted_from=str(container_display),
-                        record_error=record_error,
-                    )
+                attachment_map = self._unpack_recursive(
+                    file_path,
+                    container_paths,
+                    depth=0,
+                    current_erp="",
                 )
             except ExtractionDepthError:
                 raise
             except ExtractionError as exc:
-                error_type = type(exc).__name__
                 log.warning(
-                    "failed to extract attachment",
-                    attachment=str(att_path),
-                    container=str(file_path),
-                    depth=depth,
+                    "unpack failed, embedded docs will lack download files",
+                    file_path=str(file_path),
                     error=str(exc),
                 )
-                EXTRACTION_ERRORS.labels(error_type="AttachmentError").inc()
-                if record_error is not None:
-                    record_error(att_path, error_type, str(exc))
 
-        if not documents:
-            try:
-                file_size = file_path.stat().st_size
-            except OSError:
-                file_size = 0
-            if file_size > 0:
-                # Tika parsed the file but extracted no text — record as a
-                # failure (e.g. for later re-indexing with OCR) but still index
-                # the document so its metadata is searchable.
-                EXTRACTION_ERRORS.labels(error_type="EmptyExtraction").inc()
-                msg = f"Tika produced no text for {file_path} ({file_size} bytes)"
-                log.warning("empty extraction", file_path=str(file_path), file_size=file_size)
-                if record_error is not None:
-                    record_error(file_path, "EmptyExtraction", msg)
-            documents.append(Document(source_path=file_path, content="", metadata=metadata))
+        EXTRACTION_DURATION.observe(time.monotonic() - start)
+
+        documents: list[Document] = []
+
+        for i, part in enumerate(parts):
+            content = _condense_whitespace((part.get(TIKA_CONTENT_KEY) or "").strip())
+            metadata = _normalize_metadata(part)
+
+            if i == 0:
+                source = file_path
+            else:
+                # Embedded document — resolve source path and display metadata.
+                erp = part.get(_EMBEDDED_RESOURCE_PATH_KEY, "")
+                resource_name = part.get("resourceName") or erp.rsplit("/", 1)[-1] or f"embedded-{i}"
+
+                source = attachment_map.get(erp, file_path)
+
+                if erp:
+                    display = file_path / erp.lstrip("/")
+                else:
+                    display = file_path / resource_name
+                metadata["_aum_display_path"] = str(display)
+
+                if erp and "/" in erp.strip("/"):
+                    parent_erp = erp.rsplit("/", 1)[0]
+                    metadata["_aum_extracted_from"] = str(file_path / parent_erp.lstrip("/"))
+                else:
+                    metadata["_aum_extracted_from"] = str(file_path)
+
+            documents.append(Document(source_path=source, content=content, metadata=metadata))
+
+            # Record empty extraction for any document (container or embedded)
+            # that produced no text from a non-zero-size source.
+            if not content:
+                try:
+                    src_size = source.stat().st_size
+                except OSError:
+                    src_size = 0
+                if src_size > 0:
+                    EXTRACTION_ERRORS.labels(error_type="EmptyExtraction").inc()
+                    msg = f"Tika produced no text for {source} ({src_size} bytes)"
+                    log.warning("empty extraction", file_path=str(source), file_size=src_size)
+                    if record_error is not None:
+                        record_error(source, "EmptyExtraction", msg)
 
         log.info(
             "extracted document",
             file_path=str(file_path),
-            depth=depth,
             parts=len(documents),
+            embedded=has_embedded,
         )
-
         return documents
 
-    def _unpack(self, file_path: Path) -> tuple[dict, list[Path]]:
-        """Call Tika's /unpack/all endpoint.
+    def supports(self, mime_type: str) -> bool:
+        return True
 
-        Returns (parsed_dict, attachment_paths) where parsed_dict contains
-        'content' (__TEXT__ — container only, no embedded docs) and 'metadata'.
-        Raises ExtractionError if the unpack call fails.
-        """
-        try:
-            raw = tika_parse1(
-                "unpack",
-                str(file_path),
-                self._server_url,
-                responseMimeType="application/zip",
-                services={"meta": "/meta", "text": "/tika", "all": "/rmeta/xml", "unpack": "/unpack/all"},
-                rawResponse=True,
-                headers=self._tika_headers(),
-                requestOptions={"timeout": self._request_timeout},
-            )
-            status, response_bytes = raw
-            parsed = _parse_zip_response(raw)
-        except Exception as exc:
-            EXTRACTION_ERRORS.labels(error_type="UnpackError").inc()
-            raise ExtractionError(
-                f"Tika unpack failed for {file_path} (HTTP {status if 'status' in dir() else '?'}): {exc}"
-            ) from exc
+    # ------------------------------------------------------------------
+    # HTTP helpers
+    # ------------------------------------------------------------------
 
-        if status != 200 and not parsed:
-            reason = (
-                response_bytes.decode("utf-8", errors="replace").strip()[:200] if response_bytes else "empty response"
-            )
-            EXTRACTION_ERRORS.labels(error_type="UnpackError").inc()
-            raise ExtractionError(f"Tika unpack failed for {file_path} (HTTP {status}): {reason}")
-
-        attachments: dict[str, bytes] = parsed.get("attachments") or {}
-        attachment_paths: list[Path] = []
-
-        if attachments:
-            dest_dir = _container_dir(self._extract_dir, self._index_name, file_path)
-            dest_dir.mkdir(parents=True, exist_ok=True)
-
-            for name, data in attachments.items():
-                safe_name = Path(name).name or name.replace("/", "_")
-                if not safe_name:
-                    continue
-                att_path = dest_dir / safe_name
-                att_path.write_bytes(data)
-                attachment_paths.append(att_path)
-                log.debug(
-                    "saved attachment",
-                    container=str(file_path),
-                    attachment=str(att_path),
-                    size=len(data),
-                )
-
-        return parsed, attachment_paths
-
-    def _extract_container(self, file_path: Path) -> Document | None:
-        """Fallback: extract text and metadata via the parser with skip-embedded.
-
-        Used when unpack produces no text content.
-        """
-        headers = self._tika_headers(skip_embedded=True)
-
-        try:
-            parts = tika_parser.from_file(
-                str(file_path),
-                serverEndpoint=self._server_url,
-                headers=headers,
-                service="all",
-                requestOptions={"timeout": self._request_timeout},
-            )
-        except Exception as exc:
-            EXTRACTION_ERRORS.labels(error_type=type(exc).__name__).inc()
-            raise ExtractionError(f"Tika failed to parse {file_path}: {exc}") from exc
-
-        if not parts:
-            EXTRACTION_ERRORS.labels(error_type="NullResponse").inc()
-            raise ExtractionError(f"Tika returned null for {file_path}")
-
-        if isinstance(parts, dict):
-            parts = [parts]
-
-        container = parts[0]
-        status = container.get("status")
-        if status is not None and status != 200:
-            EXTRACTION_ERRORS.labels(error_type=f"TikaHTTP{status}").inc()
-            raise ExtractionError(f"Tika returned HTTP {status} for {file_path}")
-
-        content = _condense_whitespace((container.get("content") or "").strip())
-        if not content:
-            return None
-
-        raw_metadata = container.get("metadata") or {}
-        return Document(
-            source_path=file_path,
-            content=content,
-            metadata=_normalize_metadata(raw_metadata),
-        )
-
-    def _tika_headers(self, skip_embedded: bool = False) -> dict[str, str]:
+    def _tika_headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
         if not self._ocr_enabled:
             headers["X-Tika-OCRskipOcr"] = "true"
         else:
             headers["X-Tika-OCRLanguage"] = self._ocr_language
-        if skip_embedded:
-            headers["X-Tika-Skip-Embedded"] = "true"
         return headers
 
-    def supports(self, mime_type: str) -> bool:
-        # Tika is the catch-all extractor — it handles virtually everything.
-        # More specialized extractors can claim specific types at higher priority.
-        return True
+    def _rmeta(self, file_path: Path) -> list[dict]:
+        """Call ``PUT /rmeta/text`` and return the JSON metadata list.
+
+        The first element is the container; subsequent elements are embedded
+        documents (recursively, at all depths).  Each element's
+        ``X-TIKA:content`` key holds the extracted plain text.
+        """
+        headers = {
+            **self._tika_headers(),
+            "Accept": "application/json",
+        }
+
+        try:
+            with open(file_path, "rb") as f:
+                resp = self._client.put(
+                    f"{self._server_url}/rmeta/text",
+                    content=f,
+                    headers=headers,
+                )
+        except httpx.HTTPError as exc:
+            EXTRACTION_ERRORS.labels(error_type="RmetaConnectionError").inc()
+            raise ExtractionError(f"Tika /rmeta request failed for {file_path}: {exc}") from exc
+
+        if resp.status_code != 200:
+            EXTRACTION_ERRORS.labels(error_type=f"TikaHTTP{resp.status_code}").inc()
+            raise ExtractionError(f"Tika /rmeta returned HTTP {resp.status_code} for {file_path}: {resp.text[:200]}")
+
+        try:
+            return resp.json()
+        except Exception as exc:
+            EXTRACTION_ERRORS.labels(error_type="RmetaParseError").inc()
+            raise ExtractionError(f"Failed to parse Tika /rmeta JSON for {file_path}: {exc}") from exc
+
+    def _unpack_raw(self, file_path: Path) -> dict[str, bytes]:
+        """Call ``PUT /unpack/all`` and return the raw attachment bytes.
+
+        Returns ``{filename: bytes}`` for immediate children only.
+        Returns an empty dict on 204 (no embedded files).
+        Raises ExtractionError on failure.
+        """
+        headers = {
+            **self._tika_headers(),
+            "Accept": "application/zip",
+        }
+
+        try:
+            with open(file_path, "rb") as f:
+                resp = self._client.put(
+                    f"{self._server_url}/unpack/all",
+                    content=f,
+                    headers=headers,
+                )
+        except httpx.HTTPError as exc:
+            EXTRACTION_ERRORS.labels(error_type="UnpackConnectionError").inc()
+            raise ExtractionError(f"Tika /unpack request failed for {file_path}: {exc}") from exc
+
+        if resp.status_code == 204:
+            return {}
+
+        if resp.status_code != 200:
+            EXTRACTION_ERRORS.labels(error_type="UnpackError").inc()
+            raise ExtractionError(f"Tika /unpack returned HTTP {resp.status_code} for {file_path}: {resp.text[:200]}")
+
+        return _parse_unpack_zip(resp.content)
+
+    def _unpack_recursive(
+        self,
+        file_path: Path,
+        container_paths: set[str],
+        depth: int,
+        current_erp: str,
+    ) -> dict[str, Path]:
+        """Recursively unpack embedded files and save them to disk.
+
+        *container_paths* is the set of ``embedded_resource_path`` values
+        (from the /rmeta response) that are known to contain further
+        embedded documents and therefore need recursive unpacking.
+
+        Returns a flat mapping of ``{embedded_resource_path: local_path}``
+        covering all depths.
+        """
+        if depth > self._max_depth:
+            raise ExtractionDepthError(f"extraction depth limit ({self._max_depth}) exceeded at {file_path}")
+
+        raw = self._unpack_raw(file_path)
+        if not raw:
+            return {}
+
+        dest_dir = _container_dir(self._extract_dir, self._index_name, file_path)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        result: dict[str, Path] = {}
+        for name, data in raw.items():
+            safe_name = Path(name).name or name.replace("/", "_")
+            if not safe_name:
+                continue
+            att_path = dest_dir / safe_name
+            att_path.write_bytes(data)
+
+            child_erp = f"{current_erp}/{name}"
+            result[child_erp] = att_path
+            log.debug(
+                "saved attachment",
+                container=str(file_path),
+                attachment=str(att_path),
+                erp=child_erp,
+                size=len(data),
+            )
+
+            # If this child is itself a container, recursively unpack it.
+            if child_erp in container_paths:
+                try:
+                    nested = self._unpack_recursive(
+                        att_path,
+                        container_paths,
+                        depth + 1,
+                        child_erp,
+                    )
+                    result.update(nested)
+                except ExtractionDepthError:
+                    raise
+                except ExtractionError as exc:
+                    log.warning(
+                        "recursive unpack failed for attachment",
+                        attachment=str(att_path),
+                        container=str(file_path),
+                        erp=child_erp,
+                        error=str(exc),
+                    )
+
+        return result
