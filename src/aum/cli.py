@@ -780,7 +780,11 @@ def _generate_password(length: int = 20) -> str:
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
     while True:
         password = "".join(secrets.choice(alphabet) for _ in range(length))
-        if any(c.isalpha() for c in password) and any(c.isdigit() for c in password):
+        if (
+            any(c.isalpha() for c in password)
+            and any(c.isdigit() for c in password)
+            and any(c in "!@#$%^&*" for c in password)
+        ):
             return password
 
 
