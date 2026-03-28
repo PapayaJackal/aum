@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import time
+import zipfile
 from pathlib import Path
 
 import structlog
 from tika import parser as tika_parser
-from tika import unpack as tika_unpack
 from tika.tika import parse1 as tika_parse1
 
 from aum.extraction.base import ExtractionDepthError, ExtractionError, RecordErrorFn
@@ -44,6 +46,51 @@ def _normalize_metadata(raw: dict) -> dict[str, str | list[str]]:
         else:
             metadata[key] = str(value)
     return metadata
+
+
+def _parse_zip_response(raw: tuple[int, bytes]) -> dict:
+    """Parse Tika's /unpack/all zip response into the same dict format as
+    tika-python's ``unpack._parse()`` (content, metadata, attachments).
+
+    Tika's ZipWriter produces a zip with ``__TEXT__`` (UTF-8 document text),
+    ``__METADATA__`` (CSV key-value pairs), and any embedded files as
+    additional entries.
+    """
+    parsed: dict = {}
+    if not raw or raw[1] is None or raw[1] == b"":
+        return parsed
+
+    with zipfile.ZipFile(io.BytesIO(raw[1])) as zf:
+        names = set(zf.namelist())
+
+        # Metadata (CSV: key,value[,value...])
+        metadata: dict[str, str | list[str]] = {}
+        if "__METADATA__" in names:
+            names.discard("__METADATA__")
+            with zf.open("__METADATA__") as f:
+                # Strip null bytes that Tika may emit (TIKA-3070).
+                lines = (line.replace("\0", "") for line in io.TextIOWrapper(f, encoding="utf-8"))
+                reader = csv.reader(lines)
+                for row in reader:
+                    if len(row) >= 2:
+                        metadata[row[0]] = row[1:] if len(row) > 2 else row[1]
+
+        # Text content
+        content = ""
+        if "__TEXT__" in names:
+            names.discard("__TEXT__")
+            content = zf.read("__TEXT__").decode("utf-8")
+
+        # Remaining entries are attachments
+        attachments: dict[str, bytes] = {}
+        for name in names:
+            attachments[name] = zf.read(name)
+
+        parsed["content"] = content
+        parsed["metadata"] = metadata
+        parsed["attachments"] = attachments
+
+    return parsed
 
 
 def _container_dir(extract_dir: Path, index_name: str, file_path: Path) -> Path:
@@ -217,14 +264,14 @@ class TikaExtractor:
                 "unpack",
                 str(file_path),
                 self._server_url,
-                responseMimeType="application/x-tar",
+                responseMimeType="application/zip",
                 services={"meta": "/meta", "text": "/tika", "all": "/rmeta/xml", "unpack": "/unpack/all"},
                 rawResponse=True,
                 headers=self._tika_headers(),
                 requestOptions={"timeout": self._request_timeout},
             )
             status, response_bytes = raw
-            parsed = tika_unpack._parse(raw)
+            parsed = _parse_zip_response(raw)
         except Exception as exc:
             EXTRACTION_ERRORS.labels(error_type="UnpackError").inc()
             raise ExtractionError(

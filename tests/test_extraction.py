@@ -1,12 +1,14 @@
 """Tests for text extraction helpers."""
 
+import io
+import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from aum.extraction.base import ExtractionError
-from aum.extraction.tika import TikaExtractor, _condense_whitespace, _container_dir
+from aum.extraction.tika import TikaExtractor, _condense_whitespace, _container_dir, _parse_zip_response
 
 
 class TestCondenseWhitespace:
@@ -92,6 +94,99 @@ class TestContainerDir:
         assert _container_dir(Path("/ex"), "idx", file_path) == _container_dir(Path("/ex"), "idx", file_path)
 
 
+def _make_zip_response(
+    text: str = "",
+    metadata: dict | None = None,
+    attachments: dict[str, bytes] | None = None,
+) -> tuple[int, bytes]:
+    """Build a fake Tika /unpack/all zip response for testing."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        if text:
+            zf.writestr("__TEXT__", text.encode("utf-8"))
+        if metadata:
+            csv_buf = io.StringIO()
+            import csv
+
+            writer = csv.writer(csv_buf)
+            for k, v in metadata.items():
+                if isinstance(v, list):
+                    writer.writerow([k, *v])
+                else:
+                    writer.writerow([k, v])
+            zf.writestr("__METADATA__", csv_buf.getvalue().encode("utf-8"))
+        for name, data in (attachments or {}).items():
+            zf.writestr(name, data)
+    return (200, buf.getvalue())
+
+
+class TestParseZipResponse:
+    """Tests for _parse_zip_response()."""
+
+    def test_empty_response(self) -> None:
+        assert _parse_zip_response((200, b"")) == {}
+        assert _parse_zip_response((200, None)) == {}
+
+    def test_text_and_metadata(self) -> None:
+        raw = _make_zip_response(
+            text="Hello world",
+            metadata={"Author": "Test", "dc:title": "My Doc"},
+        )
+        parsed = _parse_zip_response(raw)
+        assert parsed["content"] == "Hello world"
+        assert parsed["metadata"]["Author"] == "Test"
+        assert parsed["metadata"]["dc:title"] == "My Doc"
+
+    def test_multivalue_metadata(self) -> None:
+        raw = _make_zip_response(metadata={"Keywords": ["foo", "bar", "baz"]})
+        parsed = _parse_zip_response(raw)
+        assert parsed["metadata"]["Keywords"] == ["foo", "bar", "baz"]
+
+    def test_attachments_extracted(self) -> None:
+        raw = _make_zip_response(
+            text="container text",
+            attachments={
+                "report.pdf": b"pdf-bytes",
+                "image.png": b"png-bytes",
+            },
+        )
+        parsed = _parse_zip_response(raw)
+        assert parsed["attachments"]["report.pdf"] == b"pdf-bytes"
+        assert parsed["attachments"]["image.png"] == b"png-bytes"
+        assert len(parsed["attachments"]) == 2
+
+    def test_long_filename_attachment(self) -> None:
+        """ZIP format has no 100-byte filename limit — this is the whole point."""
+        long_name = "a" * 200 + ".pdf"
+        raw = _make_zip_response(
+            text="text",
+            attachments={long_name: b"data"},
+        )
+        parsed = _parse_zip_response(raw)
+        assert parsed["attachments"][long_name] == b"data"
+
+    def test_no_text_entry(self) -> None:
+        raw = _make_zip_response(metadata={"Author": "X"})
+        parsed = _parse_zip_response(raw)
+        assert parsed["content"] == ""
+        assert parsed["metadata"]["Author"] == "X"
+
+    def test_no_metadata_entry(self) -> None:
+        raw = _make_zip_response(text="just text")
+        parsed = _parse_zip_response(raw)
+        assert parsed["content"] == "just text"
+        assert parsed["metadata"] == {}
+
+    def test_null_bytes_in_metadata_stripped(self) -> None:
+        """Tika may emit null bytes in metadata CSV (TIKA-3070)."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("__METADATA__", "Author,Test\x00Value\n")
+        raw = (200, buf.getvalue())
+        parsed = _parse_zip_response(raw)
+        assert parsed["metadata"]["Author"] == "TestValue"
+
+
 class TestTikaHeaders:
     """Tests for OCR header propagation."""
 
@@ -122,7 +217,7 @@ class TestTikaHeaders:
 
         with patch("aum.extraction.tika.tika_parse1") as mock_parse1:
             mock_parse1.return_value = (200, b"")
-            with patch("aum.extraction.tika.tika_unpack._parse", return_value={"content": "text", "metadata": {}}):
+            with patch("aum.extraction.tika._parse_zip_response", return_value={"content": "text", "metadata": {}}):
                 ext._unpack(source)
 
         mock_parse1.assert_called_once()
