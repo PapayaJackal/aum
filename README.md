@@ -2,7 +2,7 @@
 
 A document search engine with optional hybrid (keyword + vector) search. It
 extracts text and metadata from documents using Apache Tika, indexes them in
-Elasticsearch, and serves a web UI for searching across your corpus.
+Meilisearch, and serves a web UI for searching across your corpus.
 
 This is a personal project used to iterate on ideas around document search
 and retrieval. It is not production software. If you need a production-grade
@@ -14,7 +14,7 @@ document search platform, look at
 
 - Ingest directories of documents (PDF, Office, email, archives) with
   automatic text extraction and recursive unpacking of nested files
-- Full-text search powered by Elasticsearch
+- Full-text search powered by Meilisearch
 - Optional hybrid search combining BM25 keyword scoring with vector
   similarity (via Ollama or any OpenAI-compatible embedding API)
 - Faceted filtering by file type, author, date, and email addresses
@@ -28,7 +28,7 @@ document search platform, look at
 ## Requirements
 
 - Python 3.11+
-- Elasticsearch 9.3+
+- Meilisearch 1.x+
 - Apache Tika 3.x
 - Node.js 22+ (to build the frontend)
 - [uv](https://docs.astral.sh/uv/)
@@ -36,7 +36,7 @@ document search platform, look at
 
 ## Getting started
 
-Start the supporting services (Elasticsearch and Tika) with Docker Compose:
+Start the supporting services (Meilisearch and Tika) with Docker Compose:
 
 ```sh
 docker compose up -d
@@ -80,7 +80,7 @@ Run `uv run aum config` to print the resolved configuration.
 
 Key settings:
 
-- `AUM_ES_URL` -- Elasticsearch URL (default: `http://localhost:9200`)
+- `AUM_MEILI_URL` -- Meilisearch URL (default: `http://localhost:7700`)
 - `AUM_TIKA_SERVER_URL` -- Tika URL (default: `http://localhost:9998`)
 - `AUM_JWT_SECRET` -- JWT signing secret. If not set, a random one is
   generated on each restart and sessions will not persist.
