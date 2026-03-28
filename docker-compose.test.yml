@@ -32,19 +32,16 @@ services:
       retries: 15
 
   test-runner:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.test
     entrypoint: ["sh", "-c"]
     command:
       - |
         set -ex
-        uv sync --frozen --no-dev
-        uv pip install pytest-order pytest-asyncio
-        env -i HOME="$HOME" PATH="$PATH" PYTHONUNBUFFERED=1 uv run python -m pytest tests/ --ignore=tests/integration -x -q
-        uv pip install pytest-playwright
-        uv run playwright install chromium --with-deps
+        uv run python -m pytest tests/ --ignore=tests/integration -x -q
         uv run python -c "import httpx; httpx.post('http://ollama:11434/api/pull', json={'name':'snowflake-arctic-embed:xs'}, timeout=300).raise_for_status()"
         uv run python -m pytest tests/integration/ -v --tb=short -x -o asyncio_mode=strict
-    working_dir: /app
     depends_on:
       meilisearch:
         condition: service_healthy
@@ -69,6 +66,8 @@ services:
       - AUM_OCR_ENABLED=false
       - PYTHONUNBUFFERED=1
     volumes:
+      - ./src:/app/src:ro,z
+      - ./tests:/app/tests:ro,z
       - ./testdata:/testdata:ro,z
 
 volumes:

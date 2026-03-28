@@ -1,0 +1,20 @@
+# Test runner image with all test dependencies and Playwright pre-installed
+FROM python:3.14-slim
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/
+
+WORKDIR /app
+
+# Install Python dependencies (prod + dev)
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project --extra dev
+
+# Install Playwright browsers + OS dependencies
+RUN uv run python -m playwright install chromium --with-deps
+
+# Install the project package (source is bind-mounted at runtime)
+COPY src/ src/
+RUN uv sync --frozen --extra dev
+
+ENTRYPOINT ["uv", "run", "python", "-m", "pytest"]
