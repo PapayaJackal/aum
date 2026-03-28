@@ -6,6 +6,7 @@ interface Prefs {
   pageSize: number;
   selectedIndices: string[];
   searchType: "text" | "hybrid";
+  semanticRatio: number;
   indexSearchTypes: Record<string, "text" | "hybrid">;
 }
 
@@ -26,10 +27,11 @@ function loadPrefs(): Prefs {
       } else if (typeof parsed.selectedIndex === "string" && parsed.selectedIndex) {
         selectedIndices = [parsed.selectedIndex];
       }
-      return { pageSize: parsed.pageSize ?? 20, selectedIndices, searchType, indexSearchTypes };
+      const semanticRatio = Math.max(0, Math.min(1, Number(parsed.semanticRatio ?? 0.5))) || 0.5;
+      return { pageSize: parsed.pageSize ?? 20, selectedIndices, searchType, semanticRatio, indexSearchTypes };
     }
   } catch {}
-  return { pageSize: 20, selectedIndices: [], searchType: "hybrid", indexSearchTypes: {} };
+  return { pageSize: 20, selectedIndices: [], searchType: "hybrid", semanticRatio: 0.5, indexSearchTypes: {} };
 }
 
 export function savePrefs() {
@@ -40,6 +42,7 @@ export function savePrefs() {
         pageSize: searchState.pageSize,
         selectedIndices: searchState.selectedIndices,
         searchType: searchState.searchType,
+        semanticRatio: searchState.semanticRatio,
         indexSearchTypes: searchState.indexSearchTypes,
       }),
     );
@@ -66,6 +69,7 @@ export const searchState = $state<{
   query: string;
   submittedQuery: string;
   searchType: "text" | "hybrid";
+  semanticRatio: number;
   selectedIndices: string[];
   results: SearchResult[];
   total: number;
@@ -81,6 +85,7 @@ export const searchState = $state<{
   query: "",
   submittedQuery: "",
   searchType: _prefs.searchType,
+  semanticRatio: _prefs.semanticRatio,
   selectedIndices: _prefs.selectedIndices,
   results: [] as SearchResult[],
   total: 0,
@@ -98,6 +103,9 @@ export function getSearchQs(): string {
   const params = new URLSearchParams();
   if (searchState.submittedQuery) params.set("q", searchState.submittedQuery);
   params.set("type", searchState.searchType);
+  if (searchState.searchType === "hybrid" && searchState.semanticRatio !== 0.5) {
+    params.set("semanticRatio", String(searchState.semanticRatio));
+  }
   if (searchState.selectedIndices.length > 0) params.set("index", searchState.selectedIndices.join(","));
   if (searchState.currentPage > 1) params.set("page", String(searchState.currentPage));
   if (searchState.pageSize !== 20) params.set("pageSize", String(searchState.pageSize));

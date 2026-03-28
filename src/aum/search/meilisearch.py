@@ -463,6 +463,7 @@ class MeilisearchBackend:
         offset: int = 0,
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
+        semantic_ratio: float | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         params = self._common_search_params(
             limit=limit,
@@ -472,9 +473,8 @@ class MeilisearchBackend:
             highlight=True,
         )
         params["vector"] = vector
-        # 0.75 gives more weight to semantic similarity so conceptually relevant
-        # documents win even when they don't share surface keywords with the query.
-        params["hybrid"] = {"semanticRatio": self._semantic_ratio, "embedder": "custom"}
+        ratio = semantic_ratio if semantic_ratio is not None else self._semantic_ratio
+        params["hybrid"] = {"semanticRatio": ratio, "embedder": "custom"}
         t0 = time.monotonic()
         results, total, merged_facets = self._execute_search(query, params)
         SEARCH_LATENCY.labels(type="hybrid", backend="meilisearch").observe(time.monotonic() - t0)

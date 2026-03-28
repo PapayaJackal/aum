@@ -112,6 +112,7 @@ async def search(
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
     filters: Annotated[str | None, Query()] = None,
+    semantic_ratio: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
 ) -> SearchResponse:
     config = get_config()
     idx_raw = index or default_index_name(config)
@@ -141,7 +142,13 @@ async def search(
         embedder = _get_embedder_for_indices(idx_list)
         vector = embedder.embed_query(q)
         results, total, facets = backend.search_hybrid(
-            q, vector, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters
+            q,
+            vector,
+            limit=limit,
+            offset=offset,
+            include_facets=include_facets,
+            filters=parsed_filters,
+            semantic_ratio=semantic_ratio,
         )
     else:
         raise HTTPException(status_code=400, detail=f"Unknown search type: {type}")
@@ -157,6 +164,7 @@ async def search(
         total=total,
         facets_included=include_facets,
         filters=parsed_filters,
+        semantic_ratio=semantic_ratio,
     )
 
     return SearchResponse(

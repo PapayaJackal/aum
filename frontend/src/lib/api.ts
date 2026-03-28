@@ -130,11 +130,15 @@ export function search(
   index: string = "",
   offset: number = 0,
   filters: Record<string, string[]> = {},
+  semanticRatio?: number,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q: query, type, limit: String(limit), offset: String(offset) });
   if (index) params.set("index", index);
   if (Object.keys(filters).length > 0) {
     params.set("filters", JSON.stringify(filters));
+  }
+  if (semanticRatio != null) {
+    params.set("semantic_ratio", String(semanticRatio));
   }
   return request(`/search?${params}`);
 }

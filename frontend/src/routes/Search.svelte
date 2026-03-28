@@ -57,6 +57,19 @@
   let loading = $state(false);
   let error = $state("");
 
+  let sliderVisible = $state(false);
+  let sliderHideTimer: ReturnType<typeof setTimeout> | undefined;
+  function showSlider() {
+    clearTimeout(sliderHideTimer);
+    sliderVisible = true;
+  }
+  function hideSlider() {
+    clearTimeout(sliderHideTimer);
+    sliderHideTimer = setTimeout(() => {
+      sliderVisible = false;
+    }, 400);
+  }
+
   function updateSearchUrl() {
     const qs = getSearchQs();
     history.replaceState(null, "", qs ? `#/?${qs}` : "#/");
@@ -108,6 +121,7 @@
         joinedIndex,
         offset,
         activeFilters,
+        searchState.searchType === "hybrid" ? searchState.semanticRatio : undefined,
       );
       searchState.results = res.results;
       searchState.total = res.total;
@@ -135,6 +149,8 @@
     searchState.query = q;
     const typeParam = params.get("type");
     if (typeParam === "text" || typeParam === "hybrid") searchState.searchType = typeParam;
+    const srParam = params.get("semanticRatio");
+    if (srParam != null) searchState.semanticRatio = Math.max(0, Math.min(1, parseFloat(srParam) || 0.5));
     const indexParam = params.get("index");
     if (indexParam) {
       searchState.selectedIndices = indexParam.split(",").filter(Boolean);
@@ -177,6 +193,8 @@
     searchState.query = q;
     const typeParam = params.get("type");
     if (typeParam === "text" || typeParam === "hybrid") searchState.searchType = typeParam;
+    const srParam = params.get("semanticRatio");
+    if (srParam != null) searchState.semanticRatio = Math.max(0, Math.min(1, parseFloat(srParam) || 0.5));
     const indexParam = params.get("index");
     if (indexParam) {
       searchState.selectedIndices = indexParam.split(",").filter(Boolean);
@@ -284,36 +302,49 @@
     {#if indices.length > 0}
       <IndexSelector {indices} selectedIndices={searchState.selectedIndices} onchange={handleIndicesChange} />
     {/if}
-    <div
-      class="flex shrink-0 rounded overflow-hidden border {hybridEnabled
-        ? 'border-white/40'
-        : 'border-white/40 opacity-50'}"
-    >
-      <button
-        type="button"
-        class="px-3 py-[0.45rem] border-none rounded-none text-xs cursor-pointer shrink-0 {searchState.searchType ===
-        'text'
-          ? 'bg-white/90 text-(--color-brand) font-medium'
-          : 'bg-white/15 text-white/85'} disabled:cursor-not-allowed hover:enabled:bg-white/25"
-        disabled={!hybridEnabled && searchState.searchType !== "text"}
-        onclick={() => {
-          searchState.searchType = "text";
-          handleSearchTypeChange();
-        }}>Full text</button
-      >
-      <button
-        type="button"
-        class="px-3 py-[0.45rem] border-none rounded-none text-xs cursor-pointer shrink-0 {searchState.searchType ===
-        'hybrid'
-          ? 'bg-white/90 text-(--color-brand) font-medium'
-          : 'bg-white/15 text-white/85'} disabled:cursor-not-allowed hover:enabled:bg-white/25"
-        disabled={!hybridEnabled}
-        onclick={() => {
-          searchState.searchType = "hybrid";
-          handleSearchTypeChange();
-        }}>Hybrid</button
-      >
-    </div>
+    {#if hybridEnabled}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="relative shrink-0" onmouseenter={showSlider} onmouseleave={hideSlider}>
+        <label
+          class="flex items-center gap-1.5 text-xs text-white/90 select-none cursor-pointer px-2 py-[0.45rem]"
+          title="Combine keyword and semantic search"
+        >
+          <input
+            type="checkbox"
+            class="accent-(--color-accent)"
+            checked={searchState.searchType === "hybrid"}
+            onchange={(e) => {
+              searchState.searchType = e.currentTarget.checked ? "hybrid" : "text";
+              handleSearchTypeChange();
+            }}
+          />
+          Hybrid
+        </label>
+        {#if searchState.searchType === "hybrid" && sliderVisible}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="absolute top-full right-0 mt-1 flex items-center gap-1.5 bg-(--color-brand) border border-white/20 rounded px-3 py-2 shadow-lg z-10 whitespace-nowrap text-[10px] text-white/70"
+            onmouseenter={showSlider}
+            onmouseleave={hideSlider}
+          >
+            <span>Keyword</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              class="w-24 accent-(--color-accent)"
+              bind:value={searchState.semanticRatio}
+              oninput={() => savePrefs()}
+              onchange={() => {
+                if (searchState.searched) doSearch(1);
+              }}
+            />
+            <span>Semantic</span>
+          </div>
+        {/if}
+      </div>
+    {/if}
     <button
       type="submit"
       disabled={loading || !searchState.query.trim()}

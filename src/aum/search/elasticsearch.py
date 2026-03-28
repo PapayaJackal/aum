@@ -378,6 +378,7 @@ class ElasticsearchBackend:
         offset: int = 0,
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
+        semantic_ratio: float | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         should_clauses: list[dict] = [
             {"match": {"content": {"query": query, "operator": "and", "boost": 2}}},

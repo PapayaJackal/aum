@@ -46,7 +46,7 @@ class AumConfig(BaseSettings):
     meili_index: str = "aum"
     # Blend ratio for hybrid search (0.0 = pure keyword, 1.0 = pure semantic).
     # Higher values favour vector similarity over keyword overlap.
-    meili_semantic_ratio: float = 0.75
+    meili_semantic_ratio: float = 0.5
     # Number of words shown in content snippets.  Meilisearch measures this in
     # words (not characters); 50 words ≈ 300 characters.
     meili_crop_length: int = 50
