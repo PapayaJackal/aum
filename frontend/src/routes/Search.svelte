@@ -8,6 +8,9 @@
     savePrefs,
     saveIndexSearchType,
     getIndexSearchType,
+    saveBaselineFacets,
+    restoreBaselineFacets,
+    clearBaselineFacets,
   } from "../lib/searchState.svelte";
   import ResultList from "../components/ResultList.svelte";
   import FacetPanel from "../components/FacetPanel.svelte";
@@ -127,6 +130,10 @@
       searchState.total = res.total;
       if (res.facets !== null) {
         searchState.facets = res.facets;
+        if (resetFacets || Object.keys(searchState.baselineFacets).length === 0) {
+          searchState.baselineFacets = res.facets;
+          saveBaselineFacets(searchState.query, joinedIndex);
+        }
       }
     } catch (err: any) {
       error = err.message || "Search failed";
@@ -146,6 +153,8 @@
     searchState.searched = false;
     searchState.activeFacets = {};
     searchState.facets = {};
+    searchState.baselineFacets = {};
+    clearBaselineFacets();
     searchState.currentPage = 1;
     searchState.selectedDocId = "";
     searchState.selectedDocIndex = "";
@@ -187,6 +196,7 @@
       searchState.selectedDocId = "";
       searchState.selectedDocIndex = "";
     }
+    restoreBaselineFacets(q, searchState.selectedIndices.join(","));
     doSearch(parseInt(params.get("page") || "1"), false);
   }
 
@@ -224,6 +234,7 @@
     }
     searchState.selectedDocId = params.get("doc") || "";
     searchState.selectedDocIndex = params.get("docIndex") || "";
+    restoreBaselineFacets(q, searchState.selectedIndices.join(","));
     doSearch(parseInt(params.get("page") || "1"), false);
   }
 
@@ -267,7 +278,9 @@
 
   let totalPages = $derived(Math.max(1, Math.ceil(searchState.total / searchState.pageSize)));
 
-  let facets = $derived(searchState.facets);
+  let facets = $derived(
+    Object.keys(searchState.baselineFacets).length > 0 ? searchState.baselineFacets : searchState.facets,
+  );
 
   let multiIndex = $derived(searchState.selectedIndices.length > 1);
 

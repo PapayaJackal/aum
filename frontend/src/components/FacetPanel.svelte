@@ -36,7 +36,10 @@
     activeFacets = {};
   }
 
-  // Date range helpers
+  // Date range helpers — local draft state so dragging the slider doesn't fire
+  // a search on every tick; only commit to activeFacets on pointer release.
+  let dateDrafts = $state<Record<string, { lo: number; hi: number }>>({});
+
   function dateRange(key: string): { min: number; max: number; lo: number; hi: number } {
     const values =
       facets[key]
@@ -45,17 +48,24 @@
         .sort((a, b) => a - b) ?? [];
     const min = values[0] ?? 2000;
     const max = values[values.length - 1] ?? new Date().getFullYear();
+    const draft = dateDrafts[key];
+    if (draft) return { min, max, lo: draft.lo, hi: draft.hi };
     const active = activeFacets[key];
     const lo = active?.[0] ? Number(active[0]) : min;
     const hi = active?.[1] ? Number(active[1]) : max;
     return { min, max, lo, hi };
   }
 
-  function setDateRange(key: string, lo: number, hi: number, min: number, max: number) {
+  function updateDateDraft(key: string, lo: number, hi: number) {
+    dateDrafts = { ...dateDrafts, [key]: { lo, hi } };
+  }
+
+  function commitDateRange(key: string, lo: number, hi: number, min: number, max: number) {
+    const { [key]: _, ...rest } = dateDrafts;
+    dateDrafts = rest;
     if (lo <= min && hi >= max) {
-      // Full range = no filter
-      const { [key]: _, ...rest } = activeFacets;
-      activeFacets = rest;
+      const { [key]: __, ...restFacets } = activeFacets;
+      activeFacets = restFacets;
     } else {
       activeFacets = { ...activeFacets, [key]: [String(lo), String(hi)] };
     }
@@ -92,7 +102,11 @@
               value={dr.lo}
               oninput={(e) => {
                 const v = Math.min(Number((e.target as HTMLInputElement).value), dr.hi);
-                setDateRange(key, v, dr.hi, dr.min, dr.max);
+                updateDateDraft(key, v, dr.hi);
+              }}
+              onchange={() => {
+                const d = dateDrafts[key];
+                if (d) commitDateRange(key, d.lo, d.hi, dr.min, dr.max);
               }}
             />
             <input
@@ -102,7 +116,11 @@
               value={dr.hi}
               oninput={(e) => {
                 const v = Math.max(Number((e.target as HTMLInputElement).value), dr.lo);
-                setDateRange(key, dr.lo, v, dr.min, dr.max);
+                updateDateDraft(key, dr.lo, v);
+              }}
+              onchange={() => {
+                const d = dateDrafts[key];
+                if (d) commitDateRange(key, d.lo, d.hi, dr.min, dr.max);
               }}
             />
           </div>

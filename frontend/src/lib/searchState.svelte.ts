@@ -1,6 +1,7 @@
 import type { SearchResult } from "./api";
 
 const PREF_KEY = "aum_prefs";
+const BASELINE_KEY = "aum_baseline_facets";
 
 interface Prefs {
   pageSize: number;
@@ -76,6 +77,7 @@ export const searchState = $state<{
   searched: boolean;
   activeFacets: Record<string, string[]>;
   facets: Record<string, string[]>;
+  baselineFacets: Record<string, string[]>;
   pageSize: number;
   currentPage: number;
   selectedDocId: string;
@@ -92,6 +94,7 @@ export const searchState = $state<{
   searched: false,
   activeFacets: {} as Record<string, string[]>,
   facets: {} as Record<string, string[]>,
+  baselineFacets: {} as Record<string, string[]>,
   pageSize: _prefs.pageSize,
   currentPage: 1,
   selectedDocId: "",
@@ -116,4 +119,31 @@ export function getSearchQs(): string {
     if (searchState.selectedDocIndex) params.set("docIndex", searchState.selectedDocIndex);
   }
   return params.toString();
+}
+
+/** Persist baseline facets to sessionStorage, keyed by query + index. */
+export function saveBaselineFacets(query: string, index: string) {
+  try {
+    sessionStorage.setItem(BASELINE_KEY, JSON.stringify({ query, index, facets: searchState.baselineFacets }));
+  } catch {}
+}
+
+/** Restore baseline facets from sessionStorage if query + index match. */
+export function restoreBaselineFacets(query: string, index: string): boolean {
+  try {
+    const raw = sessionStorage.getItem(BASELINE_KEY);
+    if (!raw) return false;
+    const cached = JSON.parse(raw);
+    if (cached.query === query && cached.index === index) {
+      searchState.baselineFacets = cached.facets;
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+export function clearBaselineFacets() {
+  try {
+    sessionStorage.removeItem(BASELINE_KEY);
+  } catch {}
 }
