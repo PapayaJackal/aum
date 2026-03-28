@@ -72,6 +72,7 @@ class TikaExtractor:
         extract_dir: str = "data/extracted",
         index_name: str = "default",
         max_depth: int = 5,
+        request_timeout: int = 300,
     ) -> None:
         self._server_url = server_url
         self._ocr_enabled = ocr_enabled
@@ -79,6 +80,7 @@ class TikaExtractor:
         self._extract_dir = Path(extract_dir)
         self._index_name = index_name
         self._max_depth = max_depth
+        self._request_timeout = request_timeout
 
     def extract(
         self,
@@ -219,6 +221,7 @@ class TikaExtractor:
                 services={"meta": "/meta", "text": "/tika", "all": "/rmeta/xml", "unpack": "/unpack/all"},
                 rawResponse=True,
                 headers=self._tika_headers(),
+                requestOptions={"timeout": self._request_timeout},
             )
             status, response_bytes = raw
             parsed = tika_unpack._parse(raw)
@@ -271,6 +274,7 @@ class TikaExtractor:
                 serverEndpoint=self._server_url,
                 headers=headers,
                 service="all",
+                requestOptions={"timeout": self._request_timeout},
             )
         except Exception as exc:
             EXTRACTION_ERRORS.labels(error_type=type(exc).__name__).inc()

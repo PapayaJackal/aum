@@ -64,6 +64,9 @@ class AumConfig(BaseSettings):
 
     # Tika server URL for document text and metadata extraction.
     tika_server_url: str = "http://localhost:9998"
+    # Request timeout in seconds for Tika HTTP calls. OCR on large documents
+    # can take several minutes, so this defaults to 300 seconds.
+    tika_request_timeout: int = 300
     # Enable OCR via Tesseract during extraction. Requires a Tika server
     # built with Tesseract support (the -full Docker image).
     ocr_enabled: bool = False

@@ -74,6 +74,7 @@ def _make_ingest_pipeline(
         extract_dir=config.extract_dir,
         index_name=idx,
         max_depth=config.ingest_max_extract_depth,
+        request_timeout=config.tika_request_timeout,
     )
     backend = make_search_backend(config, index=idx)
     tracker = make_tracker(config)
