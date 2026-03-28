@@ -20,6 +20,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy source and install the project
 COPY src/ src/
+COPY tests/ tests/
 RUN uv sync --frozen --no-dev
 
 # Copy built frontend (served at runtime via FastAPI StaticFiles)

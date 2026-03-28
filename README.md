@@ -164,6 +164,23 @@ Together, etc).
 Once documents have embeddings, set `AUM_EMBEDDINGS_ENABLED=true` when
 running the server to enable the hybrid search option in the UI.
 
+## Testing
+
+Unit tests run locally without external services:
+
+```bash
+uv run python -m pytest
+```
+
+Integration tests exercise the full stack (Meilisearch, Tika, Ollama) inside containers. The frontend is built automatically as part of the Docker image:
+
+```bash
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner
+docker compose -f docker-compose.test.yml down -v
+```
+
+This ingests real test data, runs CLI/API/embedding/permission tests, and Playwright browser tests against the SPA.
+
 ## Prometheus metrics
 
 aum exposes Prometheus metrics on a separate port (default 9090) at

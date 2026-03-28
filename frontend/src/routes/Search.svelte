@@ -392,7 +392,7 @@
             </select>
           </div>
         </div>
-        <ResultList results={searchState.results} {multiIndex} />
+        <ResultList results={searchState.results} {multiIndex} {loading} />
       </div>
 
       {#if sidebarOpen}
