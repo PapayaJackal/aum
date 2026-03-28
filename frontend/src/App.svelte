@@ -32,9 +32,11 @@
   <main class="px-4"><Login /></main>
 {:else}
   <Search>
-    {#snippet header(form)}
+    {#snippet header(form, clearSearch)}
       <header class="bg-(--color-brand) text-white px-4 py-2 flex items-center gap-3 sticky top-0 z-50">
-        <a href="#/" class="font-bold text-xl leading-none text-white no-underline shrink-0">&#x0950;</a>
+        <a href="#/" onclick={clearSearch} class="font-bold text-xl leading-none text-white no-underline shrink-0"
+          >&#x0950;</a
+        >
         {@render form()}
         <button
           class="bg-transparent border border-gray-500 text-gray-300 px-3 py-1 rounded cursor-pointer shrink-0 text-sm hover:border-white hover:text-white"

@@ -14,7 +14,7 @@
   import IndexSelector from "../components/IndexSelector.svelte";
   import Document from "./Document.svelte";
 
-  let { header }: { header: Snippet<[() => ReturnType<Snippet>]> } = $props();
+  let { header }: { header: Snippet<[() => ReturnType<Snippet>, () => void]> } = $props();
 
   // Load available indices once on mount, set default if not yet chosen
   onMount(() => {
@@ -136,6 +136,20 @@
       loading = false;
       updateSearchUrl();
     }
+  }
+
+  function clearSearch() {
+    searchState.query = "";
+    searchState.submittedQuery = "";
+    searchState.results = [];
+    searchState.total = 0;
+    searchState.searched = false;
+    searchState.activeFacets = {};
+    searchState.facets = {};
+    searchState.currentPage = 1;
+    searchState.selectedDocId = "";
+    searchState.selectedDocIndex = "";
+    window.location.hash = "#/";
   }
 
   /** Parse URL hash parameters and restore search/sidebar state. */
@@ -355,7 +369,7 @@
   </form>
 {/snippet}
 
-{@render header(searchForm)}
+{@render header(searchForm, clearSearch)}
 
 <main class="px-4">
   {#if error}
