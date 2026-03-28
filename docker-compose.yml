@@ -1,20 +1,31 @@
 services:
-  elasticsearch:
+  meilisearch:
     restart: "always"
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.3.2
+    image: docker.io/getmeili/meilisearch:v1.40.0
     environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
+      - MEILI_NO_ANALYTICS=true
     ports:
-      - "9200:9200"
+      - "7700:7700"
     volumes:
-      - es-data:/usr/share/elasticsearch/data
+      - meili-data:/meili_data
 
   tika:
     restart: "always"
     image: docker.io/apache/tika:3.3.0.0-full
     ports:
       - "9998:9998"
+
+  # Alternative: Elasticsearch backend (set AUM_SEARCH_BACKEND=elasticsearch)
+  # elasticsearch:
+  #   restart: "always"
+  #   image: docker.elastic.co/elasticsearch/elasticsearch:9.3.2
+  #   environment:
+  #     - discovery.type=single-node
+  #     - xpack.security.enabled=false
+  #   ports:
+  #     - "9200:9200"
+  #   volumes:
+  #     - es-data:/usr/share/elasticsearch/data
 
   # Run Ollama on the host for GPU acceleration (`ollama serve`).
   # ollama:
@@ -27,4 +38,5 @@ services:
   #     - OLLAMA_NUM_PARALLEL=8
 
 volumes:
-  es-data:
+  meili-data:
+  # es-data:

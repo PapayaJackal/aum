@@ -3,13 +3,15 @@ from aum.config import AumConfig
 
 def test_default_config():
     config = AumConfig()
-    assert config.search_backend == "elasticsearch"
+    assert config.search_backend == "meilisearch"
     assert config.tika_server_url == "http://localhost:9998"
     assert config.ocr_enabled is False
     assert config.ocr_language == "eng"
     assert config.embeddings_enabled is False
     assert config.log_level == "INFO"
     assert config.ingest_batch_size == 50
+    assert config.meili_semantic_ratio == 0.75
+    assert config.meili_crop_length == 50
 
 
 def test_config_override(monkeypatch):

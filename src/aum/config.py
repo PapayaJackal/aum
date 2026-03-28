@@ -35,12 +35,25 @@ class AumConfig(BaseSettings):
             kwargs["dotenv_settings"],
         )
 
-    # Search backend to use.
-    search_backend: str = "elasticsearch"
+    # Search backend to use: "meilisearch" (default) or "elasticsearch".
+    search_backend: str = "meilisearch"
+
+    # Meilisearch URL.
+    meili_url: str = "http://localhost:7700"
+    # Meilisearch API key (leave empty for a key-less local instance).
+    meili_api_key: str = ""
+    # Default index name for ingestion and search (Meilisearch backend).
+    meili_index: str = "aum"
+    # Blend ratio for hybrid search (0.0 = pure keyword, 1.0 = pure semantic).
+    # Higher values favour vector similarity over keyword overlap.
+    meili_semantic_ratio: float = 0.75
+    # Number of words shown in content snippets.  Meilisearch measures this in
+    # words (not characters); 50 words ≈ 300 characters.
+    meili_crop_length: int = 50
 
     # Elasticsearch URL.
     es_url: str = "http://localhost:9200"
-    # Default index name for ingestion and search.
+    # Default index name for ingestion and search (Elasticsearch backend).
     es_index: str = "aum"
     # Use Reciprocal Rank Fusion for hybrid search scoring instead of
     # combined score. Requires an Elasticsearch license that supports RRF.

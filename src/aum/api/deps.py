@@ -16,7 +16,6 @@ from aum.auth.tokens import TokenError, TokenManager
 from aum.config import AumConfig
 from aum.ingest.tracker import JobTracker
 from aum.search.base import SearchBackend
-from aum.search.elasticsearch import ElasticsearchBackend
 
 log = structlog.get_logger()
 
@@ -75,7 +74,19 @@ def make_embedder(config: AumConfig):
 
 
 def make_search_backend(config: AumConfig, index: str | None = None) -> SearchBackend:
+    if config.search_backend == "meilisearch":
+        from aum.search.meilisearch import MeilisearchBackend
+
+        return MeilisearchBackend(
+            url=config.meili_url,
+            api_key=config.meili_api_key,
+            index=index or config.meili_index,
+            semantic_ratio=config.meili_semantic_ratio,
+            crop_length=config.meili_crop_length,
+        )
     if config.search_backend == "elasticsearch":
+        from aum.search.elasticsearch import ElasticsearchBackend
+
         return ElasticsearchBackend(
             url=config.es_url,
             index=index or config.es_index,
@@ -86,7 +97,9 @@ def make_search_backend(config: AumConfig, index: str | None = None) -> SearchBa
 
 
 def default_index_name(config: AumConfig) -> str:
-    return config.es_index
+    if config.search_backend == "elasticsearch":
+        return config.es_index
+    return config.meili_index
 
 
 def make_tracker(config: AumConfig) -> JobTracker:

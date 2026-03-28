@@ -231,6 +231,14 @@ class SearchBackend(Protocol):
         """Fetch a single document by its ID. Returns None if not found."""
         ...
 
+    def find_attachments(self, display_path: str) -> list[SearchResult]:
+        """Find documents extracted from the given display_path."""
+        ...
+
+    def find_by_display_path(self, display_path: str) -> SearchResult | None:
+        """Find a single document by exact display_path."""
+        ...
+
     def list_indices(self) -> list[str]:
         """Return a list of available index names."""
         ...

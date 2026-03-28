@@ -10,6 +10,7 @@ dependencies = [
     "prometheus-client>=0.24",
     "tika>=3.1",
     "elasticsearch>=9.3",
+    "meilisearch>=0.40",
     "fastapi>=0.135",
     "uvicorn[standard]>=0.42",
     "pyjwt>=2.12",
