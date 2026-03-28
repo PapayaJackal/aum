@@ -69,6 +69,7 @@ services:
       - ./src:/app/src:ro,z
       - ./tests:/app/tests:ro,z
       - ./testdata:/testdata:ro,z
+      - ./frontend/dist:/app/frontend/dist:ro,z
 
 volumes:
   ollama-data:

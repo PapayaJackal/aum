@@ -16,8 +16,11 @@ _FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(not _FRONTEND_DIST.is_dir(), reason="frontend/dist not built"),
 ]
+
+
+if not _FRONTEND_DIST.is_dir():
+    raise RuntimeError("frontend/dist not found — build the frontend before running integration tests")
 
 # All browser tests run after the CLI/API tests (orders 1-35).
 # The search index already has data from the email ingest, and

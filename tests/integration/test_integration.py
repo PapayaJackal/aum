@@ -186,9 +186,27 @@ def test_search_cli_show_facets(cli_runner: CliRunner) -> None:
     # We expect at least some of these facets from email data.
     assert len(discovered_facets) > 0, f"No facets parsed from output:\n{result.output}"
 
+    # The Created (date) facet should be present with year-like values.
+    assert "Created" in discovered_facets, (
+        f"Expected 'Created' date facet in discovered facets, got: {list(discovered_facets.keys())}"
+    )
+    created_values = discovered_facets["Created"]
+    assert len(created_values) > 0, "Created facet has no values"
+    for year_val in created_values:
+        assert year_val.isdigit() and len(year_val) == 4, f"Expected 4-digit year in Created facet, got: {year_val!r}"
+
 
 @pytest.mark.order(10)
 def test_search_cli_date_facet(cli_runner: CliRunner) -> None:
+    """Date range filter via CLI should return results and show Created metadata."""
+    created_values = discovered_facets.get("Created", [])
+    if not created_values:
+        pytest.skip("No Created facet values discovered in earlier test")
+
+    # Use the discovered year range so we know results exist.
+    min_year = min(created_values)
+    max_year = max(created_values)
+
     result = cli_runner.invoke(
         cli_main,
         [
@@ -197,12 +215,30 @@ def test_search_cli_date_facet(cli_runner: CliRunner) -> None:
             "--index",
             "aum",
             "--created-from",
-            "2020",
+            min_year,
             "--created-to",
-            "2025",
+            max_year,
         ],
     )
     assert result.exit_code == 0, result.output
+    assert "No results found" not in result.output
+
+    # Verify that an impossibly narrow year range returns no results.
+    result_empty = cli_runner.invoke(
+        cli_main,
+        [
+            "search",
+            "Ukraine",
+            "--index",
+            "aum",
+            "--created-from",
+            "1800",
+            "--created-to",
+            "1801",
+        ],
+    )
+    assert result_empty.exit_code == 0, result_empty.output
+    assert "No results found" in result_empty.output
 
 
 @pytest.mark.order(11)
@@ -305,19 +341,66 @@ def test_search_api_facets(api_client: TestClient, auth_headers: dict) -> None:
 
 
 @pytest.mark.order(16)
-def test_search_api_date_filter(api_client: TestClient, auth_headers: dict) -> None:
-    filters = json.dumps({"Created": ["2020", "2025"]})
+def test_search_api_date_facet(api_client: TestClient, auth_headers: dict) -> None:
+    """Verify the Created date facet is returned with valid year values, and
+    that date range filtering actually narrows results."""
+    # Step 1: Fetch facets from a broad search.
     resp = api_client.get(
         "/api/search",
         params={
-            "q": "Ukraine",
+            "q": "Boris",
+            "index": "aum",
+            "type": "text",
+            "limit": 10,
+            "offset": 0,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    facets = data["facets"]
+    assert facets is not None, "Expected facets in response"
+    assert "Created" in facets, f"Expected 'Created' date facet, got keys: {list(facets.keys())}"
+
+    created_years = facets["Created"]
+    assert len(created_years) > 0, "Created facet has no values"
+    for year_val in created_years:
+        assert year_val.isdigit() and len(year_val) == 4, (
+            f"Expected 4-digit year string in Created facet, got: {year_val!r}"
+        )
+
+    # Step 2: Filter with the discovered year range — should return results.
+    min_year = min(created_years)
+    max_year = max(created_years)
+    filters = json.dumps({"Created": [min_year, max_year]})
+    resp_filtered = api_client.get(
+        "/api/search",
+        params={
+            "q": "Boris",
             "index": "aum",
             "type": "text",
             "filters": filters,
         },
         headers=auth_headers,
     )
-    assert resp.status_code == 200
+    assert resp_filtered.status_code == 200
+    filtered_data = resp_filtered.json()
+    assert filtered_data["total"] > 0, "Date filter with valid range should return results"
+
+    # Step 3: Filter with an impossible year range — should return zero results.
+    impossible_filters = json.dumps({"Created": ["1800", "1801"]})
+    resp_empty = api_client.get(
+        "/api/search",
+        params={
+            "q": "Boris",
+            "index": "aum",
+            "type": "text",
+            "filters": impossible_filters,
+        },
+        headers=auth_headers,
+    )
+    assert resp_empty.status_code == 200
+    assert resp_empty.json()["total"] == 0, "Date filter with impossible range should return 0 results"
 
 
 @pytest.mark.order(17)

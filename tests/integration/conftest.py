@@ -147,10 +147,6 @@ def browser_context(live_server):
     except ImportError:
         pytest.skip("playwright not installed")
 
-    frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
-    if not frontend_dist.is_dir():
-        pytest.skip("frontend/dist not found — build the frontend or use docker-compose.test.yml")
-
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context()
