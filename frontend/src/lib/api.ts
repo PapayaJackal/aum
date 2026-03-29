@@ -298,6 +298,40 @@ export async function downloadDocument(docId: string, index: string = ""): Promi
   URL.revokeObjectURL(url);
 }
 
+// Preview
+
+const PREVIEWABLE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "application/pdf",
+]);
+
+export function isPreviewable(metadata: Record<string, string | string[]>): boolean {
+  const ct = metadata["Content-Type"];
+  const contentType = (Array.isArray(ct) ? ct[0] : ct)?.split(";")[0]?.trim().toLowerCase() ?? "";
+  return PREVIEWABLE_TYPES.has(contentType);
+}
+
+export function getContentType(metadata: Record<string, string | string[]>): string {
+  const ct = metadata["Content-Type"];
+  return (Array.isArray(ct) ? ct[0] : ct)?.split(";")[0]?.trim().toLowerCase() ?? "";
+}
+
+export async function fetchPreviewBlob(docId: string, index: string = ""): Promise<Blob> {
+  const params = index ? `?index=${encodeURIComponent(index)}` : "";
+  const res = await _authFetch(`${BASE}/documents/${encodeURIComponent(docId)}/preview${params}`);
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(body.detail || res.statusText);
+  }
+
+  return res.blob();
+}
+
 // Jobs
 
 export interface Job {

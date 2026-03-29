@@ -1,6 +1,15 @@
 <script lang="ts">
-  import { getDocument, downloadDocument, type DocumentDetail, type ThreadMessage } from "../lib/api";
+  import {
+    getDocument,
+    downloadDocument,
+    isPreviewable,
+    getContentType,
+    type DocumentDetail,
+    type ThreadMessage,
+  } from "../lib/api";
   import { highlightTerms } from "../lib/highlight";
+  import ImagePreview from "../components/ImagePreview.svelte";
+  import PdfPreview from "../components/PdfPreview.svelte";
 
   let {
     docId,
@@ -25,6 +34,7 @@
   let error = $state("");
   let downloadError = $state("");
   let showAllMeta = $state(false);
+  let showRichPreview = $state(true);
 
   // Human-readable aliases for common Tika metadata keys.
   const KEY_ALIASES: Record<string, string> = {
@@ -217,11 +227,17 @@
     loading = true;
     error = "";
     showAllMeta = false;
+    showRichPreview = true;
     getDocument(docId, index)
       .then((d) => (doc = d))
       .catch((err) => (error = err.message))
       .finally(() => (loading = false));
   });
+
+  let previewable = $derived(doc ? isPreviewable(doc.metadata) : false);
+  let contentType = $derived(doc ? getContentType(doc.metadata) : "");
+  let isImage = $derived(contentType.startsWith("image/"));
+  let isPdf = $derived(contentType === "application/pdf");
 
   let contentHtml = $derived(doc ? highlightTerms(doc.content, highlightQuery) : "");
 
@@ -500,8 +516,26 @@
     {/if}
 
     <div class="bg-white rounded-md p-3 my-3 shadow-sm">
-      <h3 class="m-0 mb-2 text-sm text-gray-500">Content</h3>
-      <pre class="whitespace-pre-wrap break-words text-sm leading-relaxed m-0">{@html contentHtml}</pre>
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="m-0 text-sm text-gray-500">Content</h3>
+        {#if previewable && doc.content}
+          <button
+            class="text-xs bg-transparent border-none text-indigo-500 cursor-pointer py-1 px-0 hover:underline"
+            onclick={() => (showRichPreview = !showRichPreview)}
+          >
+            {showRichPreview ? "Show extracted text" : "Show preview"}
+          </button>
+        {/if}
+      </div>
+      {#if previewable && showRichPreview}
+        {#if isImage}
+          <ImagePreview {docId} {index} />
+        {:else if isPdf}
+          <PdfPreview {docId} {index} />
+        {/if}
+      {:else}
+        <pre class="whitespace-pre-wrap break-words text-sm leading-relaxed m-0">{@html contentHtml}</pre>
+      {/if}
     </div>
   {/if}
 </div>

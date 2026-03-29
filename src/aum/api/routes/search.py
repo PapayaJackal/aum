@@ -18,11 +18,23 @@ from aum.api.deps import (
 )
 from aum.auth.models import User
 from aum.auth.permissions import PermissionDeniedError, PermissionManager
-from aum.metrics import DOCUMENT_DOWNLOADS, DOCUMENT_VIEWS, THREAD_LOOKUPS
+from aum.metrics import DOCUMENT_DOWNLOADS, DOCUMENT_PREVIEWS, DOCUMENT_VIEWS, THREAD_LOOKUPS
 from aum.search.base import HIDDEN_METADATA_KEYS, normalize_message_id
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/api", tags=["search"])
+
+_PREVIEWABLE_TYPES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "application/pdf",
+    }
+)
+_BLOCKED_PREVIEW_TYPES = frozenset({"image/svg+xml"})
 
 _INTERNAL_METADATA_KEYS = {"_aum_display_path", "_aum_extracted_from"}
 _EXCLUDED_METADATA_KEYS = _INTERNAL_METADATA_KEYS | HIDDEN_METADATA_KEYS
@@ -329,6 +341,44 @@ async def download_document(
     DOCUMENT_DOWNLOADS.inc()
     log.info("document download", doc_id=doc_id, index=idx)
     return FileResponse(path=str(file_path), filename=file_path.name)
+
+
+@router.get("/documents/{doc_id}/preview")
+async def preview_document(
+    doc_id: str,
+    user: Annotated[User | None, Depends(get_optional_user)],
+    index: str = "",
+) -> FileResponse:
+    config = get_config()
+    idx = index or default_index_name(config)
+
+    perms = get_permission_manager()
+    _check_index_access(user, idx, perms)
+
+    backend = make_search_backend(config, index=idx)
+    doc = backend.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    raw_ct = doc.metadata.get("Content-Type", "")
+    content_type = raw_ct[0] if isinstance(raw_ct, list) else raw_ct
+    # Strip parameters (e.g. "image/jpeg; charset=..." → "image/jpeg")
+    content_type = content_type.split(";")[0].strip().lower()
+
+    if content_type in _BLOCKED_PREVIEW_TYPES:
+        raise HTTPException(status_code=403, detail="Preview of this file type is not permitted")
+    if content_type not in _PREVIEWABLE_TYPES:
+        raise HTTPException(status_code=415, detail="File type is not previewable")
+
+    file_path = _safe_file_path(doc.source_path)
+    DOCUMENT_PREVIEWS.labels(content_type=content_type).inc()
+    log.info("document preview", doc_id=doc_id, index=idx, content_type=content_type)
+
+    response = FileResponse(path=str(file_path), media_type=content_type, filename=file_path.name)
+    response.headers["Content-Disposition"] = "inline"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+    return response
 
 
 def _get_embedder_for_indices(idx_list: list[str]):  # noqa: ANN202

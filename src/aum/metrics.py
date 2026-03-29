@@ -130,6 +130,11 @@ DOCUMENT_DOWNLOADS = Counter(
     "aum_document_downloads_total",
     "Total document downloads",
 )
+DOCUMENT_PREVIEWS = Counter(
+    "aum_document_previews_total",
+    "Total document preview serves",
+    ["content_type"],
+)
 THREAD_LOOKUPS = Counter(
     "aum_thread_lookups_total",
     "Total email thread lookups",
