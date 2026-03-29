@@ -267,6 +267,7 @@
   function closeSidebar() {
     searchState.selectedDocId = "";
     searchState.selectedDocIndex = "";
+    previewFullscreen = false;
   }
 
   function navigateDoc(docId: string, index: string) {
@@ -296,20 +297,52 @@
     return pages;
   }
 
-  let toolbarStuck = $state(false);
-  let sentinel = $state<HTMLElement | null>(null);
+  // Layout preferences
+  let resultsSplit = $state(35);
+  let facetVisible = $state(true);
+  let previewFullscreen = $state(false);
+  let mainContainer = $state<HTMLElement | null>(null);
+  let dragging = $state(false);
+  let dragStartX = 0;
+  let dragStartValue = 0;
+
+  onMount(() => {
+    const saved = localStorage.getItem("aum_layout");
+    if (saved) {
+      try {
+        const p = JSON.parse(saved);
+        resultsSplit = p.resultsSplit ?? 35;
+        facetVisible = p.facetVisible ?? true;
+      } catch {}
+    }
+  });
 
   $effect(() => {
-    if (!sentinel) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        toolbarStuck = !entry.isIntersecting;
-      },
-      { threshold: 1 },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
+    localStorage.setItem("aum_layout", JSON.stringify({ resultsSplit, facetVisible }));
   });
+
+  function startResultsDrag(e: MouseEvent) {
+    dragging = true;
+    dragStartX = e.clientX;
+    dragStartValue = resultsSplit;
+    document.addEventListener("mousemove", onDragMove);
+    document.addEventListener("mouseup", stopDrag);
+    e.preventDefault();
+  }
+
+  function onDragMove(e: MouseEvent) {
+    if (dragging && mainContainer) {
+      const containerWidth = mainContainer.getBoundingClientRect().width;
+      const deltaPercent = ((e.clientX - dragStartX) / containerWidth) * 100;
+      resultsSplit = Math.max(20, Math.min(60, dragStartValue + deltaPercent));
+    }
+  }
+
+  function stopDrag() {
+    dragging = false;
+    document.removeEventListener("mousemove", onDragMove);
+    document.removeEventListener("mouseup", stopDrag);
+  }
 </script>
 
 <svelte:window onhashchange={onHashChange} />
@@ -390,30 +423,65 @@
   {/if}
 
   {#if searchState.searched}
-    <div class="flex gap-4 mt-3 {sidebarOpen ? 'sidebar-open' : ''}">
-      {#if Object.keys(facets).length > 0}
+    <div
+      class="flex mt-3"
+      bind:this={mainContainer}
+      style={dragging ? "cursor: col-resize; user-select: none;" : undefined}
+    >
+      {#if Object.keys(facets).length > 0 && facetVisible && !previewFullscreen}
         <aside
-          class="shrink-0 basis-[220px] max-w-[220px] min-w-0 sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
+          class="shrink-0 basis-[220px] max-w-[220px] min-w-0 mr-4 sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
         >
           <FacetPanel {facets} bind:activeFacets={searchState.activeFacets} dateFacets={["Created"]} />
         </aside>
       {/if}
-      <div class="flex-1 min-w-0 {sidebarOpen ? 'max-w-[35%] shrink-0 basis-[35%]' : ''}">
-        <div bind:this={sentinel} class="relative -top-10 h-0 pointer-events-none"></div>
-        <div
-          class="flex items-center justify-between gap-3 mb-3 flex-wrap sticky top-10 bg-gray-100 z-10 {toolbarStuck
-            ? 'py-2.5 px-3 -mx-3'
-            : 'py-1.5'}"
-        >
-          <p class="text-gray-400 text-sm m-0">
-            {searchState.total} result{searchState.total !== 1 ? "s" : ""}
-          </p>
+
+      <div
+        class="flex-1 min-w-0 {previewFullscreen ? 'hidden' : ''}"
+        style={sidebarOpen && !previewFullscreen ? `flex: 0 0 ${resultsSplit}%; max-width: ${resultsSplit}%;` : ""}
+      >
+        <div class="flex items-center justify-between gap-3 mb-3 py-1.5 flex-wrap sticky top-10 bg-gray-100 z-10">
+          <div class="flex items-center gap-2">
+            {#if Object.keys(facets).length > 0}
+              <button
+                class="px-2 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:bg-blue-50 hover:border-(--color-accent) hover:text-(--color-accent) leading-none"
+                onclick={() => (facetVisible = !facetVisible)}
+                title={facetVisible ? "Hide filters" : "Show filters"}
+              >
+                {#if facetVisible}
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg
+                  >
+                {:else}
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg
+                  >
+                {/if}
+              </button>
+            {/if}
+            <p class="text-gray-400 text-sm m-0">
+              {searchState.total} result{searchState.total !== 1 ? "s" : ""}
+            </p>
+          </div>
           <div class="flex items-center gap-1 flex-wrap">
             <button
-              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed {searchState.currentPage <=
-              1
-                ? ''
-                : ''}"
+              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed"
               disabled={searchState.currentPage <= 1 || loading}
               onclick={() => doSearch(searchState.currentPage - 1, false)}>&lsaquo; Prev</button
             >
@@ -453,6 +521,17 @@
         <ResultList results={searchState.results} {multiIndex} {loading} />
       </div>
 
+      {#if sidebarOpen && !previewFullscreen}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div
+          class="drag-handle {dragging ? 'active' : ''}"
+          onmousedown={startResultsDrag}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize document preview"
+        ></div>
+      {/if}
+
       {#if sidebarOpen}
         <aside
           class="flex-1 min-w-0 bg-gray-50 border-l border-gray-300 rounded-md shadow-[-2px_0_8px_rgba(0,0,0,0.05)] sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
@@ -464,6 +543,8 @@
               highlightQuery={searchState.submittedQuery}
               onClose={closeSidebar}
               onNavigateDoc={navigateDoc}
+              onToggleFullscreen={() => (previewFullscreen = !previewFullscreen)}
+              {previewFullscreen}
             />
           {/key}
         </aside>
@@ -471,3 +552,32 @@
     </div>
   {/if}
 </main>
+
+<style>
+  .drag-handle {
+    flex: 0 0 8px;
+    width: 8px;
+    cursor: col-resize;
+    position: sticky;
+    top: 3rem;
+    align-self: flex-start;
+    height: calc(100vh - 3.5rem);
+    z-index: 11;
+  }
+  .drag-handle::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    background: transparent;
+    border-radius: 1px;
+    transition: background 0.15s;
+  }
+  .drag-handle:hover::after,
+  .drag-handle.active::after {
+    background: #4a7cf7;
+  }
+</style>

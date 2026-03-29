@@ -134,7 +134,7 @@
               onchange={() => toggleFacet(key, value)}
               class="shrink-0"
             />
-            <span class="overflow-hidden text-ellipsis whitespace-nowrap max-w-[170px]" title={value}>{value}</span>
+            <span class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0" title={value}>{value}</span>
           </label>
         {/each}
       {/if}
