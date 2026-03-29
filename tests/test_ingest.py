@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 from aum.extraction.base import RecordErrorFn
 from aum.ingest.pipeline import IngestPipeline
 from aum.ingest.tracker import JobTracker
-from aum.models import Document, JobStatus, JobType
+from aum.models import Document, IngestJob, JobStatus, JobType
 
 
 class TestJobTracker:
@@ -271,3 +271,181 @@ class TestPipelineEmptyFiles:
         assert job is not None
         assert job.processed == 3
         assert job.extracted == 2  # 3 docs - 1 container = 2 extracted
+
+
+# ---------------------------------------------------------------------------
+# Tracker — resume helpers
+# ---------------------------------------------------------------------------
+
+
+class TestFindResumableJob:
+    def test_finds_most_recent_running_ingest(self, tracker: JobTracker) -> None:
+        tracker.create_job("old", Path("/data"), total_files=10)
+        tracker.complete_job("old", JobStatus.COMPLETED)
+        tracker.create_job("stale", Path("/data"), total_files=20)
+        # "stale" is still RUNNING
+
+        found = tracker.find_resumable_job()
+        assert found is not None
+        assert found.job_id == "stale"
+
+    def test_returns_none_when_no_running(self, tracker: JobTracker) -> None:
+        tracker.create_job("done", Path("/data"), total_files=5)
+        tracker.complete_job("done", JobStatus.COMPLETED)
+
+        assert tracker.find_resumable_job() is None
+
+    def test_filters_by_source_dir(self, tracker: JobTracker) -> None:
+        tracker.create_job("a", Path("/dir_a"), total_files=10)
+        tracker.create_job("b", Path("/dir_b"), total_files=10)
+
+        found = tracker.find_resumable_job(source_dir=Path("/dir_a"))
+        assert found is not None
+        assert found.job_id == "a"
+
+    def test_ignores_embed_jobs(self, tracker: JobTracker) -> None:
+        tracker.create_job("emb", Path("/data"), total_files=10, job_type=JobType.EMBED)
+        assert tracker.find_resumable_job() is None
+
+
+class TestInterruptedStatus:
+    def test_complete_as_interrupted(self, tracker: JobTracker) -> None:
+        tracker.create_job("int1", Path("/data"), total_files=5)
+        tracker.complete_job("int1", JobStatus.INTERRUPTED)
+
+        job = tracker.get_job("int1")
+        assert job is not None
+        assert job.status == JobStatus.INTERRUPTED
+        assert job.finished_at is not None
+
+    def test_list_interrupted_jobs(self, tracker: JobTracker) -> None:
+        tracker.create_job("a", Path("/data"), total_files=1)
+        tracker.complete_job("a", JobStatus.INTERRUPTED)
+        tracker.create_job("b", Path("/data"), total_files=1)
+        tracker.complete_job("b", JobStatus.COMPLETED)
+
+        interrupted = tracker.list_jobs(status=JobStatus.INTERRUPTED)
+        assert len(interrupted) == 1
+        assert interrupted[0].job_id == "a"
+
+
+class TestSkippedProgress:
+    def test_update_progress_with_skipped(self, tracker: JobTracker) -> None:
+        tracker.create_job("skip1", Path("/data"), total_files=100)
+        tracker.update_progress("skip1", extracted=20, processed=20, failed=0, skipped=80)
+
+        job = tracker.get_job("skip1")
+        assert job is not None
+        assert job.skipped == 80
+        assert job.processed == 20
+
+    def test_skipped_defaults_to_zero(self, tracker: JobTracker) -> None:
+        tracker.create_job("skip2", Path("/data"), total_files=10)
+        tracker.update_progress("skip2", extracted=10, processed=10, failed=0)
+
+        job = tracker.get_job("skip2")
+        assert job is not None
+        assert job.skipped == 0
+
+
+# ---------------------------------------------------------------------------
+# Pipeline — resume with skip-existing
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineResume:
+    def test_resume_skips_existing_documents(self, tmp_path: Path, tracker: JobTracker) -> None:
+        """Files whose primary doc_id already exists in the backend should
+        be skipped during resume, avoiding Tika extraction."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        # Create 5 files
+        for i in range(5):
+            (docs_dir / f"doc_{i}.txt").write_text(f"content {i}")
+
+        extracted_files: list[Path] = []
+
+        def fake_extract(file_path: Path, record_error=None) -> list[Document]:
+            extracted_files.append(file_path)
+            return [Document(source_path=file_path, content=f"text of {file_path.name}", metadata={})]
+
+        from aum.ingest.pipeline import _file_doc_id
+
+        # Pre-compute doc_ids for the first 3 files (they "already exist")
+        existing_ids = set()
+        for i in range(3):
+            path = docs_dir / f"doc_{i}.txt"
+            existing_ids.add(_file_doc_id(path, 0))
+
+        backend = _stub_backend()
+        backend.get_existing_doc_ids.side_effect = lambda ids: existing_ids & set(ids)
+
+        pipeline = IngestPipeline(
+            extractor=_stub_extractor(fake_extract),
+            search_backend=backend,
+            tracker=tracker,
+            batch_size=50,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run_resume(docs_dir, parent_job_id="old_job")
+
+        job = tracker.get_job(job.job_id)
+        assert job is not None
+        assert job.status == JobStatus.COMPLETED
+        # Only 2 files should have been extracted (doc_3.txt and doc_4.txt)
+        assert len(extracted_files) == 2
+        assert job.skipped == 3
+        assert job.processed == 2
+
+    def test_resume_processes_all_when_none_exist(self, tmp_path: Path, tracker: JobTracker) -> None:
+        """When no documents exist in the backend, all files should be processed."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        for i in range(3):
+            (docs_dir / f"doc_{i}.txt").write_text(f"content {i}")
+
+        def fake_extract(file_path: Path, record_error=None) -> list[Document]:
+            return [Document(source_path=file_path, content="text", metadata={})]
+
+        backend = _stub_backend()
+        backend.get_existing_doc_ids.return_value = set()
+
+        pipeline = IngestPipeline(
+            extractor=_stub_extractor(fake_extract),
+            search_backend=backend,
+            tracker=tracker,
+            batch_size=50,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run_resume(docs_dir, parent_job_id="old_job")
+
+        job = tracker.get_job(job.job_id)
+        assert job is not None
+        assert job.processed == 3
+        assert job.skipped == 0
+
+    def test_resume_fallback_on_check_failure(self, tmp_path: Path, tracker: JobTracker) -> None:
+        """If the existence check fails, all files should be processed (safe fallback)."""
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "doc.txt").write_text("content")
+
+        def fake_extract(file_path: Path, record_error=None) -> list[Document]:
+            return [Document(source_path=file_path, content="text", metadata={})]
+
+        backend = _stub_backend()
+        backend.get_existing_doc_ids.side_effect = RuntimeError("network error")
+
+        pipeline = IngestPipeline(
+            extractor=_stub_extractor(fake_extract),
+            search_backend=backend,
+            tracker=tracker,
+            batch_size=50,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run_resume(docs_dir, parent_job_id="old_job")
+
+        job = tracker.get_job(job.job_id)
+        assert job is not None
+        assert job.processed == 1
+        assert job.skipped == 0

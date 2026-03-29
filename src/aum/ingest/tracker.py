@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     processed INTEGER DEFAULT 0,
     failed INTEGER DEFAULT 0,
     empty INTEGER DEFAULT 0,
+    skipped INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
     finished_at TEXT
 );
@@ -74,6 +75,8 @@ class JobTracker:
             self._conn.execute("ALTER TABLE jobs ADD COLUMN empty INTEGER DEFAULT 0")
         if "job_type" not in cols:
             self._conn.execute("ALTER TABLE jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'ingest'")
+        if "skipped" not in cols:
+            self._conn.execute("ALTER TABLE jobs ADD COLUMN skipped INTEGER DEFAULT 0")
 
     def create_job(
         self,
@@ -117,11 +120,13 @@ class JobTracker:
             )
             self._conn.commit()
 
-    def update_progress(self, job_id: str, extracted: int, processed: int, failed: int, empty: int = 0) -> None:
+    def update_progress(
+        self, job_id: str, extracted: int, processed: int, failed: int, empty: int = 0, skipped: int = 0
+    ) -> None:
         with self._lock:
             self._conn.execute(
-                "UPDATE jobs SET extracted = ?, processed = ?, failed = ?, empty = ? WHERE job_id = ?",
-                (extracted, processed, failed, empty, job_id),
+                "UPDATE jobs SET extracted = ?, processed = ?, failed = ?, empty = ?, skipped = ? WHERE job_id = ?",
+                (extracted, processed, failed, empty, skipped, job_id),
             )
             self._conn.commit()
 
@@ -186,10 +191,32 @@ class JobTracker:
             processed=row["processed"],
             failed=row["failed"],
             empty=row["empty"] if "empty" in keys else 0,
+            skipped=row["skipped"] if "skipped" in keys else 0,
             errors=errors,
             created_at=datetime.fromisoformat(row["created_at"]),
             finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
         )
+
+    # --- Resume helpers ---
+
+    def find_resumable_job(
+        self, source_dir: Path | None = None, job_type: JobType = JobType.INGEST
+    ) -> IngestJob | None:
+        """Find the most recent RUNNING job, optionally filtered by source_dir."""
+        if source_dir:
+            row = self._conn.execute(
+                "SELECT * FROM jobs WHERE status = ? AND job_type = ? AND source_dir = ?"
+                " ORDER BY created_at DESC LIMIT 1",
+                (JobStatus.RUNNING.value, job_type.value, str(source_dir)),
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT * FROM jobs WHERE status = ? AND job_type = ? ORDER BY created_at DESC LIMIT 1",
+                (JobStatus.RUNNING.value, job_type.value),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_job(row)
 
     # --- Retry helpers ---
 

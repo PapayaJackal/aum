@@ -26,6 +26,7 @@ class JobResponse(BaseModel):
     total_files: int
     processed: int
     failed: int
+    skipped: int = 0
     created_at: str
     finished_at: str | None
 
@@ -53,6 +54,7 @@ async def list_jobs(
             total_files=j.total_files,
             processed=j.processed,
             failed=j.failed,
+            skipped=j.skipped,
             created_at=j.created_at.isoformat(),
             finished_at=j.finished_at.isoformat() if j.finished_at else None,
         )
@@ -78,6 +80,7 @@ async def get_job(
         total_files=job.total_files,
         processed=job.processed,
         failed=job.failed,
+        skipped=job.skipped,
         created_at=job.created_at.isoformat(),
         finished_at=job.finished_at.isoformat() if job.finished_at else None,
         errors=[

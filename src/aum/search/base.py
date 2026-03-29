@@ -259,3 +259,7 @@ class SearchBackend(Protocol):
     def update_embeddings(self, updates: list[tuple[str, list[list[float]]]]) -> int:
         """Bulk-update chunk embedding vectors. Returns number of failures."""
         ...
+
+    def get_existing_doc_ids(self, doc_ids: list[str]) -> set[str]:
+        """Return the subset of *doc_ids* that already exist in the index."""
+        ...

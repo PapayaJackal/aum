@@ -86,6 +86,7 @@ def _make_ingest_pipeline(
         index_name=idx,
         batch_size=batch_size or config.ingest_batch_size,
         max_workers=workers or config.ingest_max_workers,
+        data_dir=config.data_dir,
     )
     return pipeline
 
@@ -96,6 +97,8 @@ def _print_ingest_summary(job, elapsed: float, avg_extraction: float) -> None:
     click.echo(f"  Files:      {job.total_files}")
     click.echo(f"  Extracted:  {job.extracted}")
     click.echo(f"  Indexed:    {job.processed}")
+    if job.skipped > 0:
+        click.echo(f"  Skipped:    {job.skipped}")
     click.echo(f"  Empty:      {job.empty}")
     click.echo(f"  Failed:     {job.failed}")
     click.echo(f"  Time:       {elapsed:.1f}s  ({throughput:.1f} files/s)")
@@ -124,13 +127,128 @@ def ingest(
     config = _load_config()
     _setup(config)
 
-    from aum.api.deps import default_index_name
+    from aum.api.deps import default_index_name, make_tracker
+    from aum.ingest.lock import IngestLock
+    from aum.models import JobStatus
 
     idx = index or default_index_name(config)
+
+    # Warn about stale/running jobs for this directory
+    tracker = make_tracker(config)
+    stale = tracker.find_resumable_job(source_dir=directory.resolve())
+    if stale:
+        stale_lock = IngestLock(config.data_dir, stale.job_id)
+        if stale_lock.is_held():
+            click.echo(
+                f"WARNING: Job {stale.job_id} appears to still be running for this directory.",
+                err=True,
+            )
+        else:
+            tracker.complete_job(stale.job_id, JobStatus.INTERRUPTED)
+            click.echo(
+                f"WARNING: Job {stale.job_id} was interrupted (now marked).\n"
+                f"  Consider running 'aum resume {stale.job_id}' to skip already-indexed files.",
+                err=True,
+            )
+
     pipeline = _make_ingest_pipeline(config, idx, batch_size, workers, ocr, ocr_language)
 
     job, elapsed, avg_extraction = pipeline.run(directory)
     _print_ingest_summary(job, elapsed, avg_extraction)
+
+
+@main.command()
+@click.argument("job_id", required=False, default=None)
+@click.option("--index", default=None, help="Target index name (default: from original job)")
+@click.option("--batch-size", default=None, type=int, help="Override batch size")
+@click.option("--workers", default=None, type=int, help="Number of extraction workers")
+@click.option("--ocr/--no-ocr", default=None, help="Enable or disable OCR")
+@click.option("--ocr-language", default=None, help="OCR language (e.g. eng, deu, fra+eng)")
+@click.option("--pull/--no-pull", default=True, help="Auto-pull embedding model in Ollama (default: yes)")
+def resume(
+    job_id: str | None,
+    index: str | None,
+    batch_size: int | None,
+    workers: int | None,
+    ocr: bool | None,
+    ocr_language: str | None,
+    pull: bool = True,
+) -> None:
+    """Resume an interrupted job.
+
+    For ingest jobs, re-walks the original source directory but skips files
+    that are already present in the search index.  For embed jobs, re-embeds
+    documents that still lack embeddings.
+
+    If no JOB_ID is given, resumes the most recent interrupted or stale
+    RUNNING job.
+    """
+    from aum.api.deps import make_tracker
+    from aum.ingest.lock import IngestLock
+    from aum.models import JobStatus, JobType
+
+    config = _load_config()
+    _setup(config)
+
+    tracker = make_tracker(config)
+
+    if job_id:
+        job = tracker.get_job(job_id)
+        if job is None:
+            click.echo(f"Job not found: {job_id}", err=True)
+            sys.exit(1)
+    else:
+        # Try ingest first, then embed
+        job = tracker.find_resumable_job(job_type=JobType.INGEST)
+        if job is None:
+            job = tracker.find_resumable_job(job_type=JobType.EMBED)
+        if job is None:
+            click.echo("No interrupted or stale jobs found.", err=True)
+            sys.exit(1)
+        click.echo(f"Found stale {job.job_type.value} job: {job.job_id}")
+
+    if job.status == JobStatus.COMPLETED:
+        click.echo(f"Job {job.job_id} already completed.", err=True)
+        sys.exit(1)
+
+    if job.status == JobStatus.RUNNING:
+        job_lock = IngestLock(config.data_dir, job.job_id)
+        if job_lock.is_held():
+            pid = job_lock.read_holder_pid()
+            pid_info = f" (PID {pid})" if pid else ""
+            click.echo(
+                f"Job {job.job_id} appears to still be running{pid_info}.\n"
+                f"If the process has crashed, wait for it to exit or kill it first.",
+                err=True,
+            )
+            sys.exit(1)
+        # Process is dead — mark as interrupted
+        tracker.complete_job(job.job_id, JobStatus.INTERRUPTED)
+        click.echo(f"Marked job {job.job_id} as interrupted.")
+
+    if job.status not in (JobStatus.INTERRUPTED, JobStatus.FAILED, JobStatus.RUNNING):
+        click.echo(f"Job {job.job_id} has status '{job.status.value}' and cannot be resumed.", err=True)
+        sys.exit(1)
+
+    idx = index or job.index_name
+
+    if job.job_type == JobType.EMBED:
+        click.echo(f"Resuming embedding on index '{idx}' (parent: {job.job_id})")
+        search, tracker, embedder = _setup_embedder(config, idx, pull)
+        bs = batch_size or config.embeddings_batch_size
+        resume_job = _run_embed_job(config, search, tracker, embedder, idx, bs)
+        if resume_job is not None and resume_job.processed > 0:
+            tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, embedder.dimension)
+    else:
+        if not job.source_dir.is_dir():
+            click.echo(f"Source directory no longer exists: {job.source_dir}", err=True)
+            sys.exit(1)
+
+        pipeline = _make_ingest_pipeline(config, idx, batch_size, workers, ocr, ocr_language)
+
+        click.echo(f"Resuming ingest of {job.source_dir} (index: {idx}, parent: {job.job_id})")
+        resume_job, elapsed, avg_extraction = pipeline.run_resume(job.source_dir, parent_job_id=job.job_id)
+        _print_ingest_summary(resume_job, elapsed, avg_extraction)
 
 
 @main.command("init")
@@ -287,7 +405,16 @@ def _run_embed_job(
             return None
         scroll_source = search.scroll_unembedded(batch_size=bs)
 
+    from aum.ingest.lock import IngestLock
+
     job_id = generate_name()
+
+    lock: IngestLock | None = None
+    if config.data_dir:
+        lock = IngestLock(config.data_dir, job_id)
+        if not lock.acquire():
+            raise RuntimeError(f"Could not acquire lock for embed job {job_id}")
+
     tracker.create_job(
         job_id,
         source_dir=Path("."),
@@ -394,6 +521,8 @@ def _run_embed_job(
         raise
     finally:
         EMBEDDING_JOBS_ACTIVE.dec()
+        if lock:
+            lock.release()
 
     tracker.complete_job(job_id, JobStatus.COMPLETED)
 
@@ -692,8 +821,20 @@ def list_indices() -> None:
 # --- Job monitoring ---
 
 
+def _mark_stale_running_jobs(tracker, data_dir) -> None:
+    """Check RUNNING jobs and mark as INTERRUPTED if their lock is not held."""
+    from aum.ingest.lock import IngestLock
+    from aum.models import JobStatus
+
+    running = tracker.list_jobs(status=JobStatus.RUNNING)
+    for job in running:
+        lock = IngestLock(data_dir, job.job_id)
+        if not lock.is_held():
+            tracker.complete_job(job.job_id, JobStatus.INTERRUPTED)
+
+
 @main.command("jobs")
-@click.option("--status", type=click.Choice(["pending", "running", "completed", "failed"]), default=None)
+@click.option("--status", type=click.Choice(["pending", "running", "completed", "failed", "interrupted"]), default=None)
 def list_jobs(status: str | None) -> None:
     """List all jobs (ingest and embedding)."""
     config = _load_config()
@@ -703,6 +844,7 @@ def list_jobs(status: str | None) -> None:
     from aum.models import JobStatus
 
     tracker = make_tracker(config)
+    _mark_stale_running_jobs(tracker, config.data_dir)
     job_status = JobStatus(status) if status else None
     jobs = tracker.list_jobs(status=job_status)
 
@@ -731,15 +873,15 @@ def show_job(job_id: str, errors: bool) -> None:
     _setup(config)
 
     from aum.api.deps import make_tracker
+    from aum.models import JobStatus, JobType
 
     tracker = make_tracker(config)
+    _mark_stale_running_jobs(tracker, config.data_dir)
     job = tracker.get_job(job_id, include_errors=errors)
 
     if job is None:
         click.echo(f"Job not found: {job_id}", err=True)
         sys.exit(1)
-
-    from aum.models import JobType
 
     click.echo(f"Job ID:     {job.job_id}")
     click.echo(f"Type:       {job.job_type.value}")
@@ -752,11 +894,15 @@ def show_job(job_id: str, errors: bool) -> None:
         click.echo(f"Extracted:  {job.extracted}")
     click.echo(f"Processed:  {job.processed}")
     if job.job_type == JobType.INGEST:
+        if job.skipped > 0:
+            click.echo(f"Skipped:    {job.skipped}")
         click.echo(f"Empty:      {job.empty}")
     click.echo(f"Failed:     {job.failed}")
     click.echo(f"Created:    {job.created_at:%Y-%m-%d %H:%M:%S}")
     if job.finished_at:
         click.echo(f"Finished:   {job.finished_at:%Y-%m-%d %H:%M:%S}")
+    if job.status == JobStatus.INTERRUPTED:
+        click.echo(f"\nResume with: aum resume {job.job_id}")
     if job.failed > 0:
         click.echo(f"\nRetry with: aum retry {job.job_id}")
 

@@ -1113,6 +1113,42 @@ class TestSearchResultParity:
         results, _, _ = backend.search_text("q")
         assert isinstance(results[0].score, float)
 
+
+# ---------------------------------------------------------------------------
+# get_existing_doc_ids
+# ---------------------------------------------------------------------------
+
+
+class TestGetExistingDocIds:
+    def test_empty_input_returns_empty_set(self, backend: MeilisearchBackend) -> None:
+        assert backend.get_existing_doc_ids([]) == set()
+
+    def test_returns_found_ids(self, backend: MeilisearchBackend, mock_index: MagicMock) -> None:
+        mock_index.search.return_value = {
+            "hits": [{"id": "abc123"}, {"id": "def456"}],
+        }
+        result = backend.get_existing_doc_ids(["abc123", "def456", "ghi789"])
+        assert result == {"abc123", "def456"}
+
+        # Verify the search call used the correct filter
+        call_args = mock_index.search.call_args
+        assert call_args[0][0] == ""  # empty query
+        params = call_args[0][1]
+        assert params["attributesToRetrieve"] == ["id"]
+        assert "abc123" in params["filter"]
+        assert params["limit"] == 3
+
+    def test_returns_empty_when_none_found(self, backend: MeilisearchBackend, mock_index: MagicMock) -> None:
+        mock_index.search.return_value = {"hits": []}
+        result = backend.get_existing_doc_ids(["abc123"])
+        assert result == set()
+
+    def test_handles_index_not_found(self, backend: MeilisearchBackend, mock_index: MagicMock) -> None:
+        mock_index.search.side_effect = _make_api_error("index_not_found")
+
+        result = backend.get_existing_doc_ids(["abc123"])
+        assert result == set()
+
     def test_snippet_is_str(self, backend: MeilisearchBackend, mock_index: MagicMock):
         mock_index.search.return_value = {
             "hits": [_make_hit("d1")],

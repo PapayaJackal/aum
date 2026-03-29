@@ -18,10 +18,12 @@ from rich.live import Live
 from rich.text import Text
 
 from aum.extraction.base import ExtractionDepthError, ExtractionError, Extractor
+from aum.ingest.lock import IngestLock
 from aum.ingest.tracker import JobTracker
 from aum.metrics import (
     DOCS_FAILED,
     DOCS_INGESTED,
+    DOCS_SKIPPED,
     INGEST_DURATION,
     INGEST_JOBS_ACTIVE,
 )
@@ -50,6 +52,7 @@ def _make_progress_line(
     empty: int,
     timing_count: int,
     total_extraction_time: float,
+    skipped: int = 0,
 ) -> Text:
     """Build a single-line rich Text for the live progress display."""
     elapsed = time.monotonic() - start
@@ -81,8 +84,10 @@ def _make_progress_line(
     avg = total_extraction_time / timing_count if timing_count > 0 else 0.0
     t.append(f"  {avg:.3f}s/file", style="yellow")
 
-    # Indexed, empty, and failed counts
+    # Indexed, empty, skipped, and failed counts
     t.append(f"  idx:{indexed}", style="green")
+    if skipped > 0:
+        t.append(f"  skip:{skipped}", style="dim cyan")
     if empty > 0:
         t.append(f"  empty:{empty}", style="yellow")
     if failed > 0:
@@ -158,6 +163,7 @@ class IngestPipeline:
         index_name: str = "aum",
         batch_size: int = 50,
         max_workers: int = 4,
+        data_dir: str | Path | None = None,
     ) -> None:
         self._extractor = extractor
         self._backend = search_backend
@@ -165,6 +171,7 @@ class IngestPipeline:
         self._index_name = index_name
         self._batch_size = batch_size
         self._max_workers = max_workers
+        self._data_dir = Path(data_dir) if data_dir else None
 
     def run_retry(self, file_paths: list[Path], source_dir: Path) -> tuple[IngestJob, float, float]:
         """Re-run ingest for specific file paths (retry failed items).
@@ -179,42 +186,78 @@ class IngestPipeline:
 
         source_dir = source_dir.resolve()
         job_id = generate_name()
+        lock = self._make_lock(job_id)
+
         total = len(file_paths)
         self._tracker.create_job(job_id, source_dir, total_files=total, index_name=self._index_name)
         self._tracker.update_total_files(job_id, total)
 
         log.info("starting retry ingest", job_id=job_id, source_dir=str(source_dir), files=total)
-        return self._run_pipeline(job_id, source_dir, file_paths)
+        return self._run_pipeline(job_id, source_dir, file_paths, lock=lock)
 
     def run(self, source_dir: Path) -> tuple[IngestJob, float, float]:
         """Run a full ingest job on a directory.
 
         Returns (job, elapsed_seconds, avg_extraction_seconds).
         """
-        # Ensure the search index exists with the correct mapping before
-        # ingesting any documents.  This is a no-op when the index already
-        # exists and the mapping is up to date.
         self._backend.initialize()
 
         source_dir = source_dir.resolve()
         job_id = generate_name()
+        lock = self._make_lock(job_id)
+
         # Create with total_files=0; the walker updates it as it discovers files
         self._tracker.create_job(job_id, source_dir, total_files=0, index_name=self._index_name)
 
         log.info("starting ingest", job_id=job_id, source_dir=str(source_dir))
-        return self._run_pipeline(job_id, source_dir)
+        return self._run_pipeline(job_id, source_dir, lock=lock)
+
+    def run_resume(self, source_dir: Path, parent_job_id: str) -> tuple[IngestJob, float, float]:
+        """Resume an interrupted ingest, skipping already-indexed documents.
+
+        Re-walks *source_dir* but filters out files whose primary document ID
+        already exists in the search index.  Creates a new tracked job.
+
+        Returns (job, elapsed_seconds, avg_extraction_seconds).
+        """
+        self._backend.initialize()
+
+        source_dir = source_dir.resolve()
+        job_id = generate_name()
+        lock = self._make_lock(job_id)
+
+        self._tracker.create_job(job_id, source_dir, total_files=0, index_name=self._index_name)
+
+        log.info("starting resume ingest", job_id=job_id, source_dir=str(source_dir), parent=parent_job_id)
+        return self._run_pipeline(job_id, source_dir, skip_existing=True, lock=lock)
+
+    def _make_lock(self, job_id: str) -> IngestLock | None:
+        """Create and acquire a per-job lock, or return ``None`` if no data_dir."""
+        if not self._data_dir:
+            return None
+        lock = IngestLock(self._data_dir, job_id)
+        if not lock.acquire():
+            raise RuntimeError(f"Could not acquire lock for job {job_id}")
+        return lock
 
     def _run_pipeline(
         self,
         job_id: str,
         source_dir: Path,
         explicit_paths: list[Path] | None = None,
+        *,
+        skip_existing: bool = False,
+        lock: IngestLock | None = None,
     ) -> tuple[IngestJob, float, float]:
-        """Core pipeline loop shared by run() and run_retry().
+        """Core pipeline loop shared by run(), run_retry(), and run_resume().
 
         When *explicit_paths* is ``None`` a walker thread discovers files from
         *source_dir*.  When a list is provided those paths are fed directly
         into the extraction workers.
+
+        When *skip_existing* is ``True`` a filter thread sits between the
+        walker and the extraction workers, batch-checking which file doc IDs
+        already exist in the search index and dropping those that do.
         """
         INGEST_JOBS_ACTIVE.inc()
 
@@ -232,30 +275,48 @@ class IngestPipeline:
 
         # Single-element list so the walker thread can update it without a lock
         discovered: list[int] = [0]
+        # Skipped files counter (written by filter thread, read by main thread)
+        skip_counter: list[int] = [0]
 
         # Track truly concurrent extractions (threads actively inside _extract_one)
         in_flight_lock = Lock()
         in_flight_count: list[int] = [0]
 
-        file_queue: Queue[Path | None] = Queue(maxsize=1000)
+        # When skip_existing is enabled the walker feeds into a separate queue
+        # and a filter thread sits between the walker and the workers.
+        if skip_existing:
+            walker_queue: Queue[Path | None] = Queue(maxsize=1000)
+            file_queue: Queue[Path | None] = Queue(maxsize=1000)
+        else:
+            walker_queue = file_queue = Queue(maxsize=1000)
 
         if explicit_paths is not None:
             # Feed explicit paths into the queue directly
             def _feed_paths() -> int:
+                target = walker_queue
                 for p in explicit_paths:
-                    file_queue.put(p)
+                    target.put(p)
                     discovered[0] += 1
-                file_queue.put(_SENTINEL)
+                target.put(_SENTINEL)
                 return len(explicit_paths)
 
             walker = Thread(target=_feed_paths, daemon=True)
         else:
             walker = Thread(
                 target=_walk_files,
-                args=(source_dir, file_queue, self._tracker, job_id, discovered),
+                args=(source_dir, walker_queue, self._tracker, job_id, discovered),
                 daemon=True,
             )
         walker.start()
+
+        filter_thread: Thread | None = None
+        if skip_existing:
+            filter_thread = Thread(
+                target=self._filter_existing_worker,
+                args=(walker_queue, file_queue, skip_counter),
+                daemon=True,
+            )
+            filter_thread.start()
 
         ctx: Live | nullcontext = (  # type: ignore[type-arg]
             Live(
@@ -330,7 +391,9 @@ class IngestPipeline:
                             processed += n_processed
                             failed += n_failed
                             batch = []
-                            self._tracker.update_progress(job_id, extracted, processed, failed, empty)
+                            self._tracker.update_progress(
+                                job_id, extracted, processed, failed, empty, skipped=skip_counter[0]
+                            )
                             log.info(
                                 "batch complete",
                                 job_id=job_id,
@@ -338,6 +401,7 @@ class IngestPipeline:
                                 processed=processed,
                                 failed=failed,
                                 empty=empty,
+                                skipped=skip_counter[0],
                             )
 
                         # Update live display
@@ -354,6 +418,7 @@ class IngestPipeline:
                                     empty,
                                     timing_count,
                                     extraction_time,
+                                    skipped=skip_counter[0],
                                 )
                             )
 
@@ -369,13 +434,21 @@ class IngestPipeline:
 
                     # Always persist final counts — the empty/failed counters
                     # may have changed after the last mid-loop batch flush.
-                    self._tracker.update_progress(job_id, extracted, processed, failed, empty)
+                    self._tracker.update_progress(job_id, extracted, processed, failed, empty, skipped=skip_counter[0])
 
             walker.join(timeout=5)
+            if filter_thread is not None:
+                filter_thread.join(timeout=5)
             elapsed = time.monotonic() - job_start
             self._tracker.complete_job(job_id, JobStatus.COMPLETED)
             log.info(
-                "ingest complete", job_id=job_id, extracted=extracted, processed=processed, failed=failed, empty=empty
+                "ingest complete",
+                job_id=job_id,
+                extracted=extracted,
+                processed=processed,
+                failed=failed,
+                empty=empty,
+                skipped=skip_counter[0],
             )
 
         except Exception:
@@ -385,9 +458,62 @@ class IngestPipeline:
             raise
         finally:
             INGEST_JOBS_ACTIVE.dec()
+            if lock:
+                lock.release()
 
         avg_extraction = extraction_time / timing_count if timing_count > 0 else 0.0
         return self._tracker.get_job(job_id), elapsed, avg_extraction  # type: ignore[return-value]
+
+    def _filter_existing_worker(
+        self,
+        input_queue: Queue[Path | None],
+        output_queue: Queue[Path | None],
+        skip_counter: list[int],
+        check_batch_size: int = 200,
+    ) -> None:
+        """Filter thread: drop files whose primary doc ID already exists.
+
+        Reads paths from *input_queue* in batches, queries the search backend
+        for existing document IDs, and forwards only new paths to
+        *output_queue*.  Increments ``skip_counter[0]`` for each skipped file.
+        """
+        batch: list[Path] = []
+        while True:
+            try:
+                path = input_queue.get(timeout=0.1)
+            except Empty:
+                continue
+            if path is _SENTINEL:
+                if batch:
+                    self._flush_filter_batch(batch, output_queue, skip_counter)
+                output_queue.put(_SENTINEL)
+                return
+            batch.append(path)
+            if len(batch) >= check_batch_size:
+                self._flush_filter_batch(batch, output_queue, skip_counter)
+                batch = []
+
+    def _flush_filter_batch(
+        self,
+        paths: list[Path],
+        output_queue: Queue[Path | None],
+        skip_counter: list[int],
+    ) -> None:
+        """Check a batch of paths against the index and forward new ones."""
+        doc_ids = [_file_doc_id(p, 0) for p in paths]
+        id_to_path = dict(zip(doc_ids, paths))
+        try:
+            existing = self._backend.get_existing_doc_ids(doc_ids)
+        except Exception:
+            log.warning("skip-existing check failed, processing all files in batch", exc_info=True)
+            existing = set()
+        n_skipped = len(existing)
+        if n_skipped:
+            skip_counter[0] += n_skipped
+            DOCS_SKIPPED.inc(n_skipped)
+        for doc_id, path in id_to_path.items():
+            if doc_id not in existing:
+                output_queue.put(path)
 
     @staticmethod
     def _set_display_path(doc: Document, source_dir: Path) -> None:

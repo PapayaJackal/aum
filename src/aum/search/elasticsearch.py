@@ -656,3 +656,13 @@ class ElasticsearchBackend:
                 )
             )
         return results, total
+
+    def get_existing_doc_ids(self, doc_ids: list[str]) -> set[str]:
+        """Return the subset of *doc_ids* that already exist in the index."""
+        if not doc_ids:
+            return set()
+        try:
+            resp = self._client.mget(index=self._index, body={"ids": doc_ids}, _source=False)
+        except NotFoundError:
+            return set()
+        return {doc["_id"] for doc in resp.get("docs", []) if doc.get("found")}

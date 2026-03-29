@@ -19,6 +19,10 @@ INGEST_DURATION = Histogram(
     ["stage"],
     buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 60],
 )
+DOCS_SKIPPED = Counter(
+    "aum_documents_skipped_total",
+    "Documents skipped during resume (already indexed)",
+)
 INGEST_JOBS_ACTIVE = Gauge(
     "aum_ingest_jobs_active",
     "Number of currently running ingest jobs",
