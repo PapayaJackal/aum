@@ -8,6 +8,7 @@
     type ThreadMessage,
   } from "../lib/api";
   import { highlightTerms } from "../lib/highlight";
+  import HtmlPreview from "../components/HtmlPreview.svelte";
   import ImagePreview from "../components/ImagePreview.svelte";
   import PdfPreview from "../components/PdfPreview.svelte";
 
@@ -238,6 +239,7 @@
   let contentType = $derived(doc ? getContentType(doc.metadata) : "");
   let isImage = $derived(contentType.startsWith("image/"));
   let isPdf = $derived(contentType === "application/pdf");
+  let isHtml = $derived(contentType === "text/html" || contentType === "message/rfc822");
 
   let contentHtml = $derived(doc ? highlightTerms(doc.content, highlightQuery) : "");
 
@@ -532,6 +534,8 @@
           <ImagePreview {docId} {index} />
         {:else if isPdf}
           <PdfPreview {docId} {index} />
+        {:else if isHtml}
+          <HtmlPreview {docId} {index} />
         {/if}
       {:else}
         <pre class="whitespace-pre-wrap break-words text-sm leading-relaxed m-0">{@html contentHtml}</pre>

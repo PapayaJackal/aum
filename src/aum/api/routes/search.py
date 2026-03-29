@@ -6,7 +6,7 @@ from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from aum.api.deps import (
@@ -16,6 +16,7 @@ from aum.api.deps import (
     get_permission_manager,
     make_search_backend,
 )
+from aum.api.email_preview import extract_email_html
 from aum.auth.models import User
 from aum.auth.permissions import PermissionDeniedError, PermissionManager
 from aum.metrics import DOCUMENT_DOWNLOADS, DOCUMENT_PREVIEWS, DOCUMENT_VIEWS, THREAD_LOOKUPS
@@ -32,9 +33,13 @@ _PREVIEWABLE_TYPES = frozenset(
         "image/webp",
         "image/bmp",
         "application/pdf",
+        "message/rfc822",
+        "text/html",
     }
 )
 _BLOCKED_PREVIEW_TYPES = frozenset({"image/svg+xml"})
+_HTML_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+_BINARY_CSP = "default-src 'none'; style-src 'unsafe-inline'"
 
 _INTERNAL_METADATA_KEYS = {"_aum_display_path", "_aum_extracted_from"}
 _EXCLUDED_METADATA_KEYS = _INTERNAL_METADATA_KEYS | HIDDEN_METADATA_KEYS
@@ -348,7 +353,7 @@ async def preview_document(
     doc_id: str,
     user: Annotated[User | None, Depends(get_optional_user)],
     index: str = "",
-) -> FileResponse:
+) -> Response:
     config = get_config()
     idx = index or default_index_name(config)
 
@@ -374,10 +379,19 @@ async def preview_document(
     DOCUMENT_PREVIEWS.labels(content_type=content_type).inc()
     log.info("document preview", doc_id=doc_id, index=idx, content_type=content_type)
 
+    if content_type == "message/rfc822":
+        html_bytes = extract_email_html(file_path)
+        response = Response(content=html_bytes, media_type="text/html")
+        response.headers["Content-Disposition"] = "inline"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Content-Security-Policy"] = _HTML_CSP
+        return response
+
     response = FileResponse(path=str(file_path), media_type=content_type, filename=file_path.name)
     response.headers["Content-Disposition"] = "inline"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+    csp = _HTML_CSP if content_type == "text/html" else _BINARY_CSP
+    response.headers["Content-Security-Policy"] = csp
     return response
 
 

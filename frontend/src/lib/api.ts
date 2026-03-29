@@ -307,6 +307,8 @@ const PREVIEWABLE_TYPES = new Set([
   "image/webp",
   "image/bmp",
   "application/pdf",
+  "message/rfc822",
+  "text/html",
 ]);
 
 export function isPreviewable(metadata: Record<string, string | string[]>): boolean {

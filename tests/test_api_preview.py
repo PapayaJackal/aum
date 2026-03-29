@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+from email.mime.image import MIMEImage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from unittest.mock import patch
 
 import pytest
@@ -159,3 +163,71 @@ class TestPreviewDocument:
         res = self.client.get("/api/documents/doc1/preview", params={"index": "idx1"})
         assert res.status_code == 403
         assert "symlink" in res.json()["detail"].lower()
+
+    def test_preview_html_file(self, tmp_path):
+        f = tmp_path / "page.html"
+        f.write_text("<html><body><p>Hello world</p></body></html>")
+        self.mock_backend.get_document.return_value = _make_result(
+            source_path=str(f),
+            metadata={"Content-Type": "text/html"},
+        )
+        res = self.client.get("/api/documents/doc1/preview", params={"index": "idx1"})
+        assert res.status_code == 200
+        assert "text/html" in res.headers["content-type"]
+        assert res.headers["content-disposition"] == "inline"
+        csp = res.headers["content-security-policy"]
+        assert "default-src 'none'" in csp
+        assert "img-src data:" in csp
+        assert b"<p>Hello world</p>" in res.content
+
+    def test_preview_email(self, tmp_path):
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "Test"
+        msg["From"] = "alice@example.com"
+        msg.attach(MIMEText("plain fallback", "plain"))
+        msg.attach(MIMEText("<html><body><b>Hi</b></body></html>", "html"))
+        f = tmp_path / "test.eml"
+        f.write_bytes(msg.as_bytes())
+        self.mock_backend.get_document.return_value = _make_result(
+            source_path=str(f),
+            metadata={"Content-Type": "message/rfc822"},
+        )
+        res = self.client.get("/api/documents/doc1/preview", params={"index": "idx1"})
+        assert res.status_code == 200
+        assert "text/html" in res.headers["content-type"]
+        csp = res.headers["content-security-policy"]
+        assert "img-src data:" in csp
+        assert b"<b>Hi</b>" in res.content
+
+    def test_preview_email_with_inline_image(self, tmp_path):
+        msg = MIMEMultipart("related")
+        msg.attach(MIMEText('<html><body><img src="cid:img1"></body></html>', "html"))
+        img_data = b"\x89PNG\r\n\x1a\nfake-png"
+        img_part = MIMEImage(img_data, "png")
+        img_part.add_header("Content-ID", "<img1>")
+        msg.attach(img_part)
+        f = tmp_path / "inline.eml"
+        f.write_bytes(msg.as_bytes())
+        self.mock_backend.get_document.return_value = _make_result(
+            source_path=str(f),
+            metadata={"Content-Type": "message/rfc822"},
+        )
+        res = self.client.get("/api/documents/doc1/preview", params={"index": "idx1"})
+        assert res.status_code == 200
+        expected_b64 = base64.b64encode(img_data).decode("ascii")
+        assert f"data:image/png;base64,{expected_b64}".encode() in res.content
+        assert b"cid:" not in res.content
+
+    def test_preview_email_plain_text_fallback(self, tmp_path):
+        msg = MIMEText("Just plain text", "plain")
+        msg["Subject"] = "Plain"
+        f = tmp_path / "plain.eml"
+        f.write_bytes(msg.as_bytes())
+        self.mock_backend.get_document.return_value = _make_result(
+            source_path=str(f),
+            metadata={"Content-Type": "message/rfc822"},
+        )
+        res = self.client.get("/api/documents/doc1/preview", params={"index": "idx1"})
+        assert res.status_code == 200
+        assert b"<pre>" in res.content
+        assert b"Just plain text" in res.content
