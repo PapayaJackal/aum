@@ -60,6 +60,40 @@ def test_retry_no_failures_or_empty(monkeypatch, tmp_path):
     assert "no failed or empty items" in result.output
 
 
+def test_retry_only_failed_no_failures(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUM_DATA_DIR", str(tmp_path))
+
+    from aum.ingest.tracker import JobTracker
+    from aum.models import JobStatus
+
+    tracker = JobTracker(db_path=str(tmp_path / "aum.db"))
+    tracker.create_job("of1", tmp_path, total_files=5)
+    tracker.update_progress("of1", extracted=4, processed=4, failed=0, empty=1)
+    tracker.complete_job("of1", JobStatus.COMPLETED)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["retry", "--only", "failed", "of1"])
+    assert result.exit_code == 0
+    assert "no failed items" in result.output
+
+
+def test_retry_only_empty_no_empties(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUM_DATA_DIR", str(tmp_path))
+
+    from aum.ingest.tracker import JobTracker
+    from aum.models import JobStatus
+
+    tracker = JobTracker(db_path=str(tmp_path / "aum.db"))
+    tracker.create_job("oe1", tmp_path, total_files=5)
+    tracker.update_progress("oe1", extracted=4, processed=4, failed=1, empty=0)
+    tracker.complete_job("oe1", JobStatus.COMPLETED)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["retry", "--only", "empty", "oe1"])
+    assert result.exit_code == 0
+    assert "no empty items" in result.output
+
+
 def test_user_list_empty(monkeypatch, tmp_path):
     monkeypatch.setenv("AUM_DATA_DIR", str(tmp_path))
     runner = CliRunner()

@@ -220,14 +220,30 @@ class JobTracker:
 
     # --- Retry helpers ---
 
-    def get_failed_paths(self, job_id: str, include_empty: bool = False) -> list[Path]:
+    def get_failed_paths(self, job_id: str, include_empty: bool = False, *, only: str = "all") -> list[Path]:
         """Return distinct file paths that had errors in the given job.
 
-        By default excludes EmptyExtraction errors since retrying those rarely
-        helps unless extraction settings (e.g. OCR) have changed.  Pass
-        ``include_empty=True`` to include them.
+        *only* controls which error types to include:
+
+        - ``"all"`` — both real failures and empty extractions (same as
+          ``include_empty=True``).
+        - ``"failed"`` — only real failures (excludes EmptyExtraction).
+        - ``"empty"`` — only empty extractions.
+
+        The legacy *include_empty* flag is still honoured when *only* is
+        ``"all"``: passing ``include_empty=False`` excludes empty extractions.
         """
-        if include_empty:
+        if only == "failed":
+            rows = self._conn.execute(
+                "SELECT DISTINCT file_path FROM job_errors WHERE job_id = ? AND error_type != 'EmptyExtraction'",
+                (job_id,),
+            ).fetchall()
+        elif only == "empty":
+            rows = self._conn.execute(
+                "SELECT DISTINCT file_path FROM job_errors WHERE job_id = ? AND error_type = 'EmptyExtraction'",
+                (job_id,),
+            ).fetchall()
+        elif include_empty:
             rows = self._conn.execute(
                 "SELECT DISTINCT file_path FROM job_errors WHERE job_id = ?",
                 (job_id,),

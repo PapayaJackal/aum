@@ -114,6 +114,22 @@ class TestGetFailedPaths:
         paths = tracker.get_failed_paths("fp3", include_empty=True)
         assert len(paths) == 2
 
+    def test_only_failed(self, tracker: JobTracker):
+        tracker.create_job("fp5", Path("/data"), total_files=10)
+        tracker.record_error("fp5", Path("/data/a.pdf"), "ExtractionError", "corrupt")
+        tracker.record_error("fp5", Path("/data/b.pdf"), "EmptyExtraction", "no text")
+
+        paths = tracker.get_failed_paths("fp5", only="failed")
+        assert paths == [Path("/data/a.pdf")]
+
+    def test_only_empty(self, tracker: JobTracker):
+        tracker.create_job("fp6", Path("/data"), total_files=10)
+        tracker.record_error("fp6", Path("/data/a.pdf"), "ExtractionError", "corrupt")
+        tracker.record_error("fp6", Path("/data/b.pdf"), "EmptyExtraction", "no text")
+
+        paths = tracker.get_failed_paths("fp6", only="empty")
+        assert paths == [Path("/data/b.pdf")]
+
     def test_empty_when_no_errors(self, tracker: JobTracker):
         tracker.create_job("fp4", Path("/data"), total_files=5)
         assert tracker.get_failed_paths("fp4") == []

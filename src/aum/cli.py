@@ -544,7 +544,10 @@ def _run_embed_job(
 @main.command()
 @click.argument("job_id")
 @click.option(
-    "--include-empty/--no-include-empty", default=True, help="Retry files with empty extractions (default: yes)"
+    "--only",
+    type=click.Choice(["all", "failed", "empty"], case_sensitive=False),
+    default=None,
+    help="Retry only 'failed' or only 'empty' items (default: all)",
 )
 @click.option("--batch-size", default=None, type=int, help="Override batch size")
 @click.option("--workers", default=None, type=int, help="Override worker count (ingest only)")
@@ -553,7 +556,7 @@ def _run_embed_job(
 @click.option("--pull/--no-pull", default=True, help="Auto-pull model in Ollama (embed only)")
 def retry(
     job_id: str,
-    include_empty: bool,
+    only: str | None,
     batch_size: int | None,
     workers: int | None,
     ocr: bool | None,
@@ -566,8 +569,9 @@ def retry(
     Works for both ingest and embedding jobs.  The retry itself is tracked as
     a new job that can be inspected and retried again if needed.
 
-    By default, both failed and empty items are retried.  Use --no-include-empty
-    to skip files that had empty extractions.
+    By default, both failed and empty items are retried.  Use --only failed
+    to retry only real failures, or --only empty to retry only files that
+    produced empty extractions (useful after changing OCR settings).
     """
     from aum.api.deps import make_tracker
     from aum.models import JobType
@@ -582,12 +586,21 @@ def retry(
         click.echo(f"Job not found: {job_id}", err=True)
         sys.exit(1)
 
-    if job.failed == 0 and job.empty == 0:
+    if only == "failed" and job.failed == 0:
+        click.echo(f"Job {job_id} has no failed items.")
+        return
+    if only == "empty" and job.empty == 0:
+        click.echo(f"Job {job_id} has no empty items.")
+        return
+    if only is None and job.failed == 0 and job.empty == 0:
         click.echo(f"Job {job_id} has no failed or empty items.")
         return
 
+    # Default to "all" for the tracker query
+    only_filter = only or "all"
+
     if job.job_type == JobType.INGEST:
-        _retry_ingest(config, job, include_empty, batch_size, workers, ocr, ocr_language)
+        _retry_ingest(config, job, only_filter, batch_size, workers, ocr, ocr_language)
     elif job.job_type == JobType.EMBED:
         _retry_embed(config, job, batch_size, pull)
     else:
@@ -598,7 +611,7 @@ def retry(
 def _retry_ingest(
     config: AumConfig,
     job,
-    include_empty: bool,
+    only: str,
     batch_size: int | None,
     workers: int | None,
     ocr: bool | None,
@@ -607,7 +620,7 @@ def _retry_ingest(
     from aum.api.deps import make_tracker
 
     tracker = make_tracker(config)
-    failed_paths = tracker.get_failed_paths(job.job_id, include_empty=include_empty)
+    failed_paths = tracker.get_failed_paths(job.job_id, only=only)
     if not failed_paths:
         click.echo(f"No retryable errors in job {job.job_id}.")
         return
@@ -867,7 +880,8 @@ def list_jobs(status: str | None) -> None:
 @main.command("job")
 @click.argument("job_id")
 @click.option("--errors", is_flag=True, help="Show error details")
-def show_job(job_id: str, errors: bool) -> None:
+@click.option("--hide-empty", is_flag=True, help="Hide empty extraction errors from --errors output")
+def show_job(job_id: str, errors: bool, hide_empty: bool) -> None:
     """Show details of a specific job."""
     config = _load_config()
     _setup(config)
@@ -907,11 +921,11 @@ def show_job(job_id: str, errors: bool) -> None:
         click.echo(f"\nRetry with: aum retry {job.job_id}")
 
     if errors and job.errors:
-        click.echo(f"\nErrors ({len(job.errors)}):")
-        click.echo("-" * 70)
-        for e in job.errors:
-            click.echo(f"  {e.file_path}")
-            click.echo(f"    [{e.error_type}] {e.message}")
+        shown = [e for e in job.errors if not (hide_empty and e.error_type == "EmptyExtraction")]
+        if shown:
+            click.echo(f"\nErrors ({len(shown)}):")
+            for e in shown:
+                click.echo(f"{e.file_path}\t[{e.error_type}] {e.message}")
 
 
 # --- User management ---
