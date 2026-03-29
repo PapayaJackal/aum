@@ -726,6 +726,12 @@ def _retry_embed(config: AumConfig, job, batch_size: int | None, pull: bool) -> 
 @click.option("--email", multiple=True, help="Filter by email address")
 @click.option("--created-from", default=None, help="Filter by creation year (from)")
 @click.option("--created-to", default=None, help="Filter by creation year (to)")
+@click.option(
+    "--sort",
+    default=None,
+    type=click.Choice(["date:asc", "date:desc", "size:asc", "size:desc"]),
+    help="Sort results by date or file size (e.g. date:desc, size:asc)",
+)
 @click.option("--show-facets", is_flag=True, help="Display available facet values")
 def search(
     query: str,
@@ -738,6 +744,7 @@ def search(
     email: tuple[str, ...],
     created_from: str | None,
     created_to: str | None,
+    sort: str | None,
     show_facets: bool,
 ) -> None:
     """Search indexed documents."""
@@ -773,7 +780,7 @@ def search(
     facets: dict[str, list[str]] | None
     if search_type == "text":
         results, total, facets = backend.search_text(
-            query, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters
+            query, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters, sort=sort
         )
     elif search_type == "hybrid":
         from aum.api.deps import make_embedder, make_tracker
@@ -811,7 +818,7 @@ def search(
         embedder = make_embedder(config)
         vector = embedder.embed_query(query)
         results, total, facets = backend.search_hybrid(
-            query, vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters
+            query, vector, limit=limit, offset=offset, include_facets=include_facets, filters=search_filters, sort=sort
         )
     else:
         results, total, facets = [], 0, None

@@ -38,6 +38,7 @@ _FILTERABLE_ATTRS: list[str] = [
     "meta_content_type",
     "meta_creator",
     "meta_created_year",
+    "meta_file_size",
     "meta_email_addresses",
     "has_embeddings",
     "extracted_from",
@@ -46,6 +47,8 @@ _FILTERABLE_ATTRS: list[str] = [
     "meta_in_reply_to",
     "meta_references",
 ]
+
+_SORTABLE_ATTRS: list[str] = ["meta_created_year", "meta_file_size"]
 
 # Only these fields are searched; all others are stored but not ranked on.
 _SEARCHABLE_ATTRS: list[str] = ["display_path", "content"]
@@ -59,6 +62,7 @@ _META_SOURCE_KEYS: dict[str, list[str]] = {
     "creator": ["dc:creator", "xmp:dc:creator", "Author", "meta:author", "creator"],
     "created": ["dcterms:created", "Creation-Date", "meta:creation-date", "created", "date"],
     "modified": ["dcterms:modified", "Last-Modified", "meta:save-date", "modified"],
+    "file_size": ["Content-Length"],
     "message_id": ["Message:Raw-Header:Message-ID", "Message-ID"],
     "in_reply_to": ["Message:Raw-Header:In-Reply-To", "In-Reply-To"],
     "references": ["Message:Raw-Header:References", "References"],
@@ -135,6 +139,11 @@ def _build_flat_meta(meta: dict[str, str | list[str]]) -> dict[str, object]:
     if "created" in meta and isinstance(meta["created"], str) and len(meta["created"]) >= 4:
         try:
             flat["meta_created_year"] = int(meta["created"][:4])
+        except ValueError:
+            pass
+    if "file_size" in meta and isinstance(meta["file_size"], str):
+        try:
+            flat["meta_file_size"] = int(meta["file_size"])
         except ValueError:
             pass
     # Email threading fields (stored as keywords for exact-match filtering).
@@ -413,8 +422,11 @@ class MeilisearchBackend:
         settings: dict = {
             "searchableAttributes": _SEARCHABLE_ATTRS,
             "filterableAttributes": _FILTERABLE_ATTRS,
+            "sortableAttributes": _SORTABLE_ATTRS,
             "displayedAttributes": ["*"],
-            "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness"],
+            # sort is first so explicit sort params take priority over relevance ranking.
+            # When no sort param is provided the sort rule is a no-op.
+            "rankingRules": ["sort", "words", "typo", "proximity", "attribute", "exactness"],
         }
         if vector_dimension:
             settings["embedders"] = {
@@ -492,6 +504,12 @@ class MeilisearchBackend:
     # Search
     # ---------------------------------------------------------------------------
 
+    # Maps sort values from the API (e.g. "date:desc") to Meilisearch field expressions.
+    _SORT_FIELD_MAP: dict[str, str] = {
+        "date": "meta_created_year",
+        "size": "meta_file_size",
+    }
+
     def _common_search_params(
         self,
         *,
@@ -500,6 +518,7 @@ class MeilisearchBackend:
         include_facets: bool,
         filters: dict[str, list[str]] | None,
         highlight: bool,
+        sort: str | None = None,
     ) -> dict:
         params: dict = {
             "limit": limit,
@@ -524,6 +543,13 @@ class MeilisearchBackend:
             params["filter"] = filter_str
         if include_facets:
             params["facets"] = list(_MEILI_FACET_FIELDS.values())
+        if sort:
+            parts = sort.split(":", 1)
+            if len(parts) == 2:
+                field_key, order = parts
+                meili_field = self._SORT_FIELD_MAP.get(field_key)
+                if meili_field and order in ("asc", "desc"):
+                    params["sort"] = [f"{meili_field}:{order}"]
         return params
 
     def _execute_search(
@@ -547,7 +573,7 @@ class MeilisearchBackend:
             for hit in hits:
                 all_results.append(_parse_hit(hit, index_name=idx_name))
 
-        if len(self._indices) > 1:
+        if len(self._indices) > 1 and "sort" not in params:
             all_results.sort(key=lambda r: r.score, reverse=True)
 
         return all_results, total, merged_facets
@@ -560,6 +586,7 @@ class MeilisearchBackend:
         offset: int = 0,
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
+        sort: str | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         params = self._common_search_params(
             limit=limit,
@@ -567,6 +594,7 @@ class MeilisearchBackend:
             include_facets=include_facets,
             filters=filters,
             highlight=True,
+            sort=sort,
         )
         t0 = time.monotonic()
         results, total, merged_facets = self._execute_search(query, params)
@@ -582,6 +610,7 @@ class MeilisearchBackend:
         offset: int = 0,
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
+        sort: str | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         params = self._common_search_params(
             limit=limit,
@@ -589,6 +618,7 @@ class MeilisearchBackend:
             include_facets=include_facets,
             filters=filters,
             highlight=False,
+            sort=sort,
         )
         params["vector"] = vector
         params["hybrid"] = {"semanticRatio": 1.0, "embedder": "custom"}
@@ -608,6 +638,7 @@ class MeilisearchBackend:
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
         semantic_ratio: float | None = None,
+        sort: str | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         params = self._common_search_params(
             limit=limit,
@@ -615,6 +646,7 @@ class MeilisearchBackend:
             include_facets=include_facets,
             filters=filters,
             highlight=True,
+            sort=sort,
         )
         params["vector"] = vector
         ratio = semantic_ratio if semantic_ratio is not None else self._semantic_ratio

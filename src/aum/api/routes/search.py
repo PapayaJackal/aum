@@ -125,6 +125,7 @@ async def search(
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
     filters: Annotated[str | None, Query()] = None,
     semantic_ratio: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+    sort: Annotated[str | None, Query(pattern=r"^(date|size):(asc|desc)$")] = None,
 ) -> SearchResponse:
     config = get_config()
     idx_raw = index or default_index_name(config)
@@ -148,7 +149,7 @@ async def search(
 
     if type == "text":
         results, total, facets = backend.search_text(
-            q, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters
+            q, limit=limit, offset=offset, include_facets=include_facets, filters=parsed_filters, sort=sort
         )
     elif type == "hybrid":
         embedder = _get_embedder_for_indices(idx_list)
@@ -161,6 +162,7 @@ async def search(
             include_facets=include_facets,
             filters=parsed_filters,
             semantic_ratio=semantic_ratio,
+            sort=sort,
         )
     else:
         raise HTTPException(status_code=400, detail=f"Unknown search type: {type}")
@@ -177,6 +179,7 @@ async def search(
         facets_included=include_facets,
         filters=parsed_filters,
         semantic_ratio=semantic_ratio,
+        sort=sort,
     )
 
     return SearchResponse(

@@ -39,6 +39,7 @@ _META_PROPERTIES: dict[str, dict] = {
         "format": "strict_date_optional_time||epoch_millis",
         "ignore_malformed": True,
     },
+    "file_size": {"type": "long"},
     "email_addresses": {"type": "keyword"},
     "message_id": {"type": "keyword"},
     "in_reply_to": {"type": "keyword"},
@@ -51,6 +52,7 @@ _META_SOURCE_KEYS: dict[str, list[str]] = {
     "creator": ["dc:creator", "xmp:dc:creator", "Author", "meta:author", "creator"],
     "created": ["dcterms:created", "Creation-Date", "meta:creation-date", "created", "date"],
     "modified": ["dcterms:modified", "Last-Modified", "meta:save-date", "modified"],
+    "file_size": ["Content-Length"],
     "message_id": ["Message:Raw-Header:Message-ID", "Message-ID"],
     "in_reply_to": ["Message:Raw-Header:In-Reply-To", "In-Reply-To"],
     "references": ["Message:Raw-Header:References", "References"],
@@ -73,6 +75,13 @@ def _extract_indexed_meta(raw_metadata: dict[str, str | list[str]]) -> dict[str,
     # group on the base type only.
     if "content_type" in result and isinstance(result["content_type"], str):
         result["content_type"] = result["content_type"].split(";")[0].strip()
+
+    # Parse file size as integer (Content-Length is a string from Tika).
+    if "file_size" in result and isinstance(result["file_size"], str):
+        try:
+            result["file_size"] = int(result["file_size"])  # type: ignore[assignment]
+        except ValueError:
+            del result["file_size"]
 
     # Merge all email header values into a single list, extracting just the
     # email address (no display name) and normalising to lowercase.
@@ -138,6 +147,24 @@ def _parse_facets(resp: dict) -> dict[str, list[str]]:
         if values:
             result[label] = values
     return result
+
+
+_ES_SORT_FIELD_MAP: dict[str, str] = {
+    "date": "meta.created",
+    "size": "meta.file_size",
+}
+
+
+def _build_sort_clause(sort: str) -> list[dict] | None:
+    """Convert a sort string like 'date:desc' to an Elasticsearch sort clause."""
+    parts = sort.split(":", 1)
+    if len(parts) != 2:
+        return None
+    field_key, order = parts
+    es_field = _ES_SORT_FIELD_MAP.get(field_key)
+    if not es_field or order not in ("asc", "desc"):
+        return None
+    return [{es_field: {"order": order, "missing": "_last"}}]
 
 
 def _build_filter_clauses(filters: dict[str, list[str]]) -> list[dict]:
@@ -323,6 +350,7 @@ class ElasticsearchBackend:
         offset: int = 0,
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
+        sort: str | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         should_clauses: list[dict] = [
             {"match": {"content": {"query": query, "operator": "and", "boost": 2}}},
@@ -350,6 +378,10 @@ class ElasticsearchBackend:
                 },
             },
         }
+        if sort:
+            sort_clause = _build_sort_clause(sort)
+            if sort_clause:
+                body["sort"] = sort_clause
         if include_facets:
             body["aggs"] = _FACET_AGGS
         resp = self._client.search(index=self._index, body=body)
@@ -365,6 +397,7 @@ class ElasticsearchBackend:
         offset: int = 0,
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
+        sort: str | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         filter_clauses = _build_filter_clauses(filters) if filters else []
         knn_body: dict = {
@@ -380,6 +413,10 @@ class ElasticsearchBackend:
             "size": limit,
             "from": offset,
         }
+        if sort:
+            sort_clause = _build_sort_clause(sort)
+            if sort_clause:
+                body["sort"] = sort_clause
         if include_facets:
             body["aggs"] = _FACET_AGGS
         resp = self._client.search(index=self._index, body=body)
@@ -397,6 +434,7 @@ class ElasticsearchBackend:
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
         semantic_ratio: float | None = None,
+        sort: str | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         should_clauses: list[dict] = [
             {"match": {"content": {"query": query, "operator": "and", "boost": 2}}},
@@ -451,6 +489,10 @@ class ElasticsearchBackend:
                 "display_path": {"number_of_fragments": 0},
             },
         }
+        if sort:
+            sort_clause = _build_sort_clause(sort)
+            if sort_clause:
+                body["sort"] = sort_clause
         if include_facets:
             body["aggs"] = _FACET_AGGS
         resp = self._client.search(index=self._index, body=body)

@@ -9,6 +9,7 @@ interface Prefs {
   searchType: "text" | "hybrid";
   semanticRatio: number;
   indexSearchTypes: Record<string, "text" | "hybrid">;
+  sortBy: string;
 }
 
 function loadPrefs(): Prefs {
@@ -29,10 +30,18 @@ function loadPrefs(): Prefs {
         selectedIndices = [parsed.selectedIndex];
       }
       const semanticRatio = Math.max(0, Math.min(1, Number(parsed.semanticRatio ?? 0.5))) || 0.5;
-      return { pageSize: parsed.pageSize ?? 20, selectedIndices, searchType, semanticRatio, indexSearchTypes };
+      const sortBy = typeof parsed.sortBy === "string" ? parsed.sortBy : "relevance";
+      return { pageSize: parsed.pageSize ?? 20, selectedIndices, searchType, semanticRatio, indexSearchTypes, sortBy };
     }
   } catch {}
-  return { pageSize: 20, selectedIndices: [], searchType: "hybrid", semanticRatio: 0.5, indexSearchTypes: {} };
+  return {
+    pageSize: 20,
+    selectedIndices: [],
+    searchType: "hybrid",
+    semanticRatio: 0.5,
+    indexSearchTypes: {},
+    sortBy: "relevance",
+  };
 }
 
 export function savePrefs() {
@@ -45,6 +54,7 @@ export function savePrefs() {
         searchType: searchState.searchType,
         semanticRatio: searchState.semanticRatio,
         indexSearchTypes: searchState.indexSearchTypes,
+        sortBy: searchState.sortBy,
       }),
     );
   } catch {}
@@ -83,6 +93,7 @@ export const searchState = $state<{
   selectedDocId: string;
   selectedDocIndex: string;
   indexSearchTypes: Record<string, "text" | "hybrid">;
+  sortBy: string;
 }>({
   query: "",
   submittedQuery: "",
@@ -100,6 +111,7 @@ export const searchState = $state<{
   selectedDocId: "",
   selectedDocIndex: "",
   indexSearchTypes: _prefs.indexSearchTypes,
+  sortBy: _prefs.sortBy,
 });
 
 export function getSearchQs(): string {
@@ -114,6 +126,7 @@ export function getSearchQs(): string {
   if (searchState.pageSize !== 20) params.set("pageSize", String(searchState.pageSize));
   const af = searchState.activeFacets;
   if (Object.keys(af).length > 0) params.set("facets", JSON.stringify(af));
+  if (searchState.sortBy && searchState.sortBy !== "relevance") params.set("sort", searchState.sortBy);
   if (searchState.selectedDocId) {
     params.set("doc", searchState.selectedDocId);
     if (searchState.selectedDocIndex) params.set("docIndex", searchState.selectedDocIndex);

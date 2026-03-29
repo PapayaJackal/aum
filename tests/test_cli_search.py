@@ -209,14 +209,14 @@ class TestPagination:
         assert result.exit_code == 0
         assert "Showing 11-12 of 2 results" in result.output
         mock_backend.search_text.assert_called_once_with(
-            "russia", limit=20, offset=10, include_facets=False, filters=None
+            "russia", limit=20, offset=10, include_facets=False, filters=None, sort=None
         )
 
     def test_limit_option(self, runner, mock_backend):
         result = runner.invoke(main, ["search", "russia", "--limit", "5"])
         assert result.exit_code == 0
         mock_backend.search_text.assert_called_once_with(
-            "russia", limit=5, offset=0, include_facets=False, filters=None
+            "russia", limit=5, offset=0, include_facets=False, filters=None, sort=None
         )
 
     def test_result_numbering_with_offset(self, runner, mock_backend):
@@ -244,7 +244,7 @@ class TestFacets:
         assert "Available Facets" not in result.output
         # include_facets should be False when --show-facets not given
         mock_backend.search_text.assert_called_once_with(
-            "russia", limit=20, offset=0, include_facets=False, filters=None
+            "russia", limit=20, offset=0, include_facets=False, filters=None, sort=None
         )
 
     def test_show_facets_flag(self, runner, mock_backend):
@@ -260,7 +260,7 @@ class TestFacets:
         assert "Created:" in result.output
         assert "- 2023" in result.output
         mock_backend.search_text.assert_called_once_with(
-            "russia", limit=20, offset=0, include_facets=True, filters=None
+            "russia", limit=20, offset=0, include_facets=True, filters=None, sort=None
         )
 
     def test_show_facets_no_facets_returned(self, runner, mock_backend):
@@ -287,6 +287,7 @@ class TestFilters:
             offset=0,
             include_facets=False,
             filters={"File Type": ["PDF"]},
+            sort=None,
         )
 
     def test_multiple_file_type_filters(self, runner, mock_backend):
@@ -466,3 +467,45 @@ class TestMultiIndex:
         result = runner.invoke(main, ["search", "test", "--type", "hybrid", "--index", "idx1", "--index", "idx2"])
         assert result.exit_code != 0
         assert "mismatch" in result.output.lower()
+
+
+# --- Sort ---
+
+
+class TestSort:
+    @pytest.fixture(autouse=True)
+    def setup(self, _patch_cli):
+        pass
+
+    def test_no_sort_passes_none(self, runner, mock_backend):
+        runner.invoke(main, ["search", "russia"])
+        call_kwargs = mock_backend.search_text.call_args
+        assert call_kwargs.kwargs["sort"] is None
+
+    def test_sort_date_desc(self, runner, mock_backend):
+        result = runner.invoke(main, ["search", "russia", "--sort", "date:desc"])
+        assert result.exit_code == 0
+        call_kwargs = mock_backend.search_text.call_args
+        assert call_kwargs.kwargs["sort"] == "date:desc"
+
+    def test_sort_date_asc(self, runner, mock_backend):
+        result = runner.invoke(main, ["search", "russia", "--sort", "date:asc"])
+        assert result.exit_code == 0
+        call_kwargs = mock_backend.search_text.call_args
+        assert call_kwargs.kwargs["sort"] == "date:asc"
+
+    def test_sort_size_desc(self, runner, mock_backend):
+        result = runner.invoke(main, ["search", "russia", "--sort", "size:desc"])
+        assert result.exit_code == 0
+        call_kwargs = mock_backend.search_text.call_args
+        assert call_kwargs.kwargs["sort"] == "size:desc"
+
+    def test_sort_size_asc(self, runner, mock_backend):
+        result = runner.invoke(main, ["search", "russia", "--sort", "size:asc"])
+        assert result.exit_code == 0
+        call_kwargs = mock_backend.search_text.call_args
+        assert call_kwargs.kwargs["sort"] == "size:asc"
+
+    def test_invalid_sort_value(self, runner):
+        result = runner.invoke(main, ["search", "russia", "--sort", "invalid"])
+        assert result.exit_code != 0

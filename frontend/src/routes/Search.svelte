@@ -125,6 +125,7 @@
         offset,
         activeFilters,
         searchState.searchType === "hybrid" ? searchState.semanticRatio : undefined,
+        searchState.sortBy !== "relevance" ? searchState.sortBy : undefined,
       );
       searchState.results = res.results;
       searchState.total = res.total;
@@ -196,6 +197,9 @@
       searchState.selectedDocId = "";
       searchState.selectedDocIndex = "";
     }
+    const sortParam = params.get("sort");
+    const validSorts = ["date:desc", "date:asc", "size:desc", "size:asc"];
+    searchState.sortBy = sortParam && validSorts.includes(sortParam) ? sortParam : "relevance";
     restoreBaselineFacets(q, searchState.selectedIndices.join(","));
     doSearch(parseInt(params.get("page") || "1"), false);
   }
@@ -234,6 +238,9 @@
     }
     searchState.selectedDocId = params.get("doc") || "";
     searchState.selectedDocIndex = params.get("docIndex") || "";
+    const sortParam2 = params.get("sort");
+    const validSorts2 = ["date:desc", "date:asc", "size:desc", "size:asc"];
+    searchState.sortBy = sortParam2 && validSorts2.includes(sortParam2) ? sortParam2 : "relevance";
     restoreBaselineFacets(q, searchState.selectedIndices.join(","));
     doSearch(parseInt(params.get("page") || "1"), false);
   }
@@ -246,6 +253,11 @@
   }
 
   function handlePageSizeChange() {
+    savePrefs();
+    if (searchState.searched) doSearch(1, false);
+  }
+
+  function handleSortChange() {
     savePrefs();
     if (searchState.searched) doSearch(1, false);
   }
@@ -480,6 +492,17 @@
             </p>
           </div>
           <div class="flex items-center gap-1 flex-wrap">
+            <select
+              class="py-1 px-1.5 border border-gray-300 rounded bg-gray-100 text-sm cursor-pointer"
+              bind:value={searchState.sortBy}
+              onchange={handleSortChange}
+            >
+              <option value="relevance">Best match</option>
+              <option value="date:desc">Newest first</option>
+              <option value="date:asc">Oldest first</option>
+              <option value="size:desc">Largest first</option>
+              <option value="size:asc">Smallest first</option>
+            </select>
             <button
               class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed"
               disabled={searchState.currentPage <= 1 || loading}

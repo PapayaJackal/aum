@@ -212,6 +212,7 @@ class SearchBackend(Protocol):
         offset: int = 0,
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
+        sort: str | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         """Full-text keyword search. Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...
@@ -224,6 +225,7 @@ class SearchBackend(Protocol):
         offset: int = 0,
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
+        sort: str | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         """Vector similarity search (kNN). Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...
@@ -238,6 +240,7 @@ class SearchBackend(Protocol):
         include_facets: bool = False,
         filters: dict[str, list[str]] | None = None,
         semantic_ratio: float | None = None,
+        sort: str | None = None,
     ) -> tuple[list[SearchResult], int, dict[str, list[str]] | None]:
         """Combined keyword + vector search. Returns (results, total_count, facets). facets is None unless include_facets=True."""
         ...

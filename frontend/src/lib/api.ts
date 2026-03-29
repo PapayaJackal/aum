@@ -217,6 +217,7 @@ export function search(
   offset: number = 0,
   filters: Record<string, string[]> = {},
   semanticRatio?: number,
+  sort?: string,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q: query, type, limit: String(limit), offset: String(offset) });
   if (index) params.set("index", index);
@@ -225,6 +226,9 @@ export function search(
   }
   if (semanticRatio != null) {
     params.set("semantic_ratio", String(semanticRatio));
+  }
+  if (sort) {
+    params.set("sort", sort);
   }
   return request(`/search?${params}`);
 }
