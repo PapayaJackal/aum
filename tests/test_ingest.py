@@ -5,6 +5,7 @@ from aum.extraction.base import RecordErrorFn
 from aum.ingest.pipeline import IngestPipeline
 from aum.ingest.tracker import JobTracker
 from aum.models import Document, IngestJob, JobStatus, JobType
+from aum.search.base import BatchResult
 
 
 class TestJobTracker:
@@ -190,7 +191,7 @@ def _stub_extractor(extract_fn):
 def _stub_backend():
     """Create a mock SearchBackend that always succeeds."""
     backend = MagicMock()
-    backend.index_batch.return_value = []  # no failures
+    backend.index_batch.return_value = BatchResult()  # no failures
     return backend
 
 

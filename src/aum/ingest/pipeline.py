@@ -590,7 +590,7 @@ class IngestPipeline:
         """Index a batch. Returns (processed, failed) counts."""
         start = time.monotonic()
         try:
-            failures = self._backend.index_batch(docs)
+            result = self._backend.index_batch(docs)
             INGEST_DURATION.labels(stage="indexing").observe(time.monotonic() - start)
         except Exception as exc:
             log.error("batch indexing failed", job_id=job_id, error=str(exc))
@@ -599,14 +599,21 @@ class IngestPipeline:
                 self._tracker.record_error(job_id, doc.source_path, "IndexingError", str(exc))
             return 0, len(docs)
 
-        if failures:
-            failed_ids = {doc_id for doc_id, _ in failures}
-            docs_by_id = {doc_id: doc for doc_id, doc in docs}
-            for doc_id, reason in failures:
-                DOCS_FAILED.labels(error_type="ElasticsearchError").inc()
+        # Record any content truncations so they show up in `aum status --errors`.
+        docs_by_id = {doc_id: doc for doc_id, doc in docs}
+        for doc_id, original_chars, truncated_chars in result.truncated:
+            doc = docs_by_id.get(doc_id)
+            path = doc.source_path if doc else doc_id
+            msg = f"content truncated from {original_chars} to {truncated_chars} chars to fit payload limit"
+            self._tracker.record_error(job_id, path, "ContentTruncated", msg)
+
+        if result.failures:
+            failed_ids = {doc_id for doc_id, _ in result.failures}
+            for doc_id, reason in result.failures:
+                DOCS_FAILED.labels(error_type="IndexingError").inc()
                 doc = docs_by_id.get(doc_id)
                 path = doc.source_path if doc else doc_id
-                self._tracker.record_error(job_id, path, "ElasticsearchError", reason)
+                self._tracker.record_error(job_id, path, "IndexingError", reason)
             indexed = len(docs) - len(failed_ids)
             failed_count = len(failed_ids)
         else:

@@ -23,6 +23,10 @@ DOCS_SKIPPED = Counter(
     "aum_documents_skipped_total",
     "Documents skipped during resume (already indexed)",
 )
+DOCS_TRUNCATED = Counter(
+    "aum_documents_truncated_total",
+    "Documents whose content was truncated to fit the search backend payload limit",
+)
 INGEST_JOBS_ACTIVE = Gauge(
     "aum_ingest_jobs_active",
     "Number of currently running ingest jobs",

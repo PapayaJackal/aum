@@ -9,6 +9,7 @@ from aum.search.base import (
     DATE_FACETS,
     FACET_FIELDS,
     REVERSE_MIMETYPE_ALIASES,
+    BatchResult,
     SearchResult,
     alias_mimetype,
     extract_email,
@@ -264,10 +265,10 @@ class ElasticsearchBackend:
 
         self._client.index(index=self._index, id=doc_id, body=body)
 
-    def index_batch(self, documents: list[tuple[str, Document]]) -> list[tuple[str, str]]:
-        """Index a batch of documents. Returns a list of (doc_id, error_reason) for any failures."""
+    def index_batch(self, documents: list[tuple[str, Document]]) -> BatchResult:
+        """Index a batch of documents."""
         if not documents:
-            return []
+            return BatchResult()
 
         operations: list[dict] = []
         for doc_id, document in documents:
@@ -284,7 +285,7 @@ class ElasticsearchBackend:
 
         resp = self._client.bulk(operations=operations)
         if not resp.get("errors"):
-            return []
+            return BatchResult()
 
         failures: list[tuple[str, str]] = []
         for item in resp["items"]:
@@ -295,7 +296,7 @@ class ElasticsearchBackend:
                 failures.append((index_result.get("_id", "unknown"), reason))
 
         log.warning("elasticsearch bulk indexing had errors", failed_count=len(failures))
-        return failures
+        return BatchResult(failures=failures)
 
     def search_text(
         self,

@@ -169,6 +169,17 @@ class SearchResult:
     index: str = ""
 
 
+@dataclass
+class BatchResult:
+    """Result of a batch indexing operation."""
+
+    failures: list[tuple[str, str]] = field(default_factory=list)
+    """(doc_id, error_reason) for documents that failed to index."""
+
+    truncated: list[tuple[str, int, int]] = field(default_factory=list)
+    """(doc_id, original_chars, truncated_chars) for documents whose content was truncated."""
+
+
 class SearchBackend(Protocol):
     def initialize(self, *, vector_dimension: int | None = None) -> None:
         """Create index/mappings. If vector_dimension is set, configure vector fields."""
@@ -178,8 +189,8 @@ class SearchBackend(Protocol):
         """Index a single document."""
         ...
 
-    def index_batch(self, documents: list[tuple[str, Document]]) -> list[tuple[str, str]]:
-        """Index a batch of (doc_id, document) pairs. Returns list of (doc_id, error) for failures."""
+    def index_batch(self, documents: list[tuple[str, Document]]) -> BatchResult:
+        """Index a batch of (doc_id, document) pairs."""
         ...
 
     def search_text(

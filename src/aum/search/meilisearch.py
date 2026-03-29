@@ -7,11 +7,12 @@ import meilisearch
 import meilisearch.errors
 import structlog
 
-from aum.metrics import SEARCH_LATENCY
+from aum.metrics import DOCS_TRUNCATED, SEARCH_LATENCY
 from aum.models import Document
 from aum.search.base import (
     DATE_FACETS,
     REVERSE_MIMETYPE_ALIASES,
+    BatchResult,
     SearchResult,
     alias_mimetype,
     extract_email,
@@ -62,6 +63,9 @@ _EMAIL_HEADER_KEYS: list[str] = ["Message-From", "Message-To", "Message-CC"]
 _TASK_TIMEOUT_MS: int = 60_000
 # Larger budget for embedding updates: each doc may have many chunk vectors.
 _EMBED_TASK_TIMEOUT_MS: int = 300_000
+
+# Meilisearch default payload limit is 100 MB.  Stay safely under it.
+_MAX_PAYLOAD_BYTES: int = 95 * 1024 * 1024
 
 
 def _extract_indexed_meta(raw_metadata: dict[str, str | list[str]]) -> dict[str, str | list[str]]:
@@ -185,6 +189,106 @@ def _parse_facet_distribution(distribution: dict[str, dict[str, int]]) -> dict[s
 # ---------------------------------------------------------------------------
 # Document building / hit parsing
 # ---------------------------------------------------------------------------
+
+
+def _estimate_doc_size(body: dict) -> int:
+    """Cheaply estimate the JSON payload size of a document body.
+
+    The *content* and *metadata_json* fields dominate the payload for ingested
+    documents; for embedding updates, the *_vectors* field dominates.  We use
+    ``json.dumps`` on the large string fields (not the whole dict) to account
+    for JSON escaping of quotes, backslashes, and control characters.
+    """
+    size = 512  # conservative overhead for keys, small fields, JSON syntax
+    for key in ("content", "metadata_json"):
+        val = body.get(key)
+        if val:
+            # json.dumps on a plain string is fast and accounts for escaping.
+            size += len(json.dumps(val))
+    # Embedding vectors: each float serialises to ~18 chars on average.
+    vectors = body.get("_vectors")
+    if isinstance(vectors, dict):
+        custom = vectors.get("custom")
+        if isinstance(custom, dict):
+            embeddings = custom.get("embeddings")
+            if isinstance(embeddings, list):
+                for vec in embeddings:
+                    if isinstance(vec, list):
+                        size += len(vec) * 18
+    return size
+
+
+def _truncate_oversized(item: dict, max_bytes: int) -> tuple[dict, tuple[str, int, int] | None]:
+    """Truncate the *content* field of a document body so it fits under *max_bytes*.
+
+    Returns ``(item, truncation_info)`` where *truncation_info* is
+    ``(doc_id, original_chars, truncated_chars)`` if truncation occurred, or
+    ``None`` if the document was left unchanged.
+    """
+    content = item.get("content")
+    if not content:
+        return item, None
+    # Compute how much space everything *except* content occupies.
+    content_json_size = len(json.dumps(content))
+    overhead = _estimate_doc_size(item) - content_json_size
+    budget = max_bytes - overhead
+    if budget >= content_json_size:
+        return item, None
+    if budget <= 0:
+        return item, None
+    # Use the escaping ratio to estimate how many raw chars fit in the budget.
+    # This avoids expensive repeated json.dumps on large strings.
+    ratio = content_json_size / len(content)
+    allowed_chars = int(budget / ratio)
+    # Clamp and do one verification pass — trim further if still over.
+    allowed_chars = min(allowed_chars, len(content))
+    while allowed_chars > 0 and len(json.dumps(content[:allowed_chars])) > budget:
+        allowed_chars = int(allowed_chars * 0.95)
+    doc_id = item.get("id", "unknown")
+    log.warning(
+        "truncating oversized document content to fit payload limit",
+        doc_id=doc_id,
+        original_chars=len(content),
+        truncated_chars=allowed_chars,
+    )
+    DOCS_TRUNCATED.inc()
+    return {**item, "content": content[:allowed_chars]}, (doc_id, len(content), allowed_chars)
+
+
+def _split_by_payload_size(
+    items: list[dict], max_bytes: int = _MAX_PAYLOAD_BYTES
+) -> tuple[list[list[dict]], list[tuple[str, int, int]]]:
+    """Split a list of document dicts into sub-batches that stay under *max_bytes*.
+
+    Uses :func:`_estimate_doc_size` for a cheap size estimate instead of
+    serialising every document.  If a single document would still exceed the
+    limit on its own, its *content* field is truncated to fit.
+
+    Returns ``(sub_batches, truncations)`` where *truncations* is a list of
+    ``(doc_id, original_chars, truncated_chars)`` for any truncated documents.
+    """
+    batches: list[list[dict]] = []
+    truncations: list[tuple[str, int, int]] = []
+    current: list[dict] = []
+    current_size = 0
+
+    for item in items:
+        item_size = _estimate_doc_size(item)
+        if item_size > max_bytes:
+            item, trunc_info = _truncate_oversized(item, max_bytes)
+            if trunc_info:
+                truncations.append(trunc_info)
+            item_size = _estimate_doc_size(item)
+        if current and current_size + item_size > max_bytes:
+            batches.append(current)
+            current = []
+            current_size = 0
+        current.append(item)
+        current_size += item_size
+
+    if current:
+        batches.append(current)
+    return batches, truncations
 
 
 def _build_doc_body(doc_id: str, document: Document) -> dict:
@@ -327,23 +431,38 @@ class MeilisearchBackend:
         task = self._idx().add_documents([body], primary_key="id")
         self._wait(task.task_uid)
 
-    def index_batch(self, documents: list[tuple[str, Document]]) -> list[tuple[str, str]]:
-        """Index a batch of documents. Returns a list of (doc_id, error_reason) for failures."""
+    def index_batch(self, documents: list[tuple[str, Document]]) -> BatchResult:
+        """Index a batch of documents."""
         if not documents:
-            return []
+            return BatchResult()
         bodies = [_build_doc_body(doc_id, doc) for doc_id, doc in documents]
-        try:
-            task = self._idx().add_documents(bodies, primary_key="id")
-            result = self._client.wait_for_task(task.task_uid, timeout_in_ms=_TASK_TIMEOUT_MS)
-            if result.status == "failed":
-                error = result.error or {}
-                reason = f"{error.get('code', 'unknown')}: {error.get('message', 'unknown')}"
-                log.warning("meilisearch batch indexing failed", reason=reason, count=len(documents))
-                return [(doc_id, reason) for doc_id, _ in documents]
-        except Exception:
-            log.exception("meilisearch batch indexing exception", n_docs=len(documents))
-            return [(doc_id, "exception during indexing") for doc_id, _ in documents]
-        return []
+        # Map body back to doc_id so we can report per-sub-batch failures.
+        id_by_index = {i: doc_id for i, (doc_id, _) in enumerate(documents)}
+
+        sub_batches, truncations = _split_by_payload_size(bodies)
+        if len(sub_batches) > 1:
+            log.info(
+                "splitting indexing batch into sub-batches to stay under payload limit",
+                original=len(bodies),
+                sub_batches=len(sub_batches),
+            )
+
+        failures: list[tuple[str, str]] = []
+        offset = 0
+        for sub in sub_batches:
+            try:
+                task = self._idx().add_documents(sub, primary_key="id")
+                result = self._client.wait_for_task(task.task_uid, timeout_in_ms=_TASK_TIMEOUT_MS)
+                if result.status == "failed":
+                    error = result.error or {}
+                    reason = f"{error.get('code', 'unknown')}: {error.get('message', 'unknown')}"
+                    log.warning("meilisearch sub-batch indexing failed", reason=reason, count=len(sub))
+                    failures.extend((id_by_index[offset + j], reason) for j in range(len(sub)))
+            except Exception:
+                log.exception("meilisearch sub-batch indexing exception", n_docs=len(sub))
+                failures.extend((id_by_index[offset + j], "exception during indexing") for j in range(len(sub)))
+            offset += len(sub)
+        return BatchResult(failures=failures, truncated=truncations)
 
     # ---------------------------------------------------------------------------
     # Search
@@ -654,21 +773,32 @@ class MeilisearchBackend:
             }
             for doc_id, chunk_vectors in updates
         ]
-        try:
-            task = self._idx().update_documents(docs_to_update)
-            result = self._client.wait_for_task(task.task_uid, timeout_in_ms=_EMBED_TASK_TIMEOUT_MS)
-            if result.status == "failed":
-                error = result.error or {}
-                log.warning(
-                    "meilisearch embedding update failed",
-                    error=error,
-                    count=len(updates),
-                )
-                return len(updates)
-        except Exception:
-            log.exception("meilisearch embedding update exception", n_docs=len(updates))
-            return len(updates)
-        return 0
+
+        sub_batches, _ = _split_by_payload_size(docs_to_update)
+        if len(sub_batches) > 1:
+            log.info(
+                "splitting embedding update into sub-batches to stay under payload limit",
+                original=len(docs_to_update),
+                sub_batches=len(sub_batches),
+            )
+
+        total_failed = 0
+        for sub in sub_batches:
+            try:
+                task = self._idx().update_documents(sub)
+                result = self._client.wait_for_task(task.task_uid, timeout_in_ms=_EMBED_TASK_TIMEOUT_MS)
+                if result.status == "failed":
+                    error = result.error or {}
+                    log.warning(
+                        "meilisearch embedding sub-batch update failed",
+                        error=error,
+                        count=len(sub),
+                    )
+                    total_failed += len(sub)
+            except Exception:
+                log.exception("meilisearch embedding sub-batch update exception", n_docs=len(sub))
+                total_failed += len(sub)
+        return total_failed
 
     def get_existing_doc_ids(self, doc_ids: list[str]) -> set[str]:
         """Return the subset of *doc_ids* that already exist in the index."""

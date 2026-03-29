@@ -27,9 +27,12 @@ from aum.search.meilisearch import (
     _build_doc_body,
     _build_filter_string,
     _escape_filter_value,
+    _estimate_doc_size,
     _extract_indexed_meta,
     _parse_facet_distribution,
     _parse_hit,
+    _split_by_payload_size,
+    _truncate_oversized,
 )
 
 
@@ -503,7 +506,9 @@ class TestInitialize:
 
 class TestIndexBatch:
     def test_empty_batch_returns_no_failures(self, backend: MeilisearchBackend):
-        assert backend.index_batch([]) == []
+        result = backend.index_batch([])
+        assert result.failures == []
+        assert result.truncated == []
 
     def test_documents_submitted_to_meilisearch(self, backend: MeilisearchBackend, mock_index: MagicMock):
         doc = _make_document()
@@ -515,16 +520,16 @@ class TestIndexBatch:
 
     def test_returns_empty_on_success(self, backend: MeilisearchBackend, mock_index: MagicMock):
         doc = _make_document()
-        failures = backend.index_batch([("id1", doc)])
-        assert failures == []
+        result = backend.index_batch([("id1", doc)])
+        assert result.failures == []
 
     def test_returns_all_ids_on_task_failure(
         self, backend: MeilisearchBackend, mock_client: MagicMock, mock_index: MagicMock
     ):
         mock_client.wait_for_task.return_value = _make_task_result("failed")
         doc = _make_document()
-        failures = backend.index_batch([("id1", doc), ("id2", doc)])
-        assert {f[0] for f in failures} == {"id1", "id2"}
+        result = backend.index_batch([("id1", doc), ("id2", doc)])
+        assert {f[0] for f in result.failures} == {"id1", "id2"}
 
     def test_primary_key_passed_to_add_documents(self, backend: MeilisearchBackend, mock_index: MagicMock):
         backend.index_batch([("id1", _make_document())])
@@ -1175,3 +1180,109 @@ def _make_api_error(code: str) -> meilisearch.errors.MeilisearchApiError:
     exc.type = None
     exc.args = (exc.message,)
     return exc
+
+
+# ---------------------------------------------------------------------------
+# _estimate_doc_size / _split_by_payload_size
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateDocSize:
+    def test_content_dominates(self):
+        body = {"id": "abc", "content": "x" * 10_000, "metadata_json": "{}"}
+        size = _estimate_doc_size(body)
+        # json.dumps("x"*10000) = 10002 (quotes) + json.dumps("{}") = 4
+        assert size >= 10_000
+        assert size < 12_000
+
+    def test_accounts_for_json_escaping(self):
+        # Content with characters that expand under JSON escaping
+        body = {"id": "abc", "content": '"\\\n' * 1000}
+        size = _estimate_doc_size(body)
+        import json
+
+        expected_content_size = len(json.dumps(body["content"]))
+        assert size >= expected_content_size
+
+    def test_embedding_vectors_counted(self):
+        vecs = [[0.1] * 768 for _ in range(5)]
+        body = {"id": "abc", "_vectors": {"custom": {"embeddings": vecs, "regenerate": False}}}
+        size = _estimate_doc_size(body)
+        # 5 vectors * 768 dims * ~18 bytes each ≈ 69120
+        assert size > 60_000
+
+    def test_empty_doc_has_baseline_overhead(self):
+        size = _estimate_doc_size({"id": "x"})
+        assert size == 512
+
+
+class TestTruncateOversized:
+    def test_no_truncation_when_under_limit(self):
+        body = {"id": "a", "content": "short"}
+        result, trunc_info = _truncate_oversized(body, max_bytes=10_000)
+        assert result["content"] == "short"
+        assert trunc_info is None
+
+    def test_truncates_content_to_fit(self):
+        body = {"id": "a", "content": "x" * 100_000}
+        result, trunc_info = _truncate_oversized(body, max_bytes=50_000)
+        assert len(result["content"]) < 100_000
+        assert _estimate_doc_size(result) <= 50_000
+        assert trunc_info is not None
+        assert trunc_info[0] == "a"
+        assert trunc_info[1] == 100_000
+        assert trunc_info[2] < 100_000
+
+    def test_preserves_other_fields(self):
+        body = {"id": "a", "content": "x" * 100_000, "display_path": "foo.txt"}
+        result, _ = _truncate_oversized(body, max_bytes=50_000)
+        assert result["id"] == "a"
+        assert result["display_path"] == "foo.txt"
+
+    def test_no_content_field_unchanged(self):
+        body = {"id": "a", "_vectors": {"custom": None}}
+        result, trunc_info = _truncate_oversized(body, max_bytes=100)
+        assert result is body
+        assert trunc_info is None
+
+
+class TestSplitByPayloadSize:
+    def test_empty_list(self):
+        batches, truncations = _split_by_payload_size([])
+        assert batches == []
+        assert truncations == []
+
+    def test_single_batch_under_limit(self):
+        items = [{"id": str(i), "content": "small"} for i in range(3)]
+        batches, truncations = _split_by_payload_size(items, max_bytes=10_000)
+        assert len(batches) == 1
+        assert batches[0] == items
+        assert truncations == []
+
+    def test_splits_large_documents(self):
+        # 5 docs each with ~50KB of content → total ~250KB; limit at 100KB
+        items = [{"id": str(i), "content": "x" * 50_000} for i in range(5)]
+        batches, truncations = _split_by_payload_size(items, max_bytes=100_000)
+        assert len(batches) > 1
+        flat = [item for batch in batches for item in batch]
+        assert flat == items
+        assert truncations == []
+
+    def test_oversized_item_is_truncated(self):
+        big = {"id": "b", "content": "x" * 100_000}
+        items = [big]
+        batches, truncations = _split_by_payload_size(items, max_bytes=50_000)
+        assert len(batches) == 1
+        assert len(batches[0]) == 1
+        # Content should have been trimmed so the doc fits
+        assert len(batches[0][0]["content"]) < 100_000
+        assert _estimate_doc_size(batches[0][0]) <= 50_000
+        assert len(truncations) == 1
+        assert truncations[0][0] == "b"
+
+    def test_all_items_preserved_order(self):
+        items = [{"id": str(i), "content": "y" * 5_000} for i in range(20)]
+        batches, truncations = _split_by_payload_size(items, max_bytes=20_000)
+        flat = [item for batch in batches for item in batch]
+        assert flat == items
+        assert truncations == []
