@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from aum.api.app import create_app
-from aum.api.deps import get_current_user, get_oauth_manager, require_admin
+from aum.api.deps import get_current_user, get_oauth_manager, get_optional_user, require_admin
 from aum.models import IngestJob, JobStatus, JobType
 from aum.search.base import SearchResult
 
@@ -80,7 +80,7 @@ class TestListIndices:
         self.permissions = permissions
 
         app = create_app(config)
-        app.dependency_overrides[get_current_user] = lambda: self.admin
+        app.dependency_overrides[get_optional_user] = lambda: self.admin
         app.dependency_overrides[get_oauth_manager] = lambda: None
         self.app = app
 
@@ -100,7 +100,7 @@ class TestListIndices:
         assert names == ["idx1", "idx2"]
 
     def test_non_admin_filtered_by_permissions(self):
-        self.app.dependency_overrides[get_current_user] = lambda: self.user
+        self.app.dependency_overrides[get_optional_user] = lambda: self.user
         self.permissions.grant("viewer", "idx1")
         res = self.client.get("/api/indices")
         assert res.status_code == 200
@@ -108,7 +108,7 @@ class TestListIndices:
         assert names == ["idx1"]
 
     def test_non_admin_no_permissions(self):
-        self.app.dependency_overrides[get_current_user] = lambda: self.user
+        self.app.dependency_overrides[get_optional_user] = lambda: self.user
         res = self.client.get("/api/indices")
         assert res.status_code == 200
         assert res.json()["indices"] == []
@@ -123,7 +123,7 @@ class TestSearch:
         self.mock_backend = mock_backend
 
         app = create_app(config)
-        app.dependency_overrides[get_current_user] = lambda: self.admin
+        app.dependency_overrides[get_optional_user] = lambda: self.admin
         app.dependency_overrides[get_oauth_manager] = lambda: None
         self.app = app
 
@@ -156,12 +156,12 @@ class TestSearch:
         assert "Invalid filters" in res.json()["detail"]
 
     def test_unauthorized_index(self):
-        self.app.dependency_overrides[get_current_user] = lambda: self.user
+        self.app.dependency_overrides[get_optional_user] = lambda: self.user
         res = self.client.get("/api/search", params={"q": "hello", "index": "idx1"})
         assert res.status_code == 403
 
     def test_authorized_index(self):
-        self.app.dependency_overrides[get_current_user] = lambda: self.user
+        self.app.dependency_overrides[get_optional_user] = lambda: self.user
         self.permissions.grant("viewer", "idx1")
         res = self.client.get("/api/search", params={"q": "hello", "index": "idx1"})
         assert res.status_code == 200
@@ -185,7 +185,7 @@ class TestGetDocument:
         self.mock_backend = mock_backend
 
         app = create_app(config)
-        app.dependency_overrides[get_current_user] = lambda: self.admin
+        app.dependency_overrides[get_optional_user] = lambda: self.admin
         app.dependency_overrides[get_oauth_manager] = lambda: None
         self.app = app
 
@@ -208,7 +208,7 @@ class TestGetDocument:
         assert res.status_code == 404
 
     def test_unauthorized_index(self):
-        self.app.dependency_overrides[get_current_user] = lambda: self.user
+        self.app.dependency_overrides[get_optional_user] = lambda: self.user
         res = self.client.get("/api/documents/doc1", params={"index": "idx1"})
         assert res.status_code == 403
 
@@ -220,7 +220,7 @@ class TestDownloadDocument:
         self.mock_backend = mock_backend
 
         app = create_app(config)
-        app.dependency_overrides[get_current_user] = lambda: self.admin
+        app.dependency_overrides[get_optional_user] = lambda: self.admin
         app.dependency_overrides[get_oauth_manager] = lambda: None
 
         with (

@@ -79,6 +79,75 @@ class TestLocalAuth:
         assert user.is_admin is True
 
 
+class TestInvitations:
+    def test_create_invitation(self, local_auth: LocalAuth):
+        inv = local_auth.create_invitation("newuser")
+        assert inv.username == "newuser"
+        assert inv.is_admin is False
+        assert inv.used_at is None
+        assert len(inv.token) > 0
+
+    def test_get_valid_invitation(self, local_auth: LocalAuth):
+        inv = local_auth.create_invitation("invitee")
+        fetched = local_auth.get_invitation(inv.token)
+        assert fetched is not None
+        assert fetched.username == "invitee"
+
+    def test_get_invalid_token(self, local_auth: LocalAuth):
+        assert local_auth.get_invitation("nonexistent") is None
+
+    def test_get_expired_invitation(self, local_auth: LocalAuth, db_conn):
+        inv = local_auth.create_invitation("expired_user")
+        # Manually expire it
+        db_conn.execute(
+            "UPDATE invitations SET expires_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+            (inv.id,),
+        )
+        db_conn.commit()
+        assert local_auth.get_invitation(inv.token) is None
+
+    def test_get_used_invitation(self, local_auth: LocalAuth):
+        inv = local_auth.create_invitation("used_user")
+        local_auth.redeem_invitation(inv.token, password=_VALID_PW)
+        assert local_auth.get_invitation(inv.token) is None
+
+    def test_redeem_with_password(self, local_auth: LocalAuth):
+        inv = local_auth.create_invitation("pwuser", is_admin=True)
+        user = local_auth.redeem_invitation(inv.token, password=_VALID_PW)
+        assert user.username == "pwuser"
+        assert user.is_admin is True
+        assert user.password_hash is not None
+
+        # Can authenticate with password
+        authed = local_auth.authenticate("pwuser", _VALID_PW)
+        assert authed.id == user.id
+
+    def test_redeem_without_password(self, local_auth: LocalAuth):
+        inv = local_auth.create_invitation("passkeyuser")
+        user = local_auth.redeem_invitation(inv.token)
+        assert user.username == "passkeyuser"
+        assert user.password_hash is None
+
+    def test_redeem_double_use(self, local_auth: LocalAuth):
+        inv = local_auth.create_invitation("doubleuser")
+        local_auth.redeem_invitation(inv.token, password=_VALID_PW)
+        with pytest.raises(AuthError, match="Invalid or expired"):
+            local_auth.redeem_invitation(inv.token, password=_VALID_PW)
+
+    def test_redeem_username_conflict(self, local_auth: LocalAuth):
+        local_auth.create_user("existing", _VALID_PW)
+        inv = local_auth.create_invitation("existing")
+        with pytest.raises(AuthError, match="already taken"):
+            local_auth.redeem_invitation(inv.token, password=_VALID_PW)
+
+    def test_create_user_without_password(self, local_auth: LocalAuth):
+        user = local_auth.create_user_without_password("nopassuser")
+        assert user.password_hash is None
+        assert user.is_admin is False
+        with pytest.raises(AuthError, match="OAuth login only"):
+            local_auth.authenticate("nopassuser", "anything")
+
+
 class TestPermissions:
     def test_grant_and_check(self, local_auth: LocalAuth, permissions: PermissionManager):
         user = local_auth.create_user("viewer", _VALID_PW)
@@ -132,3 +201,18 @@ class TestTokens:
         mgr = TokenManager(secret="testsecret-thats-long-enough!!XY")
         with pytest.raises(TokenError):
             mgr.verify_access_token("garbage.token.here")
+
+    def test_passkey_enroll_token_roundtrip(self, local_auth: LocalAuth):
+        user = local_auth.create_user("enrolluser", _VALID_PW)
+        mgr = TokenManager(secret="testsecret-thats-long-enough!!XY")
+        token = mgr.create_passkey_enroll_token(user)
+        payload = mgr.verify_passkey_enroll_token(token)
+        assert payload["sub"] == str(user.id)
+        assert payload["type"] == "passkey_enroll"
+
+    def test_passkey_enroll_token_wrong_type(self, local_auth: LocalAuth):
+        user = local_auth.create_user("enrollwrong", _VALID_PW)
+        mgr = TokenManager(secret="testsecret-thats-long-enough!!XY")
+        access = mgr.create_access_token(user)
+        with pytest.raises(TokenError, match="Not a passkey enrollment"):
+            mgr.verify_passkey_enroll_token(access)

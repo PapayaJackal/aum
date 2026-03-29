@@ -825,20 +825,29 @@ def user_list() -> None:
     config = _load_config()
     _setup(config)
 
-    from aum.api.deps import make_local_auth
+    from aum.api.deps import make_local_auth, make_webauthn_manager
 
     auth = make_local_auth(config)
+    webauthn = make_webauthn_manager(config)
     users = auth.list_users()
 
     if not users:
         click.echo("No users found.")
         return
 
-    click.echo(f"{'USERNAME':<20} {'ADMIN':<8} {'AUTH'}")
-    click.echo("-" * 40)
+    click.echo(f"{'USERNAME':<20} {'ADMIN':<8} {'AUTH':<8} {'PASSKEY'}")
+    click.echo("-" * 48)
     for u in users:
-        auth_type = "local" if u.password_hash else "oauth"
-        click.echo(f"{u.username:<20} {'yes' if u.is_admin else 'no':<8} {auth_type}")
+        has_passkey = webauthn.has_credentials(u.id)
+        if u.password_hash:
+            auth_type = "local"
+        elif has_passkey:
+            auth_type = "passkey"
+        else:
+            auth_type = "oauth"
+        click.echo(
+            f"{u.username:<20} {'yes' if u.is_admin else 'no':<8} {auth_type:<8} {'yes' if has_passkey else 'no'}"
+        )
 
 
 @user.command("delete")
@@ -970,6 +979,50 @@ def user_token(username: str, days: int) -> None:
     token = token_mgr.create_api_token(user_obj, expire_days=days)
     click.echo(f"API token for {username} (expires in {days} days):")
     click.echo(token)
+
+
+@user.command("invite")
+@click.argument("username")
+@click.option("--admin", is_flag=True, help="Invite as admin")
+@click.option("--expires", default=48, type=int, help="Invitation expiry in hours (default: 48)")
+def user_invite(username: str, admin: bool, expires: int) -> None:
+    """Generate an invitation link for a new user."""
+    config = _load_config()
+    _setup(config)
+
+    from aum.api.deps import make_local_auth
+
+    auth = make_local_auth(config)
+    if auth.get_user_by_username(username):
+        click.echo(f"Error: user '{username}' already exists", err=True)
+        sys.exit(1)
+
+    invitation = auth.create_invitation(username, is_admin=admin, expires_hours=expires)
+    url = f"{config.base_url}/#/invite?token={invitation.token}"
+    click.echo(f"Invitation for '{username}' (expires in {expires}h):")
+    click.echo(url)
+
+
+@user.command("reset-mfa")
+@click.argument("username")
+def user_reset_mfa(username: str) -> None:
+    """Remove all passkeys for a user."""
+    config = _load_config()
+    _setup(config)
+
+    from aum.api.deps import make_local_auth, make_webauthn_manager
+
+    auth = make_local_auth(config)
+    user_obj = auth.get_user_by_username(username)
+    if user_obj is None:
+        click.echo(f"User not found: {username}", err=True)
+        sys.exit(1)
+
+    webauthn = make_webauthn_manager(config)
+    count = webauthn.delete_credentials(user_obj.id)
+    click.echo(f"Removed {count} passkey(s) for {username}")
+    if config.passkey_required:
+        click.echo(f"{username} will be prompted to register a new passkey on next login.")
 
 
 # --- Config ---

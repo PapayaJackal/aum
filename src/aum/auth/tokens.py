@@ -78,6 +78,27 @@ class TokenManager:
 
         return payload
 
+    def create_passkey_enroll_token(self, user: User) -> str:
+        """Token for forced passkey enrollment after password login."""
+        now = datetime.now(UTC)
+        return jwt.encode(
+            {"sub": str(user.id), "type": "passkey_enroll", "iat": now, "exp": now + timedelta(minutes=10)},
+            self._secret,
+            algorithm=self._algorithm,
+        )
+
+    def verify_passkey_enroll_token(self, token: str) -> dict:
+        """Verify a passkey enrollment token."""
+        try:
+            payload = jwt.decode(token, self._secret, algorithms=[self._algorithm])
+        except jwt.ExpiredSignatureError:
+            raise TokenError("Passkey enrollment token expired")
+        except jwt.InvalidTokenError as exc:
+            raise TokenError(f"Invalid passkey enrollment token: {exc}")
+        if payload.get("type") != "passkey_enroll":
+            raise TokenError("Not a passkey enrollment token")
+        return payload
+
     def verify_refresh_token(self, token: str) -> dict:
         """Verify and decode a refresh token. Returns the payload dict."""
         try:

@@ -106,6 +106,10 @@ class AumConfig(BaseSettings):
     # attachments, and file caches. The entire directory is portable.
     data_dir: str = "data"
 
+    # Base URL users access the site from (e.g. "https://search.example.com").
+    # Used for WebAuthn origin validation and invitation links.
+    base_url: str = "http://localhost:8000"
+
     # Address to bind the web server to.
     host: str = "0.0.0.0"
     # Port for the web server and API.
@@ -116,6 +120,9 @@ class AumConfig(BaseSettings):
     enable_docs: bool = False
     # Allowed CORS origins. Leave empty to disable CORS.
     cors_origins: list[str] = Field(default_factory=list)
+
+    # Public mode: allow anonymous access to search, require admin for jobs API.
+    public_mode: bool = False
 
     # JWT signing secret. If empty, a random secret is generated on each
     # restart and all sessions will be invalidated. Set this to a stable
@@ -131,6 +138,16 @@ class AumConfig(BaseSettings):
     password_min_length: int = 8
     # OAuth/OIDC providers for federated login.
     oauth_providers: list[OAuthProvider] = Field(default_factory=list)
+
+    # WebAuthn Relying Party ID — the domain users access the site from
+    # (e.g. "search.example.com", or "localhost" for development).
+    webauthn_rp_id: str = "localhost"
+    # WebAuthn Relying Party name (human-readable).
+    webauthn_rp_name: str = "aum"
+    # Enable WebAuthn passkey authentication.
+    passkey_enabled: bool = False
+    # Require all users to register a passkey to log in.
+    passkey_required: bool = False
 
     # Log level (DEBUG, INFO, WARNING, ERROR).
     log_level: str = "INFO"

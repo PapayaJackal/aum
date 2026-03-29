@@ -123,6 +123,17 @@ def make_permission_manager(config: AumConfig) -> PermissionManager:
     return PermissionManager(_get_db(config))
 
 
+def make_webauthn_manager(config: AumConfig):
+    from aum.auth.webauthn import WebAuthnManager
+
+    return WebAuthnManager(
+        _get_db(config),
+        rp_id=config.webauthn_rp_id,
+        rp_name=config.webauthn_rp_name,
+        origin=config.base_url,
+    )
+
+
 def make_oauth_manager(config: AumConfig) -> OAuthManager | None:
     if not config.oauth_providers:
         return None
@@ -152,6 +163,10 @@ def get_permission_manager() -> PermissionManager:
     return make_permission_manager(get_config())
 
 
+def get_webauthn_manager():
+    return make_webauthn_manager(get_config())
+
+
 def get_oauth_manager() -> OAuthManager | None:
     return make_oauth_manager(get_config())
 
@@ -176,6 +191,22 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     return user
+
+
+async def get_optional_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> User | None:
+    """Return the current user if authenticated, or None in public mode."""
+    config = get_config()
+    if config.public_mode:
+        if credentials is None:
+            return None
+        # In public mode, a stale or invalid token should not block access
+        try:
+            return await get_current_user(credentials)
+        except HTTPException:
+            return None
+    return await get_current_user(credentials)
 
 
 async def require_admin(

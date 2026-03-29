@@ -96,6 +96,23 @@ AUTH_RATE_LIMITED = Counter(
     "Login attempts rejected by rate limiter",
 )
 
+# Passkey auth
+PASSKEY_LOGINS = Counter(
+    "aum_passkey_logins_total",
+    "Passkey login attempts",
+    ["result"],
+)
+PASSKEY_ENROLLMENTS = Counter(
+    "aum_passkey_enrollments_total",
+    "Passkey enrollments completed",
+)
+
+# Invitations
+INVITATIONS_REDEEMED = Counter(
+    "aum_invitations_redeemed_total",
+    "User invitations redeemed",
+)
+
 # Documents
 DOCUMENT_VIEWS = Counter(
     "aum_document_views_total",

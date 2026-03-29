@@ -1,4 +1,4 @@
-import { getToken, getRefreshToken, setAuth, clearAuth } from "./auth";
+import { getToken, getRefreshToken, setAuth, clearAuth, isPublicMode } from "./auth";
 
 const BASE = "/api";
 
@@ -31,13 +31,13 @@ async function _authFetch(url: string, options: RequestInit = {}): Promise<Respo
     ...(options.headers as Record<string, string>),
   };
   const token = getToken();
-  if (token) {
+  if (token && !isPublicMode()) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
   let res = await fetch(url, { ...options, headers });
 
-  if (res.status === 401) {
+  if (res.status === 401 && !isPublicMode()) {
     if (!_refreshing) _refreshing = _tryRefresh().finally(() => (_refreshing = null));
     const ok = await _refreshing;
     if (ok) {
@@ -76,10 +76,64 @@ export interface TokenResponse {
   token_type: string;
 }
 
-export function login(username: string, password: string): Promise<TokenResponse> {
+export interface PasskeyEnrollmentRequired {
+  passkey_enrollment_required: true;
+  enrollment_token: string;
+}
+
+export type LoginResponse = TokenResponse | PasskeyEnrollmentRequired;
+
+export function login(username: string, password: string): Promise<LoginResponse> {
   return request("/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password }),
+  });
+}
+
+// Passkey login (primary auth)
+
+export interface PasskeyLoginBeginResponse {
+  options: string;
+  session_id: string;
+}
+
+export function beginPasskeyLogin(): Promise<PasskeyLoginBeginResponse> {
+  return request("/auth/passkey/begin", { method: "POST" });
+}
+
+export function completePasskeyLogin(sessionId: string, credential: object): Promise<TokenResponse> {
+  return request("/auth/passkey/complete", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, credential }),
+  });
+}
+
+// Passkey registration (for already-authenticated users)
+
+export function beginPasskeyRegistration(): Promise<{ options: string }> {
+  return request("/auth/webauthn/register/begin", { method: "POST" });
+}
+
+export function completePasskeyRegistration(credential: object): Promise<{ registered: boolean }> {
+  return request("/auth/webauthn/register/complete", {
+    method: "POST",
+    body: JSON.stringify({ credential }),
+  });
+}
+
+// Passkey enrollment (forced after password login when passkey_required=true)
+
+export function beginPasskeyEnrollment(enrollmentToken: string): Promise<{ options: string }> {
+  return request("/auth/passkey/enroll/begin", {
+    method: "POST",
+    body: JSON.stringify({ enrollment_token: enrollmentToken }),
+  });
+}
+
+export function completePasskeyEnrollment(enrollmentToken: string, credential: object): Promise<TokenResponse> {
+  return request("/auth/passkey/enroll/complete", {
+    method: "POST",
+    body: JSON.stringify({ enrollment_token: enrollmentToken, credential }),
   });
 }
 
@@ -90,8 +144,40 @@ export function refreshToken(refresh_token: string): Promise<TokenResponse> {
   });
 }
 
-export function getProviders(): Promise<{ providers: string[] }> {
+export interface ProvidersResponse {
+  providers: string[];
+  passkey_required: boolean;
+  passkey_login_enabled: boolean;
+  public_mode: boolean;
+}
+
+export function getProviders(): Promise<ProvidersResponse> {
   return request("/auth/providers");
+}
+
+// Invitations
+
+export interface InviteValidation {
+  username: string;
+  valid: boolean;
+}
+
+export function validateInvite(token: string): Promise<InviteValidation> {
+  return request(`/auth/invite/${encodeURIComponent(token)}`);
+}
+
+export function beginInviteWebauthn(token: string): Promise<{ options: string }> {
+  return request(`/auth/invite/${encodeURIComponent(token)}/webauthn/begin`, { method: "POST" });
+}
+
+export function redeemInvite(
+  token: string,
+  body: { password?: string; passkey_credential?: object },
+): Promise<TokenResponse> {
+  return request(`/auth/invite/${encodeURIComponent(token)}/redeem`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 // Indices

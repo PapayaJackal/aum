@@ -9,6 +9,7 @@ from aum.auth.local import LocalAuth
 from aum.auth.models import _initialized_connections
 from aum.auth.permissions import PermissionManager
 from aum.auth.tokens import TokenManager
+from aum.auth.webauthn import WebAuthnManager
 from aum.config import AumConfig
 from aum.ingest.tracker import JobTracker
 
@@ -57,6 +58,11 @@ def config(tmp_db: str) -> AumConfig:
 @pytest.fixture
 def token_manager() -> TokenManager:
     return TokenManager(secret=_TEST_JWT_SECRET)
+
+
+@pytest.fixture
+def webauthn_manager(db_conn: sqlite3.Connection) -> WebAuthnManager:
+    return WebAuthnManager(db_conn, rp_id="localhost", rp_name="aum", origin="http://localhost:8000")
 
 
 @pytest.fixture

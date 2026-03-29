@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from aum.api.deps import (
     default_index_name,
     get_config,
-    get_current_user,
+    get_optional_user,
     get_permission_manager,
     make_search_backend,
 )
@@ -78,12 +78,12 @@ class IndicesResponse(BaseModel):
 
 @router.get("/indices", response_model=IndicesResponse)
 async def list_indices(
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User | None, Depends(get_optional_user)],
 ) -> IndicesResponse:
     config = get_config()
     backend = make_search_backend(config)
     all_indices = backend.list_indices()
-    if not user.is_admin:
+    if user is not None and not user.is_admin:
         perms = get_permission_manager()
         all_indices = [idx for idx in all_indices if perms.check(user, idx)]
     from aum.api.deps import make_tracker
@@ -96,7 +96,9 @@ async def list_indices(
     )
 
 
-def _check_index_access(user: User, index: str, perms: PermissionManager) -> None:
+def _check_index_access(user: User | None, index: str, perms: PermissionManager) -> None:
+    if user is None:
+        return  # Public mode — allow all
     try:
         perms.require(user, index)
     except PermissionDeniedError as exc:
@@ -106,7 +108,7 @@ def _check_index_access(user: User, index: str, perms: PermissionManager) -> Non
 @router.get("/search", response_model=SearchResponse)
 async def search(
     q: Annotated[str, Query(min_length=1)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User | None, Depends(get_optional_user)],
     index: str = "",
     type: str = "text",
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
@@ -188,7 +190,7 @@ async def search(
 @router.get("/documents/{doc_id}", response_model=DocumentResponse)
 async def get_document(
     doc_id: str,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User | None, Depends(get_optional_user)],
     index: str = "",
 ) -> DocumentResponse:
     config = get_config()
@@ -241,7 +243,7 @@ def _safe_file_path(source_path: str) -> Path:
 @router.get("/documents/{doc_id}/download")
 async def download_document(
     doc_id: str,
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User | None, Depends(get_optional_user)],
     index: str = "",
 ) -> FileResponse:
     config = get_config()

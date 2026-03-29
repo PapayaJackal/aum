@@ -18,6 +18,7 @@ dependencies = [
     "httpx>=0.28",
     "rich>=14.3",
     "itsdangerous>=2.2.0",
+    "webauthn>=2.7",
 ]
 
 [project.optional-dependencies]

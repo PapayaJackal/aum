@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import re
+import secrets
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-from aum.auth.models import User, init_auth_tables, row_to_user
-from aum.metrics import AUTH_FAILURES, AUTH_REQUESTS
+from aum.auth.models import Invitation, User, init_auth_tables, row_to_invitation, row_to_user
+from aum.metrics import AUTH_FAILURES, AUTH_REQUESTS, INVITATIONS_REDEEMED
 
 log = structlog.get_logger()
 
@@ -128,6 +130,91 @@ class LocalAuth:
         if updated:
             log.info("user password changed", username=username)
         return updated
+
+    def create_user_without_password(self, username: str, is_admin: bool = False) -> User:
+        """Create a user with no password (passkey-only or OAuth-only)."""
+        cursor = self._conn.execute(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (?, NULL, ?)",
+            (username, int(is_admin)),
+        )
+        self._conn.commit()
+        log.info("user created (no password)", username=username, is_admin=is_admin)
+        return User(
+            id=cursor.lastrowid,  # type: ignore[arg-type]
+            username=username,
+            password_hash=None,
+            is_admin=is_admin,
+        )
+
+    # -- Invitations --
+
+    def create_invitation(
+        self,
+        username: str,
+        is_admin: bool = False,
+        expires_hours: int = 48,
+    ) -> Invitation:
+        """Create a one-time invitation token for a new user."""
+        token = secrets.token_urlsafe(32)
+        expires_at = (datetime.now(UTC) + timedelta(hours=expires_hours)).isoformat()
+        cursor = self._conn.execute(
+            "INSERT INTO invitations (token, username, is_admin, expires_at) VALUES (?, ?, ?, ?)",
+            (token, username, int(is_admin), expires_at),
+        )
+        self._conn.commit()
+        log.info("invitation created", username=username, is_admin=is_admin, expires_at=expires_at)
+        return Invitation(
+            id=cursor.lastrowid,  # type: ignore[arg-type]
+            token=token,
+            username=username,
+            is_admin=is_admin,
+            created_at=datetime.now(UTC).isoformat(),
+            expires_at=expires_at,
+            used_at=None,
+        )
+
+    def get_invitation(self, token: str) -> Invitation | None:
+        """Get a valid (unused, non-expired) invitation."""
+        row = self._conn.execute(
+            "SELECT * FROM invitations WHERE token = ?",
+            (token,),
+        ).fetchone()
+        if row is None:
+            return None
+        invitation = row_to_invitation(row)
+        if invitation.used_at is not None:
+            return None
+        if datetime.fromisoformat(invitation.expires_at) < datetime.now(UTC):
+            return None
+        return invitation
+
+    def redeem_invitation(self, token: str, password: str | None = None) -> User:
+        """Redeem an invitation: create the user and mark it used.
+
+        If password is provided, the user gets a local password.
+        Otherwise the user is created without a password (passkey-only).
+        """
+        invitation = self.get_invitation(token)
+        if invitation is None:
+            raise AuthError("Invalid or expired invitation")
+
+        # Check username not already taken
+        if self.get_user_by_username(invitation.username):
+            raise AuthError(f"Username '{invitation.username}' is already taken")
+
+        if password:
+            user = self.create_user(invitation.username, password, is_admin=invitation.is_admin)
+        else:
+            user = self.create_user_without_password(invitation.username, is_admin=invitation.is_admin)
+
+        self._conn.execute(
+            "UPDATE invitations SET used_at = ? WHERE id = ?",
+            (datetime.now(UTC).isoformat(), invitation.id),
+        )
+        self._conn.commit()
+        INVITATIONS_REDEEMED.inc()
+        log.info("invitation redeemed", username=user.username, token_id=invitation.id)
+        return user
 
     def set_admin(self, username: str, is_admin: bool) -> bool:
         cursor = self._conn.execute(
