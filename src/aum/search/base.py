@@ -7,6 +7,11 @@ from typing import Protocol
 from aum.models import Document
 
 
+def normalize_message_id(raw: str) -> str:
+    """Strip whitespace and angle brackets from a Message-ID value."""
+    return raw.strip().strip("<>")
+
+
 def extract_email(raw: str) -> str | None:
     """Extract just the email address from an RFC 2822 string like 'Name <email>'.
 
@@ -139,6 +144,12 @@ HIDDEN_METADATA_KEYS: set[str] = {
     "pdf:hasXMP",
     "pdf:hasCollection",
     "pdf:containsDamagedFont",
+    "Message-ID",
+    "In-Reply-To",
+    "References",
+    "Message:Raw-Header:Message-ID",
+    "Message:Raw-Header:In-Reply-To",
+    "Message:Raw-Header:References",
 }
 
 # ---------------------------------------------------------------------------
@@ -249,6 +260,10 @@ class SearchBackend(Protocol):
 
     def find_by_display_path(self, display_path: str) -> SearchResult | None:
         """Find a single document by exact display_path."""
+        ...
+
+    def find_thread(self, message_id: str, in_reply_to: str, references: list[str]) -> list[SearchResult]:
+        """Find all documents belonging to the same email thread."""
         ...
 
     def list_indices(self) -> list[str]:

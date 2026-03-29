@@ -212,6 +212,86 @@ class TestGetDocument:
         res = self.client.get("/api/documents/doc1", params={"index": "idx1"})
         assert res.status_code == 403
 
+    def test_email_thread_returned(self):
+        email_doc = _make_result(
+            doc_id="email1",
+            metadata={
+                "Content-Type": "message/rfc822",
+                "Message:Raw-Header:Message-ID": "<msg1@example.com>",
+                "Message:Raw-Header:In-Reply-To": "<parent@example.com>",
+                "Message:Raw-Header:References": "<root@example.com> <parent@example.com>",
+                "dc:subject": "Test thread",
+                "Message-From": "Alice <alice@example.com>",
+                "dcterms:created": "2024-03-15T10:00:00Z",
+            },
+        )
+        thread_member = _make_result(
+            doc_id="email2",
+            metadata={
+                "Content-Type": "message/rfc822",
+                "Message:Raw-Header:Message-ID": "<parent@example.com>",
+                "dc:subject": "Re: Test thread",
+                "Message-From": "Bob <bob@example.com>",
+                "dcterms:created": "2024-03-14T09:00:00Z",
+            },
+        )
+        self.mock_backend.get_document.return_value = email_doc
+        self.mock_backend.find_thread.return_value = [email_doc, thread_member]
+
+        res = self.client.get("/api/documents/email1", params={"index": "idx1"})
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data["thread"]) == 1  # excludes current doc
+        assert data["thread"][0]["doc_id"] == "email2"
+        assert data["thread"][0]["subject"] == "Re: Test thread"
+        assert data["thread"][0]["sender"] == "Bob <bob@example.com>"
+        assert data["thread"][0]["date"] == "2024-03-14T09:00:00Z"
+
+    def test_non_email_has_empty_thread(self):
+        pdf_doc = _make_result(
+            doc_id="pdf1",
+            metadata={"Content-Type": "application/pdf"},
+        )
+        self.mock_backend.get_document.return_value = pdf_doc
+
+        res = self.client.get("/api/documents/pdf1", params={"index": "idx1"})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["thread"] == []
+
+    def test_thread_sorted_by_date(self):
+        email_doc = _make_result(
+            doc_id="email1",
+            metadata={
+                "Message:Raw-Header:Message-ID": "<msg1@example.com>",
+                "dcterms:created": "2024-03-15T10:00:00Z",
+            },
+        )
+        older = _make_result(
+            doc_id="email2",
+            metadata={
+                "Message:Raw-Header:Message-ID": "<older@example.com>",
+                "dcterms:created": "2024-03-13T08:00:00Z",
+                "Message-From": "Charlie",
+            },
+        )
+        newer = _make_result(
+            doc_id="email3",
+            metadata={
+                "Message:Raw-Header:Message-ID": "<newer@example.com>",
+                "dcterms:created": "2024-03-16T12:00:00Z",
+                "Message-From": "Dave",
+            },
+        )
+        self.mock_backend.get_document.return_value = email_doc
+        self.mock_backend.find_thread.return_value = [newer, email_doc, older]
+
+        res = self.client.get("/api/documents/email1", params={"index": "idx1"})
+        data = res.json()
+        assert len(data["thread"]) == 2
+        assert data["thread"][0]["doc_id"] == "email2"  # older first
+        assert data["thread"][1]["doc_id"] == "email3"  # newer second
+
 
 class TestDownloadDocument:
     @pytest.fixture(autouse=True)

@@ -13,6 +13,7 @@ from aum.search.base import (
     SearchResult,
     alias_mimetype,
     extract_email,
+    normalize_message_id,
 )
 
 log = structlog.get_logger()
@@ -39,6 +40,9 @@ _META_PROPERTIES: dict[str, dict] = {
         "ignore_malformed": True,
     },
     "email_addresses": {"type": "keyword"},
+    "message_id": {"type": "keyword"},
+    "in_reply_to": {"type": "keyword"},
+    "references": {"type": "keyword"},
 }
 
 # For each canonical field, the Tika metadata keys to try (first match wins).
@@ -47,6 +51,9 @@ _META_SOURCE_KEYS: dict[str, list[str]] = {
     "creator": ["dc:creator", "xmp:dc:creator", "Author", "meta:author", "creator"],
     "created": ["dcterms:created", "Creation-Date", "meta:creation-date", "created", "date"],
     "modified": ["dcterms:modified", "Last-Modified", "meta:save-date", "modified"],
+    "message_id": ["Message:Raw-Header:Message-ID", "Message-ID"],
+    "in_reply_to": ["Message:Raw-Header:In-Reply-To", "In-Reply-To"],
+    "references": ["Message:Raw-Header:References", "References"],
 }
 
 # Email header keys whose values are merged into a single ``email_addresses`` field.
@@ -85,6 +92,16 @@ def _extract_indexed_meta(raw_metadata: dict[str, str | list[str]]) -> dict[str,
                 unique.append(addr)
     if unique:
         result["email_addresses"] = unique
+
+    # Normalize email threading headers (strip angle brackets).
+    for field in ("message_id", "in_reply_to"):
+        val = result.get(field)
+        if isinstance(val, str) and val:
+            result[field] = normalize_message_id(val)
+    # References is a space-separated list of Message-IDs.
+    refs_val = result.get("references")
+    if isinstance(refs_val, str) and refs_val:
+        result["references"] = [normalize_message_id(r) for r in refs_val.split() if r.strip()]
 
     return result
 
@@ -509,6 +526,32 @@ class ElasticsearchBackend:
             return None
         results, _ = self._parse_hits(resp)
         return results[0] if results else None
+
+    def find_thread(self, message_id: str, in_reply_to: str, references: list[str]) -> list[SearchResult]:
+        """Find all documents belonging to the same email thread."""
+        all_ids = [mid for mid in [message_id, in_reply_to, *references] if mid]
+        if not all_ids:
+            return []
+
+        body: dict = {
+            "query": {
+                "bool": {
+                    "should": [
+                        {"terms": {"meta.message_id": all_ids}},
+                        {"terms": {"meta.in_reply_to": all_ids}},
+                        {"terms": {"meta.references": all_ids}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "size": 100,
+        }
+        try:
+            resp = self._client.search(index=self._index, body=body)
+        except NotFoundError:
+            return []
+        results, _ = self._parse_hits(resp)
+        return results
 
     def list_indices(self) -> list[str]:
         try:

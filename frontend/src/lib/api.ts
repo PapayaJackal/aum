@@ -236,6 +236,15 @@ export interface AttachmentRef {
   display_path: string;
 }
 
+export interface ThreadMessage {
+  doc_id: string;
+  display_path: string;
+  subject: string;
+  sender: string;
+  date: string;
+  snippet: string;
+}
+
 export interface DocumentDetail {
   doc_id: string;
   display_path: string;
@@ -243,6 +252,7 @@ export interface DocumentDetail {
   metadata: Record<string, string | string[]>;
   attachments: AttachmentRef[];
   extracted_from: AttachmentRef | null;
+  thread: ThreadMessage[];
 }
 
 export function getDocument(docId: string, index: string = ""): Promise<DocumentDetail> {

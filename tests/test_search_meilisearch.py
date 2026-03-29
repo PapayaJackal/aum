@@ -890,6 +890,114 @@ class TestFindByDisplayPath:
 
 
 # ---------------------------------------------------------------------------
+# Email threading – extraction, flat meta, find_thread()
+# ---------------------------------------------------------------------------
+
+
+class TestEmailThreadingExtraction:
+    def test_message_id_extracted_and_normalized(self):
+        meta = _extract_indexed_meta({"Message:Raw-Header:Message-ID": "<abc@example.com>"})
+        assert meta["message_id"] == "abc@example.com"
+
+    def test_in_reply_to_extracted_and_normalized(self):
+        meta = _extract_indexed_meta({"Message:Raw-Header:In-Reply-To": "<parent@example.com>"})
+        assert meta["in_reply_to"] == "parent@example.com"
+
+    def test_references_split_into_list(self):
+        meta = _extract_indexed_meta({"Message:Raw-Header:References": "<a@x.com> <b@x.com> <c@x.com>"})
+        assert meta["references"] == ["a@x.com", "b@x.com", "c@x.com"]
+
+    def test_missing_threading_headers_not_in_result(self):
+        meta = _extract_indexed_meta({"Content-Type": "text/plain"})
+        assert "message_id" not in meta
+        assert "in_reply_to" not in meta
+        assert "references" not in meta
+
+    def test_bare_message_id_without_brackets(self):
+        meta = _extract_indexed_meta({"Message:Raw-Header:Message-ID": "bare@example.com"})
+        assert meta["message_id"] == "bare@example.com"
+
+    def test_fallback_to_plain_key(self):
+        """Falls back to plain Message-ID if Message:Raw-Header variant is absent."""
+        meta = _extract_indexed_meta({"Message-ID": "<fallback@example.com>"})
+        assert meta["message_id"] == "fallback@example.com"
+
+
+class TestEmailThreadingFlatMeta:
+    def test_threading_fields_in_flat_meta(self):
+        from aum.search.meilisearch import _build_flat_meta
+
+        meta = {
+            "message_id": "abc@example.com",
+            "in_reply_to": "parent@example.com",
+            "references": ["a@x.com", "b@x.com"],
+        }
+        flat = _build_flat_meta(meta)
+        assert flat["meta_message_id"] == "abc@example.com"
+        assert flat["meta_in_reply_to"] == "parent@example.com"
+        assert flat["meta_references"] == ["a@x.com", "b@x.com"]
+
+    def test_missing_threading_fields_not_in_flat(self):
+        from aum.search.meilisearch import _build_flat_meta
+
+        flat = _build_flat_meta({"content_type": "text/plain"})
+        assert "meta_message_id" not in flat
+        assert "meta_in_reply_to" not in flat
+        assert "meta_references" not in flat
+
+
+class TestEmailThreadingDocBody:
+    def test_doc_body_includes_threading_fields(self):
+        doc = _make_document(
+            metadata={
+                "_aum_display_path": "email.eml",
+                "_aum_extracted_from": "",
+                "Content-Type": "message/rfc822",
+                "Message:Raw-Header:Message-ID": "<thread1@example.com>",
+                "Message:Raw-Header:In-Reply-To": "<parent@example.com>",
+                "Message:Raw-Header:References": "<root@example.com> <parent@example.com>",
+            }
+        )
+        body = _build_doc_body("doc1", doc)
+        assert body["meta_message_id"] == "thread1@example.com"
+        assert body["meta_in_reply_to"] == "parent@example.com"
+        assert body["meta_references"] == ["root@example.com", "parent@example.com"]
+
+
+class TestFindThread:
+    def test_returns_empty_when_no_ids(self, backend: MeilisearchBackend, mock_index: MagicMock):
+        assert backend.find_thread("", "", []) == []
+        mock_index.search.assert_not_called()
+
+    def test_builds_filter_with_all_ids(self, backend: MeilisearchBackend, mock_index: MagicMock):
+        mock_index.search.return_value = {"hits": [], "estimatedTotalHits": 0}
+        backend.find_thread("msg1@x.com", "parent@x.com", ["root@x.com"])
+        params = mock_index.search.call_args[0][1]
+        filt = params["filter"]
+        assert "meta_message_id" in filt
+        assert "meta_in_reply_to" in filt
+        assert "meta_references" in filt
+        assert "msg1@x.com" in filt
+        assert "parent@x.com" in filt
+        assert "root@x.com" in filt
+
+    def test_returns_results(self, backend: MeilisearchBackend, mock_index: MagicMock):
+        mock_index.search.return_value = {
+            "hits": [_make_hit("d1"), _make_hit("d2")],
+            "estimatedTotalHits": 2,
+        }
+        results = backend.find_thread("msg@x.com", "", [])
+        assert len(results) == 2
+
+    def test_empty_strings_excluded_from_ids(self, backend: MeilisearchBackend, mock_index: MagicMock):
+        mock_index.search.return_value = {"hits": [], "estimatedTotalHits": 0}
+        backend.find_thread("msg@x.com", "", [""])
+        params = mock_index.search.call_args[0][1]
+        # Only msg@x.com should appear, not empty strings
+        assert '""' not in params["filter"]
+
+
+# ---------------------------------------------------------------------------
 # list_indices()
 # ---------------------------------------------------------------------------
 

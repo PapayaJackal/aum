@@ -130,6 +130,10 @@ DOCUMENT_DOWNLOADS = Counter(
     "aum_document_downloads_total",
     "Total document downloads",
 )
+THREAD_LOOKUPS = Counter(
+    "aum_thread_lookups_total",
+    "Total email thread lookups",
+)
 
 # Instance pool
 POOL_REQUESTS = Counter(

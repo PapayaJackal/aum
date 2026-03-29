@@ -16,6 +16,7 @@ from aum.search.base import (
     SearchResult,
     alias_mimetype,
     extract_email,
+    normalize_message_id,
 )
 
 log = structlog.get_logger()
@@ -41,6 +42,9 @@ _FILTERABLE_ATTRS: list[str] = [
     "has_embeddings",
     "extracted_from",
     "display_path",
+    "meta_message_id",
+    "meta_in_reply_to",
+    "meta_references",
 ]
 
 # Only these fields are searched; all others are stored but not ranked on.
@@ -55,6 +59,9 @@ _META_SOURCE_KEYS: dict[str, list[str]] = {
     "creator": ["dc:creator", "xmp:dc:creator", "Author", "meta:author", "creator"],
     "created": ["dcterms:created", "Creation-Date", "meta:creation-date", "created", "date"],
     "modified": ["dcterms:modified", "Last-Modified", "meta:save-date", "modified"],
+    "message_id": ["Message:Raw-Header:Message-ID", "Message-ID"],
+    "in_reply_to": ["Message:Raw-Header:In-Reply-To", "In-Reply-To"],
+    "references": ["Message:Raw-Header:References", "References"],
 }
 
 _EMAIL_HEADER_KEYS: list[str] = ["Message-From", "Message-To", "Message-CC"]
@@ -101,6 +108,16 @@ def _extract_indexed_meta(raw_metadata: dict[str, str | list[str]]) -> dict[str,
     if unique:
         result["email_addresses"] = unique
 
+    # Normalize email threading headers (strip angle brackets).
+    for field in ("message_id", "in_reply_to"):
+        val = result.get(field)
+        if isinstance(val, str) and val:
+            result[field] = normalize_message_id(val)
+    # References is a space-separated list of Message-IDs.
+    refs_val = result.get("references")
+    if isinstance(refs_val, str) and refs_val:
+        result["references"] = [normalize_message_id(r) for r in refs_val.split() if r.strip()]
+
     return result
 
 
@@ -120,6 +137,13 @@ def _build_flat_meta(meta: dict[str, str | list[str]]) -> dict[str, object]:
             flat["meta_created_year"] = int(meta["created"][:4])
         except ValueError:
             pass
+    # Email threading fields (stored as keywords for exact-match filtering).
+    if "message_id" in meta:
+        flat["meta_message_id"] = meta["message_id"]
+    if "in_reply_to" in meta:
+        flat["meta_in_reply_to"] = meta["in_reply_to"]
+    if "references" in meta:
+        flat["meta_references"] = meta["references"]
     return flat
 
 
@@ -665,6 +689,30 @@ class MeilisearchBackend:
             if hits:
                 return _parse_hit(hits[0], index_name=idx_name)
         return None
+
+    def find_thread(self, message_id: str, in_reply_to: str, references: list[str]) -> list[SearchResult]:
+        """Find all documents belonging to the same email thread."""
+        all_ids = {mid for mid in [message_id, in_reply_to, *references] if mid}
+        if not all_ids:
+            return []
+
+        escaped = ", ".join(f'"{_escape_filter_value(mid)}"' for mid in all_ids)
+        filter_expr = f"meta_message_id IN [{escaped}] OR meta_in_reply_to IN [{escaped}]"
+        # Meilisearch array fields match if ANY element is in the list.
+        for mid in all_ids:
+            filter_expr += f' OR meta_references = "{_escape_filter_value(mid)}"'
+
+        params: dict = {
+            "filter": filter_expr,
+            "limit": 100,
+            "showRankingScore": True,
+        }
+        results: list[SearchResult] = []
+        for idx_name in self._indices:
+            resp = self._idx(idx_name).search("", params)
+            for hit in resp.get("hits", []):
+                results.append(_parse_hit(hit, index_name=idx_name))
+        return results
 
     def list_indices(self) -> list[str]:
         try:

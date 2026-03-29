@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getDocument, downloadDocument, type DocumentDetail } from "../lib/api";
+  import { getDocument, downloadDocument, type DocumentDetail, type ThreadMessage } from "../lib/api";
   import { highlightTerms } from "../lib/highlight";
 
   let {
@@ -220,6 +220,47 @@
   });
 
   let contentHtml = $derived(doc ? highlightTerms(doc.content, highlightQuery) : "");
+
+  /** Unified thread: all thread messages plus the current document, sorted by date. */
+  let unifiedThread = $derived.by<Array<ThreadMessage & { isCurrent?: boolean }>>(() => {
+    if (!doc || !doc.thread.length) return [];
+    let docDate = "";
+    for (const k of ["dcterms:created", "Creation-Date", "meta:creation-date", "created", "date"]) {
+      const v = doc.metadata[k];
+      if (v && typeof v === "string") {
+        docDate = v;
+        break;
+      }
+    }
+    const currentEntry: ThreadMessage & { isCurrent: boolean } = {
+      doc_id: doc.doc_id,
+      display_path: doc.display_path,
+      subject: (doc.metadata["dc:subject"] ?? doc.metadata["subject"] ?? "") as string,
+      sender: (doc.metadata["Message-From"] ?? "") as string,
+      date: docDate,
+      snippet: doc.content?.slice(0, 200) ?? "",
+      isCurrent: true,
+    };
+    const all = [...doc.thread.map((m) => ({ ...m, isCurrent: false as const })), currentEntry];
+    all.sort((a, b) => a.date.localeCompare(b.date));
+    return all;
+  });
+
+  let threadContainerEl = $state<HTMLDivElement | null>(null);
+
+  // Scroll the thread container to the current message whenever the thread loads.
+  $effect(() => {
+    if (unifiedThread.length > 0 && threadContainerEl) {
+      // Use tick to wait for DOM update.
+      const el = threadContainerEl;
+      requestAnimationFrame(() => {
+        const current = el.querySelector("[data-current-thread]");
+        if (current) {
+          current.scrollIntoView({ block: "center" });
+        }
+      });
+    }
+  });
 </script>
 
 <div class="flex items-center gap-3 px-4 py-3 border-b border-gray-300 bg-gray-50 sticky top-0 z-[1]">
@@ -355,6 +396,45 @@
         </table>
       </div>
     </div>
+
+    {#if unifiedThread.length > 0}
+      <div class="bg-white rounded-md p-3 my-3 shadow-sm">
+        <h3 class="m-0 mb-2 text-sm text-gray-500">Thread ({unifiedThread.length})</h3>
+        <div bind:this={threadContainerEl} class="max-h-[270px] overflow-y-auto">
+          {#each unifiedThread as msg}
+            {#if msg.isCurrent}
+              <div
+                data-current-thread
+                class="w-full text-left bg-indigo-50 rounded p-2 mb-1.5 last:mb-0 border-l-3 border-l-(--color-accent) border-t-0 border-r-0 border-b-0"
+              >
+                <div class="flex items-baseline gap-2 mb-0.5">
+                  <span class="text-xs font-semibold text-gray-900 truncate">{msg.sender || "Unknown"}</span>
+                  <span class="text-xs text-gray-400 shrink-0">{msg.date ? formatLocalDate(msg.date) : ""}</span>
+                </div>
+                {#if msg.subject}
+                  <div class="text-xs text-gray-700 truncate mb-0.5 font-medium">{msg.subject}</div>
+                {/if}
+                <div class="text-xs text-gray-500 line-clamp-2">{msg.snippet}</div>
+              </div>
+            {:else}
+              <button
+                class="w-full text-left bg-gray-50 rounded p-2 mb-1.5 last:mb-0 border-l-3 border-l-gray-300 cursor-pointer border-t-0 border-r-0 border-b-0 hover:bg-gray-100"
+                onclick={() => onNavigateDoc(msg.doc_id, index)}
+              >
+                <div class="flex items-baseline gap-2 mb-0.5">
+                  <span class="text-xs font-semibold text-gray-700 truncate">{msg.sender || "Unknown"}</span>
+                  <span class="text-xs text-gray-400 shrink-0">{msg.date ? formatLocalDate(msg.date) : ""}</span>
+                </div>
+                {#if msg.subject}
+                  <div class="text-xs text-gray-600 truncate mb-0.5">{msg.subject}</div>
+                {/if}
+                <div class="text-xs text-gray-400 line-clamp-2">{msg.snippet}</div>
+              </button>
+            {/if}
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     {#if doc.attachments.length > 0}
       <div class="bg-white rounded-md p-3 my-3 shadow-sm">

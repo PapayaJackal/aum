@@ -2,7 +2,7 @@
 
 import pytest
 
-from aum.search.base import MIMETYPE_ALIASES, alias_mimetype, extract_email
+from aum.search.base import MIMETYPE_ALIASES, alias_mimetype, extract_email, normalize_message_id
 
 
 class TestExtractEmail:
@@ -41,6 +41,23 @@ class TestExtractEmail:
             extract_email("alexanderbj64@googlemail.com <alexanderbj64@googlemail.com>")
             == "alexanderbj64@googlemail.com"
         )
+
+
+class TestNormalizeMessageId:
+    def test_strips_angle_brackets(self):
+        assert normalize_message_id("<abc@example.com>") == "abc@example.com"
+
+    def test_strips_whitespace(self):
+        assert normalize_message_id("  abc@example.com  ") == "abc@example.com"
+
+    def test_strips_both(self):
+        assert normalize_message_id("  <abc@example.com>  ") == "abc@example.com"
+
+    def test_bare_id_unchanged(self):
+        assert normalize_message_id("abc@example.com") == "abc@example.com"
+
+    def test_empty_string(self):
+        assert normalize_message_id("") == ""
 
 
 class TestAliasMimetype:

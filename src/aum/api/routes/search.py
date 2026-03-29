@@ -18,8 +18,8 @@ from aum.api.deps import (
 )
 from aum.auth.models import User
 from aum.auth.permissions import PermissionDeniedError, PermissionManager
-from aum.metrics import DOCUMENT_DOWNLOADS, DOCUMENT_VIEWS
-from aum.search.base import HIDDEN_METADATA_KEYS
+from aum.metrics import DOCUMENT_DOWNLOADS, DOCUMENT_VIEWS, THREAD_LOOKUPS
+from aum.search.base import HIDDEN_METADATA_KEYS, normalize_message_id
 
 log = structlog.get_logger()
 router = APIRouter(prefix="/api", tags=["search"])
@@ -58,6 +58,15 @@ class ExtractedFromResponse(BaseModel):
     display_path: str
 
 
+class ThreadMessageResponse(BaseModel):
+    doc_id: str
+    display_path: str
+    subject: str
+    sender: str
+    date: str
+    snippet: str
+
+
 class DocumentResponse(BaseModel):
     doc_id: str
     display_path: str
@@ -65,6 +74,7 @@ class DocumentResponse(BaseModel):
     metadata: dict[str, str | list[str]]
     attachments: list[AttachmentResponse] = []
     extracted_from: ExtractedFromResponse | None = None
+    thread: list[ThreadMessageResponse] = []
 
 
 class IndexInfo(BaseModel):
@@ -220,6 +230,60 @@ async def get_document(
                 display_path=parent.display_path,
             )
 
+    # Build email thread if document has a Message-ID header.
+    # Tika may store these under "Message:Raw-Header:X" or plain "X" keys.
+    thread: list[ThreadMessageResponse] = []
+    raw_message_id = doc.metadata.get("Message:Raw-Header:Message-ID") or doc.metadata.get("Message-ID") or ""
+    if isinstance(raw_message_id, str) and raw_message_id:
+        message_id = normalize_message_id(raw_message_id)
+        raw_in_reply_to = doc.metadata.get("Message:Raw-Header:In-Reply-To") or doc.metadata.get("In-Reply-To") or ""
+        in_reply_to = normalize_message_id(raw_in_reply_to) if isinstance(raw_in_reply_to, str) else ""
+        raw_refs = doc.metadata.get("Message:Raw-Header:References") or doc.metadata.get("References") or ""
+        if isinstance(raw_refs, str) and raw_refs:
+            references = [normalize_message_id(r) for r in raw_refs.split() if r.strip()]
+        elif isinstance(raw_refs, list):
+            references = [normalize_message_id(r) for r in raw_refs if r]
+        else:
+            references = []
+
+        thread_results = backend.find_thread(message_id, in_reply_to, references)
+        THREAD_LOOKUPS.inc()
+        log.info("thread lookup", doc_id=doc_id, index=idx, thread_size=len(thread_results))
+
+        for tr in thread_results:
+            if tr.doc_id == doc_id:
+                continue
+            subject = ""
+            for k in ("dc:subject", "subject"):
+                val = tr.metadata.get(k, "")
+                if val:
+                    subject = val if isinstance(val, str) else str(val)
+                    break
+            sender = ""
+            sender_val = tr.metadata.get("Message-From", "")
+            if sender_val:
+                sender = sender_val if isinstance(sender_val, str) else ", ".join(sender_val)
+            date = ""
+            for k in ("dcterms:created", "Creation-Date", "meta:creation-date", "created", "date"):
+                date_val = tr.metadata.get(k, "")
+                if date_val:
+                    date = date_val if isinstance(date_val, str) else str(date_val)
+                    break
+            snippet = tr.snippet[:200] if tr.snippet else ""
+            thread.append(
+                ThreadMessageResponse(
+                    doc_id=tr.doc_id,
+                    display_path=tr.display_path,
+                    subject=subject,
+                    sender=sender,
+                    date=date,
+                    snippet=snippet,
+                )
+            )
+
+        # Sort thread chronologically by date.
+        thread.sort(key=lambda m: m.date)
+
     return DocumentResponse(
         doc_id=doc.doc_id,
         display_path=doc.display_path,
@@ -227,6 +291,7 @@ async def get_document(
         metadata=_clean_metadata(doc.metadata),
         attachments=attachments,
         extracted_from=extracted_from,
+        thread=thread,
     )
 
 
