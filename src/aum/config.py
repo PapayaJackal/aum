@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict, TomlConfigSettingsSource
 
 
@@ -14,6 +14,20 @@ class OAuthProvider(BaseSettings):
     client_id: str
     client_secret: str
     server_metadata_url: str
+
+
+class TikaInstance(BaseModel):
+    """A Tika server endpoint with its own concurrency limit."""
+
+    url: str
+    concurrency: int = 0  # 0 = auto (share of ingest_max_workers)
+
+
+class EmbedderInstance(BaseModel):
+    """An embedding service endpoint with its own concurrency limit."""
+
+    url: str
+    concurrency: int = 1
 
 
 class AumConfig(BaseSettings):
@@ -62,6 +76,11 @@ class AumConfig(BaseSettings):
     # Documents longer than this won't get snippet highlights.
     es_max_highlight_offset: int = 10_000_000
 
+    # Multiple Tika server instances for distributed extraction.
+    # Each entry specifies a URL and optional per-instance concurrency.
+    # When empty, falls back to tika_server_url as a single instance.
+    tika_instances: list[TikaInstance] = Field(default_factory=list)
+
     # Tika server URL for document text and metadata extraction.
     tika_server_url: str = "http://localhost:9998"
     # Request timeout in seconds for Tika HTTP calls. OCR on large documents
@@ -93,6 +112,11 @@ class AumConfig(BaseSettings):
     # Prefix prepended to search queries before embedding. Many embedding
     # models expect a task prefix for asymmetric retrieval.
     embeddings_query_prefix: str = "query: "
+
+    # Multiple embedding service instances for distributed embedding.
+    # Each entry specifies a URL and optional per-instance concurrency.
+    # When empty, falls back to ollama_url or embeddings_api_url.
+    embedder_instances: list[EmbedderInstance] = Field(default_factory=list)
 
     # Ollama API URL.
     ollama_url: str = "http://localhost:11434"
@@ -174,3 +198,34 @@ class AumConfig(BaseSettings):
         path = Path(self.data_dir) / "extracted"
         path.mkdir(parents=True, exist_ok=True)
         return str(path)
+
+    @property
+    def effective_tika_instances(self) -> list[TikaInstance]:
+        """Resolved Tika instance list with concurrency defaults.
+
+        Falls back to the single ``tika_server_url`` when no explicit
+        instances are configured.  Instances with ``concurrency=0`` get
+        an equal share of ``ingest_max_workers``.
+        """
+        instances = self.tika_instances or [TikaInstance(url=self.tika_server_url)]
+        result: list[TikaInstance] = []
+        n_auto = sum(1 for i in instances if i.concurrency == 0)
+        auto_share = max(1, self.ingest_max_workers // max(n_auto, 1))
+        for inst in instances:
+            if inst.concurrency == 0:
+                result.append(TikaInstance(url=inst.url, concurrency=auto_share))
+            else:
+                result.append(inst)
+        return result
+
+    @property
+    def effective_embedder_instances(self) -> list[EmbedderInstance]:
+        """Resolved embedder instance list.
+
+        Falls back to the single ``ollama_url`` or ``embeddings_api_url``
+        when no explicit instances are configured.
+        """
+        if self.embedder_instances:
+            return self.embedder_instances
+        url = self.ollama_url if self.embeddings_backend == "ollama" else self.embeddings_api_url
+        return [EmbedderInstance(url=url, concurrency=1)]

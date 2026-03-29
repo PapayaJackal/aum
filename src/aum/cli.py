@@ -62,30 +62,45 @@ def _make_ingest_pipeline(
     ocr: bool | None = None,
     ocr_language: str | None = None,
 ):
-    """Create the extractor + pipeline objects used by ingest and retry."""
+    """Create the extractor pool + pipeline objects used by ingest and retry."""
     from aum.api.deps import make_search_backend, make_tracker
     from aum.extraction.tika import TikaExtractor
     from aum.ingest.pipeline import IngestPipeline
+    from aum.pool import Instance, InstancePool
 
-    extractor = TikaExtractor(
-        server_url=config.tika_server_url,
-        ocr_enabled=ocr if ocr is not None else config.ocr_enabled,
-        ocr_language=ocr_language or config.ocr_language,
-        extract_dir=config.extract_dir,
-        index_name=idx,
-        max_depth=config.ingest_max_extract_depth,
-        request_timeout=config.tika_request_timeout,
+    tika_instances = config.effective_tika_instances
+    pool_items: list[Instance] = []
+    for ti in tika_instances:
+        extractor = TikaExtractor(
+            server_url=ti.url,
+            ocr_enabled=ocr if ocr is not None else config.ocr_enabled,
+            ocr_language=ocr_language or config.ocr_language,
+            extract_dir=config.extract_dir,
+            index_name=idx,
+            max_depth=config.ingest_max_extract_depth,
+            request_timeout=config.tika_request_timeout,
+        )
+        pool_items.append(Instance(url=ti.url, client=extractor, concurrency=ti.concurrency))
+
+    extractor_pool = InstancePool(pool_items, service_name="tika")
+
+    log.info(
+        "tika pool configured",
+        instances=len(pool_items),
+        total_concurrency=extractor_pool.total_concurrency,
+        urls=[i.url for i in pool_items],
     )
+
     backend = make_search_backend(config, index=idx)
     tracker = make_tracker(config)
 
     pipeline = IngestPipeline(
-        extractor=extractor,
+        extractor_pool=extractor_pool,
         search_backend=backend,
         tracker=tracker,
         index_name=idx,
         batch_size=batch_size or config.ingest_batch_size,
-        max_workers=workers or config.ingest_max_workers,
+        max_workers=workers,
         data_dir=config.data_dir,
     )
     return pipeline
@@ -112,7 +127,9 @@ def _print_ingest_summary(job, elapsed: float, avg_extraction: float) -> None:
 @click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--index", default=None, help="Target index name (default: from config)")
 @click.option("--batch-size", default=None, type=int, help="Batch size for indexing")
-@click.option("--workers", default=None, type=int, help="Number of extraction workers")
+@click.option(
+    "--workers", default=None, type=int, help="Total extraction workers (default: sum of instance concurrency)"
+)
 @click.option("--ocr/--no-ocr", default=None, help="Enable or disable OCR (default: from config)")
 @click.option("--ocr-language", default=None, help="OCR language (e.g. eng, deu, fra+eng)")
 def ingest(
@@ -234,11 +251,12 @@ def resume(
 
     if job.job_type == JobType.EMBED:
         click.echo(f"Resuming embedding on index '{idx}' (parent: {job.job_id})")
-        search, tracker, embedder = _setup_embedder(config, idx, pull)
+        search, tracker, embedder_pool = _setup_embedder(config, idx, pull)
         bs = batch_size or config.embeddings_batch_size
-        resume_job = _run_embed_job(config, search, tracker, embedder, idx, bs)
+        resume_job = _run_embed_job(config, search, tracker, embedder_pool, idx, bs)
         if resume_job is not None and resume_job.processed > 0:
-            tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, embedder.dimension)
+            dimension = embedder_pool.instances[0].client.dimension
+            tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, dimension)
     else:
         if not job.source_dir.is_dir():
             click.echo(f"Source directory no longer exists: {job.source_dir}", err=True)
@@ -289,19 +307,21 @@ def reset_index(index: str | None) -> None:
 
 
 def _setup_embedder(config: AumConfig, idx: str, pull: bool = True):
-    """Create search backend, tracker, and embedder for embedding operations.
+    """Create search backend, tracker, and embedder pool for embedding operations.
 
-    Validates model consistency and optionally auto-pulls Ollama models.
-    Returns (search_backend, tracker, embedder).
+    Validates model consistency and optionally auto-pulls Ollama models on
+    every instance in the pool.
+    Returns (search_backend, tracker, embedder_pool).
     """
-    from aum.api.deps import make_embedder, make_search_backend, make_tracker
+    from aum.api.deps import make_embedder_pool, make_search_backend, make_tracker
 
     search = make_search_backend(config, index=idx)
     tracker = make_tracker(config)
-    embedder = make_embedder(config)
+    embedder_pool = make_embedder_pool(config)
 
-    # Ensure the index has a vector field
-    search.initialize(vector_dimension=embedder.dimension)
+    # Use first instance's dimension for index initialisation (all share the same model).
+    dimension = embedder_pool.instances[0].client.dimension
+    search.initialize(vector_dimension=dimension)
 
     # Check for embedding model mismatch
     prev = tracker.get_embedding_model(idx)
@@ -317,26 +337,31 @@ def _setup_embedder(config: AumConfig, idx: str, pull: bool = True):
             )
             sys.exit(1)
 
-    # Auto-pull for Ollama
+    # Auto-pull for Ollama on every instance in the pool
     if pull and config.embeddings_backend == "ollama":
         from aum.embeddings.ollama import OllamaEmbedder
 
-        if isinstance(embedder, OllamaEmbedder):
-            click.echo(f"Pulling model '{config.embeddings_model}' (if needed)...")
-            embedder.ensure_model()
+        for inst in embedder_pool.instances:
+            if isinstance(inst.client, OllamaEmbedder):
+                click.echo(f"Pulling model '{config.embeddings_model}' on {inst.url} (if needed)...")
+                inst.client.ensure_model()
 
-    return search, tracker, embedder
+    return search, tracker, embedder_pool
 
 
 @main.command()
 @click.option("--index", default=None, help="Target index name (default: from config)")
 @click.option("--batch-size", default=None, type=int, help="Batch size for embedding")
+@click.option(
+    "--workers", default=None, type=int, help="Parallel embedding workers (default: sum of instance concurrency)"
+)
 @click.option("--backend", default=None, type=click.Choice(["ollama", "openai"]), help="Embedding backend")
 @click.option("--model", default=None, help="Embedding model name")
 @click.option("--pull/--no-pull", default=True, help="Auto-pull model in Ollama (default: yes)")
 def embed(
     index: str | None,
     batch_size: int | None,
+    workers: int | None,
     backend: str | None,
     model: str | None,
     pull: bool,
@@ -358,32 +383,41 @@ def embed(
         config.embeddings_model = model
 
     idx = index or default_index_name(config)
-    search, tracker, embedder = _setup_embedder(config, idx, pull)
+    search, tracker, embedder_pool = _setup_embedder(config, idx, pull)
 
     bs = batch_size or config.embeddings_batch_size
-    job = _run_embed_job(config, search, tracker, embedder, idx, bs)
+    max_workers = workers or embedder_pool.total_concurrency
+    job = _run_embed_job(config, search, tracker, embedder_pool, idx, bs, max_workers=max_workers)
 
     if job is not None and job.processed > 0:
-        tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, embedder.dimension)
+        dimension = embedder_pool.instances[0].client.dimension
+        tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, dimension)
 
 
 def _run_embed_job(
     config: AumConfig,
     search,
     tracker,
-    embedder,
+    embedder_pool,
     idx: str,
     bs: int,
     doc_ids: list[str] | None = None,
+    max_workers: int | None = None,
 ):
     """Run an embedding job, optionally for specific document IDs (retry).
 
     When *doc_ids* is None, processes all unembedded documents.  When
     provided, only re-embeds those specific documents.
 
+    *embedder_pool* is an ``InstancePool[Embedder]`` that distributes
+    embedding requests across configured instances.  When multiple instances
+    are available, documents within each scroll batch are embedded in
+    parallel using a thread pool.
+
     Returns the completed IngestJob.
     """
     import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from contextlib import nullcontext
 
     from aum.names import generate_name
@@ -423,10 +457,13 @@ def _run_embed_job(
         job_type=JobType.EMBED,
     )
 
+    n_workers = max_workers or embedder_pool.total_concurrency
+    n_instances = len(embedder_pool.instances)
     click.echo(
         f"Embedding {total} documents in '{idx}'"
         f" using {config.embeddings_backend}/{config.embeddings_model}"
-        f" (batch_size={bs}, num_ctx={config.embeddings_context_length})"
+        f" (batch_size={bs}, num_ctx={config.embeddings_context_length},"
+        f" workers={n_workers}, instances={n_instances})"
         f"  [job {job_id}]"
     )
 
@@ -455,6 +492,12 @@ def _run_embed_job(
         t.append(f"  {m:02d}:{s:02d}", style="dim")
         return t
 
+    def _embed_one_doc(doc_id: str, chunks: list[str]) -> tuple[str, list[list[float]]]:
+        """Embed a single document's chunks via the pool."""
+        with embedder_pool.acquire() as embedder:
+            vectors = embedder.embed_documents(chunks)
+        return doc_id, vectors
+
     try:
         console = RichConsole(stderr=True) if show_progress else None
         ctx: Live | nullcontext = (
@@ -473,24 +516,27 @@ def _run_embed_job(
         max_chunk_chars = config.embeddings_context_length * 4  # ~4 chars/token
         overlap_chars = config.embeddings_chunk_overlap
 
-        with ctx as live:
+        with ctx as live, ThreadPoolExecutor(max_workers=n_workers) as embed_executor:
             for scroll_batch in scroll_source:
-                # Process each document: chunk, embed all chunks, store as nested array
                 updates: list[tuple[str, list[list[float]]]] = []
 
+                # Submit all documents in this scroll batch for parallel embedding.
+                futures = {}
                 for doc_id, content in scroll_batch:
                     chunks = chunk_text(content, max_chars=max_chunk_chars, overlap_chars=overlap_chars)
+                    future = embed_executor.submit(_embed_one_doc, doc_id, chunks)
+                    futures[future] = doc_id
 
+                for future in as_completed(futures):
+                    doc_id = futures[future]
                     try:
-                        chunk_vectors = embedder.embed_documents(chunks)
+                        _, chunk_vectors = future.result()
+                        updates.append((doc_id, chunk_vectors))
                     except Exception as exc:
-                        log.error("embedding failed", doc_id=doc_id, error=str(exc), n_chunks=len(chunks))
+                        log.error("embedding failed", doc_id=doc_id, error=str(exc))
                         failed += 1
                         EMBEDDING_DOCS_FAILED.inc()
                         tracker.record_error(job_id, Path(doc_id), "EmbeddingError", str(exc))
-                        continue
-
-                    updates.append((doc_id, chunk_vectors))
 
                 if updates:
                     n_failed = search.update_embeddings(updates)
@@ -656,13 +702,14 @@ def _retry_embed(config: AumConfig, job, batch_size: int | None, pull: bool) -> 
     click.echo(f"Retrying {len(failed_doc_ids)} failed documents from job {job.job_id} (index: {job.index_name})")
 
     idx = job.index_name
-    search, tracker, embedder = _setup_embedder(config, idx, pull)
+    search, tracker, embedder_pool = _setup_embedder(config, idx, pull)
 
     bs = batch_size or config.embeddings_batch_size
-    retry_job = _run_embed_job(config, search, tracker, embedder, idx, bs, doc_ids=failed_doc_ids)
+    retry_job = _run_embed_job(config, search, tracker, embedder_pool, idx, bs, doc_ids=failed_doc_ids)
 
     if retry_job is not None and retry_job.processed > 0:
-        tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, embedder.dimension)
+        dimension = embedder_pool.instances[0].client.dimension
+        tracker.set_embedding_model(idx, config.embeddings_model, config.embeddings_backend, dimension)
 
 
 # --- Search ---

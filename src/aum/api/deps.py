@@ -73,6 +73,42 @@ def make_embedder(config: AumConfig):
         raise ValueError(f"Unsupported embeddings backend: {config.embeddings_backend!r}")
 
 
+def make_embedder_pool(config: AumConfig):
+    """Create an InstancePool of embedders from config."""
+    from aum.embeddings.base import Embedder
+    from aum.pool import Instance, InstancePool
+
+    instances: list[Instance[Embedder]] = []
+    for ei in config.effective_embedder_instances:
+        if config.embeddings_backend == "ollama":
+            from aum.embeddings.ollama import OllamaEmbedder
+
+            client: Embedder = OllamaEmbedder(
+                model=config.embeddings_model,
+                base_url=ei.url,
+                expected_dimension=config.embeddings_dimension,
+                context_length=config.embeddings_context_length,
+                query_prefix=config.embeddings_query_prefix,
+            )
+        elif config.embeddings_backend == "openai":
+            from aum.embeddings.openai import OpenAIEmbedder
+
+            if not ei.url:
+                raise ValueError("embeddings_api_url must be set when using openai backend")
+            client = OpenAIEmbedder(
+                model=config.embeddings_model,
+                api_url=ei.url,
+                api_key=config.embeddings_api_key,
+                expected_dimension=config.embeddings_dimension,
+                query_prefix=config.embeddings_query_prefix,
+            )
+        else:
+            raise ValueError(f"Unsupported embeddings backend: {config.embeddings_backend!r}")
+        instances.append(Instance(url=ei.url, client=client, concurrency=ei.concurrency))
+
+    return InstancePool(instances, service_name="embedder")
+
+
 def make_search_backend(config: AumConfig, index: str | None = None) -> SearchBackend:
     if config.search_backend == "meilisearch":
         from aum.search.meilisearch import MeilisearchBackend

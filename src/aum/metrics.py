@@ -131,5 +131,33 @@ DOCUMENT_DOWNLOADS = Counter(
     "Total document downloads",
 )
 
+# Instance pool
+POOL_REQUESTS = Counter(
+    "aum_pool_requests_total",
+    "Total requests dispatched to service instances",
+    ["service", "instance_url"],
+)
+POOL_ERRORS = Counter(
+    "aum_pool_errors_total",
+    "Errors from service instances",
+    ["service", "instance_url", "error_type"],
+)
+POOL_LATENCY = Histogram(
+    "aum_pool_request_duration_seconds",
+    "Request latency per service instance",
+    ["service", "instance_url"],
+    buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 60],
+)
+POOL_INSTANCE_HEALTHY = Gauge(
+    "aum_pool_instance_healthy",
+    "Whether a service instance is healthy (1) or not (0)",
+    ["service", "instance_url"],
+)
+POOL_IN_FLIGHT = Gauge(
+    "aum_pool_instance_in_flight",
+    "Current in-flight requests per instance",
+    ["service", "instance_url"],
+)
+
 # Build info
 BUILD_INFO = Info("aum_build", "Build and version info")

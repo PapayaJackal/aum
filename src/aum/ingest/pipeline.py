@@ -28,6 +28,7 @@ from aum.metrics import (
     INGEST_JOBS_ACTIVE,
 )
 from aum.models import Document, IngestJob, JobStatus
+from aum.pool import InstancePool
 from aum.search.base import SearchBackend
 
 log = structlog.get_logger()
@@ -157,20 +158,20 @@ class IngestPipeline:
 
     def __init__(
         self,
-        extractor: Extractor,
+        extractor_pool: InstancePool[Extractor],
         search_backend: SearchBackend,
         tracker: JobTracker,
         index_name: str = "aum",
         batch_size: int = 50,
-        max_workers: int = 4,
+        max_workers: int | None = None,
         data_dir: str | Path | None = None,
     ) -> None:
-        self._extractor = extractor
+        self._extractor_pool = extractor_pool
         self._backend = search_backend
         self._tracker = tracker
         self._index_name = index_name
         self._batch_size = batch_size
-        self._max_workers = max_workers
+        self._max_workers = max_workers or extractor_pool.total_concurrency
         self._data_dir = Path(data_dir) if data_dir else None
 
     def run_retry(self, file_paths: list[Path], source_dir: Path) -> tuple[IngestJob, float, float]:
@@ -567,7 +568,8 @@ class IngestPipeline:
                 if etype == "EmptyExtraction":
                     empty_count[0] += 1
 
-            docs = self._extractor.extract(file_path, record_error=_record_sub_error)
+            with self._extractor_pool.acquire() as extractor:
+                docs = extractor.extract(file_path, record_error=_record_sub_error)
             elapsed = time.monotonic() - start
             INGEST_DURATION.labels(stage="extraction").observe(elapsed)
             return docs, elapsed, empty_count[0]

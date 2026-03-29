@@ -188,6 +188,17 @@ def _stub_extractor(extract_fn):
     return ext
 
 
+def _stub_extractor_pool(extract_fn):
+    """Wrap a stub extractor in a single-instance InstancePool."""
+    from aum.pool import Instance, InstancePool
+
+    ext = _stub_extractor(extract_fn)
+    return InstancePool(
+        [Instance(url="http://localhost:9998", client=ext, concurrency=4)],
+        service_name="tika",
+    )
+
+
 def _stub_backend():
     """Create a mock SearchBackend that always succeeds."""
     backend = MagicMock()
@@ -216,7 +227,7 @@ class TestPipelineEmptyFiles:
             return [doc]
 
         pipeline = IngestPipeline(
-            extractor=_stub_extractor(fake_extract),
+            extractor_pool=_stub_extractor_pool(fake_extract),
             search_backend=_stub_backend(),
             tracker=tracker,
             batch_size=10,
@@ -246,7 +257,7 @@ class TestPipelineEmptyFiles:
             return [doc]
 
         pipeline = IngestPipeline(
-            extractor=_stub_extractor(fake_extract),
+            extractor_pool=_stub_extractor_pool(fake_extract),
             search_backend=_stub_backend(),
             tracker=tracker,
             batch_size=10,
@@ -276,7 +287,7 @@ class TestPipelineEmptyFiles:
             ]
 
         pipeline = IngestPipeline(
-            extractor=_stub_extractor(fake_extract),
+            extractor_pool=_stub_extractor_pool(fake_extract),
             search_backend=_stub_backend(),
             tracker=tracker,
             batch_size=10,
@@ -398,7 +409,7 @@ class TestPipelineResume:
         backend.get_existing_doc_ids.side_effect = lambda ids: existing_ids & set(ids)
 
         pipeline = IngestPipeline(
-            extractor=_stub_extractor(fake_extract),
+            extractor_pool=_stub_extractor_pool(fake_extract),
             search_backend=backend,
             tracker=tracker,
             batch_size=50,
@@ -428,7 +439,7 @@ class TestPipelineResume:
         backend.get_existing_doc_ids.return_value = set()
 
         pipeline = IngestPipeline(
-            extractor=_stub_extractor(fake_extract),
+            extractor_pool=_stub_extractor_pool(fake_extract),
             search_backend=backend,
             tracker=tracker,
             batch_size=50,
@@ -454,7 +465,7 @@ class TestPipelineResume:
         backend.get_existing_doc_ids.side_effect = RuntimeError("network error")
 
         pipeline = IngestPipeline(
-            extractor=_stub_extractor(fake_extract),
+            extractor_pool=_stub_extractor_pool(fake_extract),
             search_backend=backend,
             tracker=tracker,
             batch_size=50,
