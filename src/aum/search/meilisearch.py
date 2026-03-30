@@ -806,14 +806,17 @@ class MeilisearchBackend:
                 return 0
             raise
 
-    def scroll_unembedded(self, batch_size: int = 64):
+    def scroll_unembedded(self, batch_size: int = 64, max_batches: int = 10_000):
         """Yield batches of (doc_id, content) for documents without chunk embeddings.
 
         Always queries from offset 0 because update_embeddings() marks each processed
         batch as has_embeddings=true before the next batch is fetched, so the result
         set naturally shrinks — offset-based pagination would skip documents otherwise.
+
+        *max_batches* is a safety guard: if the caller fails to mark documents
+        as embedded, the same batch would be re-fetched indefinitely.
         """
-        while True:
+        for _ in range(max_batches):
             try:
                 resp = self._idx().search(
                     "",
@@ -834,6 +837,8 @@ class MeilisearchBackend:
             yield [(hit["id"], hit.get("content", "") or "") for hit in hits]
             if len(hits) < batch_size:
                 break
+        else:
+            log.warning("scroll_unembedded hit max_batches limit", max_batches=max_batches)
 
     def scroll_document_ids(self, doc_ids: list[str], batch_size: int = 64):
         """Yield batches of (doc_id, content) for specific document IDs.
