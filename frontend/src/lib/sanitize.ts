@@ -72,7 +72,6 @@ const HTML_PREVIEW_CONFIG: Config = {
     "small",
     "span",
     "strong",
-    "style",
     "sub",
     "summary",
     "sup",
@@ -117,14 +116,41 @@ const HTML_PREVIEW_CONFIG: Config = {
   ],
   ALLOW_DATA_ATTR: false,
   WHOLE_DOCUMENT: true,
+  // Forbid <style> tags — CSS blocks can exfiltrate data via url(),
+  // @import, and @font-face which cannot be reliably stripped with regex.
+  // Inline style attributes are kept but sanitized in the hook below.
+  FORBID_TAGS: ["style"],
 };
+
+/**
+ * Strip external resource references from an inline CSS style string.
+ *
+ * Removes any CSS function that could trigger a network request:
+ * ``url()``, ``image-set()``, ``@import``, etc.  Only ``data:image/*``
+ * URIs are preserved in ``url()`` calls.
+ */
+function sanitizeCssValue(css: string): string {
+  // Remove @import statements that may appear in inline styles via CSS injection.
+  let cleaned = css.replace(/@import\b[^;]*/gi, "");
+  // Remove url() calls that don't use safe data:image/ URIs.
+  cleaned = cleaned.replace(/url\s*\(([^)]*)\)/gi, (_match: string, inner: string) => {
+    const trimmed = inner.trim().replace(/^['"]|['"]$/g, "");
+    if (/^data:image\//i.test(trimmed)) {
+      return `url(${inner})`;
+    }
+    return "none";
+  });
+  // Remove image-set() which can also load external resources.
+  cleaned = cleaned.replace(/image-set\s*\([^)]*\)/gi, "none");
+  return cleaned;
+}
 
 // Register URL-filtering hook on the isolated instance.
 purifier.addHook("afterSanitizeAttributes", (node: Element) => {
-  // img src: only allow data: URIs (inline/embedded images).
+  // img src: only allow data:image/ URIs (inline/embedded images).
   if (node.tagName === "IMG") {
     const src = node.getAttribute("src") || "";
-    if (!src.startsWith("data:")) {
+    if (!/^data:image\//i.test(src)) {
       node.removeAttribute("src");
     }
   }
@@ -133,22 +159,22 @@ purifier.addHook("afterSanitizeAttributes", (node: Element) => {
     node.setAttribute("rel", "noopener noreferrer");
   }
 
-  // Strip any background-image CSS that loads external URLs.
-  // DOMPurify allows style attributes but we need to block url() calls
-  // that aren't data: URIs.
+  // Sanitize inline style attributes to block external resource loading.
   const style = node.getAttribute("style");
-  if (style && /url\s*\(/i.test(style)) {
-    // Remove url() calls that don't use data: URIs.
-    const cleaned = style.replace(/url\s*\(\s*(?:['"]?)(?!data:)[^)]*(?:['"]?)\s*\)/gi, "none");
-    node.setAttribute("style", cleaned);
+  if (style) {
+    const cleaned = sanitizeCssValue(style);
+    if (cleaned !== style) {
+      node.setAttribute("style", cleaned);
+    }
   }
 });
 
 /**
  * Sanitize an HTML string for safe rendering inside a sandboxed iframe.
  *
- * Strips scripts, event handlers, and external resource references.
- * Allows inline styles and ``data:`` image URIs.
+ * Strips scripts, event handlers, ``<style>`` tags, and external resource
+ * references.  Allows inline styles (with sanitized ``url()`` calls) and
+ * ``data:image/*`` URIs.
  */
 export function sanitizeHtmlForPreview(dirty: string): string {
   return purifier.sanitize(dirty, HTML_PREVIEW_CONFIG);
