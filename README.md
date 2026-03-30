@@ -16,11 +16,25 @@ document search platform, look at
   automatic text extraction and recursive unpacking of nested files
 - Full-text search powered by Meilisearch
 - Optional hybrid search combining BM25 keyword scoring with vector
-  similarity (via Ollama or any OpenAI-compatible embedding API)
+  similarity (via Ollama or any OpenAI-compatible embedding API), with
+  an adjustable semantic ratio slider in the UI
+- Rich document preview for images, PDFs (rendered with PDF.js), HTML
+  files, and emails, with DOMPurify sanitization and CSP isolation
+- Email thread reconstruction with a unified thread view
 - Faceted filtering by file type, author, date, and email addresses
+- Sort results by relevance, date, or file size
+- Resizable split-pane search UI with fullscreen preview mode
+- Vim-style keyboard navigation (`j`/`k` to move, `o` to open, `?`
+  for the shortcut reference)
 - Multi-index support with per-user access control
 - OCR support via Tesseract (through Tika)
-- User management with local passwords and OAuth
+- Multi-instance Tika and embedder pools with per-instance concurrency
+  limits and automatic health tracking
+- Resume interrupted ingest and embedding jobs with crash detection
+- User management with local passwords, OAuth/OIDC, and
+  WebAuthn/passkey authentication
+- User invitations for onboarding new users via link
+- Public mode for anonymous read-only access to search
 - CLI-first administration
 - Prometheus metrics
 - All application state stored in a single portable SQLite database
@@ -82,10 +96,19 @@ Key settings:
 
 - `AUM_MEILI_URL` -- Meilisearch URL (default: `http://localhost:7700`)
 - `AUM_TIKA_SERVER_URL` -- Tika URL (default: `http://localhost:9998`)
-- `AUM_JWT_SECRET` -- JWT signing secret. If not set, a random one is
-  generated on each restart and sessions will not persist.
+- `AUM_JWT_SECRET` -- JWT signing secret (at least 32 bytes). If not
+  set, a random one is generated on each restart and sessions will not
+  persist.
 - `AUM_DATA_DIR` -- Directory for the SQLite database and extracted files
   (default: `data`)
+- `AUM_PUBLIC_MODE` -- Allow anonymous read-only search access (default:
+  `false`)
+- `AUM_PASSKEY_ENABLED` -- Enable WebAuthn/passkey registration and
+  authentication (default: `false`)
+- `AUM_PASSKEY_REQUIRED` -- Require all users to register a passkey
+  (default: `false`)
+- `AUM_WEBAUTHN_RP_ID` -- WebAuthn Relying Party ID, the domain users
+  access the site from (default: `localhost`)
 - `AUM_LOG_LEVEL` -- Log level (default: `INFO`)
 - `AUM_LOG_FORMAT` -- `json` or `console` (default: `json`)
 - `AUM_PORT` -- Server port (default: `8000`)
@@ -98,14 +121,15 @@ searching.
 
 - `aum serve` -- Start the web server
 - `aum ingest <directory>` -- Ingest documents from a directory
+- `aum resume [job_id]` -- Resume an interrupted ingest or embedding job
 - `aum embed` -- Generate embeddings for documents that lack them
-- `aum init` -- Create or initialize a search index
-- `aum reset` -- Delete and recreate an index
+- `aum init <index>` -- Create or initialize a search index
+- `aum reset <index>` -- Delete and recreate an index
 - `aum indices` -- List all indices with document counts
 - `aum search <query>` -- Search from the command line
 - `aum jobs` -- List ingest and embedding jobs
 - `aum job <id>` -- Show details for a specific job
-- `aum retry <id>` -- Retry failed items from a job
+- `aum retry <id>` -- Retry failed items from a job (`--only` to filter by error type)
 - `aum user create <name>` -- Create a user (`--admin`, `--generate-password`)
 - `aum user list` -- List all users
 - `aum user delete <name>` -- Delete a user
@@ -114,10 +138,32 @@ searching.
 - `aum user grant <name> <index>` -- Grant a user access to an index
 - `aum user revoke <name> <index>` -- Revoke access to an index
 - `aum user token <name>` -- Generate an API token
+- `aum user invite <name>` -- Generate an invitation link (`--admin`, `--expires`)
+- `aum user reset-mfa <name>` -- Remove all passkeys for a user
 - `aum config` -- Print the resolved configuration
 
 Run any command with `--help` for full usage details. All commands should be
 invoked with `uv run aum`.
+
+## Scaling extraction
+
+By default, aum sends documents to a single Tika server. For large
+corpora you can run multiple Tika instances and configure aum to
+distribute extraction across them with per-instance concurrency limits:
+
+```toml
+# aum.toml
+[[tika_instances]]
+url = "http://tika1:9998"
+concurrency = 4
+
+[[tika_instances]]
+url = "http://tika2:9998"
+concurrency = 4
+```
+
+Instances are selected via round-robin. Unhealthy instances are
+automatically taken out of rotation and retried after a cooldown.
 
 ## Hybrid search
 
@@ -225,6 +271,16 @@ aum exposes Prometheus metrics on a separate port (default 9090) at
 
 - `aum_document_views_total` (counter) -- Document detail page views.
 - `aum_document_downloads_total` (counter) -- Document file downloads.
+- `aum_document_previews_total` (counter, labels: `content_type`) -- Document preview requests.
+- `aum_thread_lookups_total` (counter) -- Email thread reconstruction lookups.
+
+### Instance pool
+
+- `aum_pool_requests_total` (counter, labels: `service`, `url`) -- Requests dispatched to pooled service instances.
+- `aum_pool_errors_total` (counter, labels: `service`, `url`, `error`) -- Errors from pooled instances.
+- `aum_pool_request_duration_seconds` (histogram, labels: `service`, `url`) -- Request latency per instance.
+- `aum_pool_instance_healthy` (gauge, labels: `service`, `url`) -- Health status per instance (1 = healthy).
+- `aum_pool_instance_in_flight` (gauge, labels: `service`, `url`) -- In-flight requests per instance.
 
 ### Build
 
