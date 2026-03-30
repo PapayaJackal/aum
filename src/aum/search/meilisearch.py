@@ -565,13 +565,30 @@ class MeilisearchBackend:
         query: str,
         params: dict,
     ) -> tuple[list[SearchResult], int, dict[str, dict[str, int]]]:
-        """Run the search across all configured indices and merge the results."""
+        """Run the search across all configured indices and merge the results.
+
+        For multi-index queries, each index is asked for ``offset + limit``
+        results starting from 0 so that the globally-ranked top-N can be
+        determined after merging.  The caller's ``offset`` / ``limit`` is
+        then applied to the merged result set.
+        """
         all_results: list[SearchResult] = []
         total = 0
         merged_facets: dict[str, dict[str, int]] = {}
 
+        multi = len(self._indices) > 1
+        requested_offset = params.get("offset", 0)
+        requested_limit = params.get("limit", 20)
+
+        if multi:
+            # Fetch enough results from each index to cover the requested page
+            # after global re-ranking.
+            per_index_params = {**params, "offset": 0, "limit": requested_offset + requested_limit}
+        else:
+            per_index_params = params
+
         for idx_name in self._indices:
-            resp = self._idx(idx_name).search(query, params)
+            resp = self._idx(idx_name).search(query, per_index_params)
             hits = resp.get("hits", [])
             # Use totalHits (paginated) or estimatedTotalHits (offset/limit).
             total += resp.get("totalHits", resp.get("estimatedTotalHits", len(hits)))
@@ -581,8 +598,10 @@ class MeilisearchBackend:
             for hit in hits:
                 all_results.append(_parse_hit(hit, index_name=idx_name))
 
-        if len(self._indices) > 1 and "sort" not in params:
-            all_results.sort(key=lambda r: r.score, reverse=True)
+        if multi:
+            if "sort" not in params:
+                all_results.sort(key=lambda r: r.score, reverse=True)
+            all_results = all_results[requested_offset : requested_offset + requested_limit]
 
         return all_results, total, merged_facets
 
