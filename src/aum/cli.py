@@ -61,6 +61,7 @@ def _make_ingest_pipeline(
     workers: int | None = None,
     ocr: bool | None = None,
     ocr_language: str | None = None,
+    debug: bool = False,
 ):
     """Create the extractor pool + pipeline objects used by ingest and retry."""
     from aum.api.deps import make_search_backend, make_tracker
@@ -103,6 +104,7 @@ def _make_ingest_pipeline(
         batch_size=batch_size or config.ingest_batch_size,
         max_workers=workers,
         data_dir=config.data_dir,
+        debug=debug,
     )
     return pipeline
 
@@ -133,6 +135,7 @@ def _print_ingest_summary(job, elapsed: float, avg_extraction: float) -> None:
 )
 @click.option("--ocr/--no-ocr", default=None, help="Enable or disable OCR (default: from config)")
 @click.option("--ocr-language", default=None, help="OCR language (e.g. eng, deu, fra+eng)")
+@click.option("--debug", is_flag=True, default=False, help="Show in-flight Tika file paths above the progress bar")
 def ingest(
     index: str,
     directory: Path,
@@ -140,6 +143,7 @@ def ingest(
     workers: int | None,
     ocr: bool | None,
     ocr_language: str | None,
+    debug: bool,
 ) -> None:
     """Ingest documents from a directory."""
     config = _load_config()
@@ -169,7 +173,7 @@ def ingest(
                 err=True,
             )
 
-    pipeline = _make_ingest_pipeline(config, idx, batch_size, workers, ocr, ocr_language)
+    pipeline = _make_ingest_pipeline(config, idx, batch_size, workers, ocr, ocr_language, debug=debug)
     try:
         job, elapsed, avg_extraction = pipeline.run(directory)
         _print_ingest_summary(job, elapsed, avg_extraction)
@@ -366,6 +370,7 @@ def _setup_embedder(config: AumConfig, idx: str, pull: bool = True):
 @click.option("--backend", default=None, type=click.Choice(["ollama", "openai"]), help="Embedding backend")
 @click.option("--model", default=None, help="Embedding model name")
 @click.option("--pull/--no-pull", default=True, help="Auto-pull model in Ollama (default: yes)")
+@click.option("--debug", is_flag=True, default=False, help="Show in-flight Ollama document IDs above the progress bar")
 def embed(
     index: str,
     batch_size: int | None,
@@ -373,6 +378,7 @@ def embed(
     backend: str | None,
     model: str | None,
     pull: bool,
+    debug: bool,
 ) -> None:
     """Generate embeddings for documents that don't have them yet.
 
@@ -393,7 +399,7 @@ def embed(
 
     bs = batch_size or config.embeddings_batch_size
     max_workers = workers or embedder_pool.total_concurrency
-    job = _run_embed_job(config, search, tracker, embedder_pool, idx, bs, max_workers=max_workers)
+    job = _run_embed_job(config, search, tracker, embedder_pool, idx, bs, max_workers=max_workers, debug=debug)
 
     if job is not None and job.processed > 0:
         dimension = embedder_pool.instances[0].client.dimension
@@ -409,6 +415,7 @@ def _run_embed_job(
     bs: int,
     doc_ids: list[str] | None = None,
     max_workers: int | None = None,
+    debug: bool = False,
 ):
     """Run an embedding job, optionally for specific document IDs (retry).
 
@@ -425,10 +432,11 @@ def _run_embed_job(
     import time
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from contextlib import nullcontext
+    from threading import Lock
 
     from aum.names import generate_name
 
-    from rich.console import Console as RichConsole
+    from rich.console import Console as RichConsole, Group
     from rich.live import Live
     from rich.text import Text
 
@@ -479,7 +487,10 @@ def _run_embed_job(
     job_start = time.monotonic()
     show_progress = sys.stderr.isatty()
 
-    def _make_progress(total: int, done: int, n_failed: int, start: float) -> Text:
+    in_flight_lock = Lock()
+    in_flight_doc_ids: dict[str, None] = {}
+
+    def _make_progress(total: int, done: int, n_failed: int, start: float):
         elapsed = time.monotonic() - start
         pct = min(done / total * 100, 100) if total else 0
         rate = done / elapsed if elapsed > 0 else 0
@@ -496,13 +507,28 @@ def _run_embed_job(
             t.append(f"  fail:{n_failed}", style="bold red")
         m, s = divmod(int(elapsed), 60)
         t.append(f"  {m:02d}:{s:02d}", style="dim")
+
+        if debug:
+            with in_flight_lock:
+                paths = list(in_flight_doc_ids)
+            if paths:
+                path_lines = [Text(p, style="dim cyan", no_wrap=True, overflow="crop") for p in paths]
+                return Group(*path_lines, t)
         return t
 
     def _embed_one_doc(doc_id: str, chunks: list[str]) -> tuple[str, list[list[float]]]:
         """Embed a single document's chunks via the pool."""
-        with embedder_pool.acquire() as embedder:
-            vectors = embedder.embed_documents(chunks)
-        return doc_id, vectors
+        if debug:
+            with in_flight_lock:
+                in_flight_doc_ids[doc_id] = None
+        try:
+            with embedder_pool.acquire() as embedder:
+                vectors = embedder.embed_documents(chunks)
+            return doc_id, vectors
+        finally:
+            if debug:
+                with in_flight_lock:
+                    in_flight_doc_ids.pop(doc_id, None)
 
     try:
         console = RichConsole(stderr=True) if show_progress else None

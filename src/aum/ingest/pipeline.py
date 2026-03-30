@@ -13,7 +13,7 @@ from threading import Lock, Thread
 
 import structlog
 import structlog.contextvars
-from rich.console import Console as RichConsole
+from rich.console import Console as RichConsole, Group
 from rich.live import Live
 from rich.text import Text
 
@@ -54,8 +54,14 @@ def _make_progress_line(
     timing_count: int,
     total_extraction_time: float,
     skipped: int = 0,
-) -> Text:
-    """Build a single-line rich Text for the live progress display."""
+    in_flight_paths: list[str] | None = None,
+):
+    """Build a rich renderable for the live progress display.
+
+    When *in_flight_paths* is provided (debug mode), returns a ``Group``
+    with one dim line per in-flight path stacked above the progress bar.
+    Otherwise returns a plain ``Text``.
+    """
     elapsed = time.monotonic() - start
 
     t = Text(no_wrap=True, overflow="crop")
@@ -98,6 +104,9 @@ def _make_progress_line(
     m, s = divmod(int(elapsed), 60)
     t.append(f"  {m:02d}:{s:02d}", style="dim")
 
+    if in_flight_paths:
+        path_lines = [Text(p, style="dim cyan", no_wrap=True, overflow="crop") for p in in_flight_paths]
+        return Group(*path_lines, t)
     return t
 
 
@@ -165,6 +174,7 @@ class IngestPipeline:
         batch_size: int = 50,
         max_workers: int | None = None,
         data_dir: str | Path | None = None,
+        debug: bool = False,
     ) -> None:
         self._extractor_pool = extractor_pool
         self._backend = search_backend
@@ -173,6 +183,7 @@ class IngestPipeline:
         self._batch_size = batch_size
         self._max_workers = max_workers or extractor_pool.total_concurrency
         self._data_dir = Path(data_dir) if data_dir else None
+        self._debug = debug
 
     def close(self) -> None:
         """Release resources held by the extractor pool."""
@@ -286,6 +297,7 @@ class IngestPipeline:
         # Track truly concurrent extractions (threads actively inside _extract_one)
         in_flight_lock = Lock()
         in_flight_count: list[int] = [0]
+        in_flight_paths: dict[Path, None] = {}  # ordered set of paths under extraction
 
         # When skip_existing is enabled the walker feeds into a separate queue
         # and a filter thread sits between the walker and the workers.
@@ -352,7 +364,14 @@ class IngestPipeline:
                             if file_path is _SENTINEL:
                                 walker_done = True
                                 break
-                            future = pool.submit(self._extract_one, file_path, job_id, in_flight_lock, in_flight_count)
+                            future = pool.submit(
+                                self._extract_one,
+                                file_path,
+                                job_id,
+                                in_flight_lock,
+                                in_flight_count,
+                                in_flight_paths if self._debug else None,
+                            )
                             pending_futures[future] = file_path
 
                         # Collect completed extractions
@@ -411,6 +430,10 @@ class IngestPipeline:
 
                         # Update live display
                         if live is not None:
+                            debug_paths: list[str] | None = None
+                            if self._debug:
+                                with in_flight_lock:
+                                    debug_paths = [str(p) for p in in_flight_paths]
                             live.update(
                                 _make_progress_line(
                                     job_start,
@@ -424,6 +447,7 @@ class IngestPipeline:
                                     timing_count,
                                     extraction_time,
                                     skipped=skip_counter[0],
+                                    in_flight_paths=debug_paths,
                                 )
                             )
 
@@ -557,11 +581,14 @@ class IngestPipeline:
         job_id: str,
         in_flight_lock: Lock,
         in_flight_count: list[int],
+        in_flight_paths: dict[Path, None] | None = None,
     ) -> tuple[list[Document], float, int]:
         """Extract documents from a file. Returns (docs, elapsed, empty_count)."""
         structlog.contextvars.bind_contextvars(job_id=job_id)
         with in_flight_lock:
             in_flight_count[0] += 1
+            if in_flight_paths is not None:
+                in_flight_paths[file_path] = None
         try:
             start = time.monotonic()
             empty_count: list[int] = [0]
@@ -587,6 +614,8 @@ class IngestPipeline:
         finally:
             with in_flight_lock:
                 in_flight_count[0] -= 1
+                if in_flight_paths is not None:
+                    in_flight_paths.pop(file_path, None)
 
     def _flush_batch(self, job_id: str, batch: list[tuple[str, Document]]) -> tuple[int, int, float, float]:
         """Index a batch. Returns (processed, failed, embed_time, index_time)."""
