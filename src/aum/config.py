@@ -177,7 +177,7 @@ class AumConfig(BaseSettings):
     log_level: str = "INFO"
     # Log output format: "json" for structured logging, "console" for
     # human-readable output.
-    log_format: str = "json"
+    log_format: str = "console"
 
     # Number of documents per batch when bulk-indexing into Elasticsearch.
     ingest_batch_size: int = 50
