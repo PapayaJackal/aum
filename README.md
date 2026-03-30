@@ -79,7 +79,7 @@ The web UI will be available at `http://localhost:8000`.
 Ingest a directory of documents:
 
 ```sh
-uv run aum ingest /path/to/documents
+uv run aum ingest <index> /path/to/documents
 ```
 
 ## Configuration
@@ -120,13 +120,13 @@ All administration is done through the CLI. The web UI is only for
 searching.
 
 - `aum serve` -- Start the web server
-- `aum ingest <directory>` -- Ingest documents from a directory
+- `aum ingest <index> <directory>` -- Ingest documents from a directory
 - `aum resume [job_id]` -- Resume an interrupted ingest or embedding job
-- `aum embed` -- Generate embeddings for documents that lack them
+- `aum embed <index>` -- Generate embeddings for documents that lack them
 - `aum init <index>` -- Create or initialize a search index
 - `aum reset <index>` -- Delete and recreate an index
 - `aum indices` -- List all indices with document counts
-- `aum search <query>` -- Search from the command line
+- `aum search <index> <query>` -- Search from the command line
 - `aum jobs` -- List ingest and embedding jobs
 - `aum job <id>` -- Show details for a specific job
 - `aum retry <id>` -- Retry failed items from a job (`--only` to filter by error type)
@@ -182,14 +182,14 @@ ollama serve
 Enable embeddings and generate them:
 
 ```sh
-AUM_EMBEDDINGS_ENABLED=true uv run aum embed
+AUM_EMBEDDINGS_ENABLED=true uv run aum embed <index>
 ```
 
 The default model is `snowflake-arctic-embed2` (1024 dimensions). aum will
 pull it automatically on first use. To use a different model:
 
 ```sh
-uv run aum embed --backend ollama --model nomic-embed-text
+uv run aum embed <index> --backend ollama --model nomic-embed-text
 ```
 
 ### Using an OpenAI-compatible API
@@ -201,7 +201,7 @@ export AUM_EMBEDDINGS_BACKEND=openai
 export AUM_EMBEDDINGS_API_URL=https://api.openai.com/v1/embeddings
 export AUM_EMBEDDINGS_API_KEY=sk-...
 export AUM_EMBEDDINGS_MODEL=text-embedding-3-small
-AUM_EMBEDDINGS_ENABLED=true uv run aum embed
+AUM_EMBEDDINGS_ENABLED=true uv run aum embed <index>
 ```
 
 This also works with any OpenAI-compatible endpoint (vLLM, LiteLLM,
