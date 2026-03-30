@@ -103,25 +103,27 @@ class InstancePool(Generic[T]):
             yield instance.client
         except Exception as exc:
             POOL_ERRORS.labels(self._service, instance.url, type(exc).__name__).inc()
-            instance.consecutive_failures += 1
-            instance._last_failure_time = time.monotonic()
-            if instance.consecutive_failures >= self._failure_threshold and instance.healthy:
-                instance.healthy = False
-                POOL_INSTANCE_HEALTHY.labels(self._service, instance.url).set(0)
-                log.warning(
-                    "instance marked unhealthy",
-                    service=self._service,
-                    url=instance.url,
-                    consecutive_failures=instance.consecutive_failures,
-                )
+            with self._lock:
+                instance.consecutive_failures += 1
+                instance._last_failure_time = time.monotonic()
+                if instance.consecutive_failures >= self._failure_threshold and instance.healthy:
+                    instance.healthy = False
+                    POOL_INSTANCE_HEALTHY.labels(self._service, instance.url).set(0)
+                    log.warning(
+                        "instance marked unhealthy",
+                        service=self._service,
+                        url=instance.url,
+                        consecutive_failures=instance.consecutive_failures,
+                    )
             raise
         else:
-            if instance.consecutive_failures > 0:
-                instance.consecutive_failures = 0
-            if not instance.healthy:
-                instance.healthy = True
-                POOL_INSTANCE_HEALTHY.labels(self._service, instance.url).set(1)
-                log.info("instance recovered", service=self._service, url=instance.url)
+            with self._lock:
+                if instance.consecutive_failures > 0:
+                    instance.consecutive_failures = 0
+                if not instance.healthy:
+                    instance.healthy = True
+                    POOL_INSTANCE_HEALTHY.labels(self._service, instance.url).set(1)
+                    log.info("instance recovered", service=self._service, url=instance.url)
         finally:
             POOL_LATENCY.labels(self._service, instance.url).observe(time.monotonic() - start)
             POOL_IN_FLIGHT.labels(self._service, instance.url).dec()
