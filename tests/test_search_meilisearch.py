@@ -1019,9 +1019,14 @@ class TestListIndices:
         mock_client.get_indexes.return_value = {"results": [hidden, visible]}
         assert backend.list_indices() == ["public"]
 
-    def test_returns_empty_on_error(self, backend: MeilisearchBackend, mock_client: MagicMock):
-        mock_client.get_indexes.side_effect = Exception("network error")
+    def test_returns_empty_on_communication_error(self, backend: MeilisearchBackend, mock_client: MagicMock):
+        mock_client.get_indexes.side_effect = meilisearch.errors.MeilisearchCommunicationError("network error")
         assert backend.list_indices() == []
+
+    def test_raises_non_communication_errors(self, backend: MeilisearchBackend, mock_client: MagicMock):
+        mock_client.get_indexes.side_effect = ValueError("bad config")
+        with pytest.raises(ValueError):
+            backend.list_indices()
 
 
 # ---------------------------------------------------------------------------
