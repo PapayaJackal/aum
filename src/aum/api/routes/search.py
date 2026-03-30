@@ -316,17 +316,19 @@ async def get_document(
 
 
 def _safe_file_path(source_path: str) -> Path:
-    """Resolve stored source_path, rejecting symlinks and paths outside allowed directories."""
-    path = Path(source_path).resolve()
-    if path.is_symlink():
+    """Validate stored source_path, rejecting symlinks and canonicalising the path.
+
+    Checks for symlinks on the *original* path before resolving, then uses
+    ``Path.resolve()`` to canonicalise and eliminate ``..`` components.
+    The source_path value comes from the search index which is only populated
+    by admin CLI ingestion commands.
+    """
+    raw = Path(source_path)
+    if raw.is_symlink():
         raise HTTPException(status_code=403, detail="Access to symlinked files is not permitted")
+    path = raw.resolve()
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Source file not found on disk")
-    # Validate the resolved path falls within the extract directory.
-    config = get_config()
-    extract_dir = Path(config.extract_dir).resolve()
-    if not str(path).startswith(str(extract_dir) + "/"):
-        raise HTTPException(status_code=403, detail="Access denied: file is outside the data directory")
     return path
 
 

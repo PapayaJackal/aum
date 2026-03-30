@@ -46,7 +46,7 @@ class TestOAuthGetOrCreateUser:
         assert user1.id == user2.id
         assert user1.username == user2.username
 
-    def test_links_by_email(self):
+    def test_same_email_different_provider_creates_separate_user(self):
         # First login via GitHub
         user1 = self.manager.get_or_create_user(
             "github",
@@ -56,7 +56,8 @@ class TestOAuthGetOrCreateUser:
                 "name": "Carol",
             },
         )
-        # Second login via Google with same email → links to existing user
+        # Second login via Google with same email — separate user to prevent
+        # cross-provider account takeover via unverified email claims.
         user2 = self.manager.get_or_create_user(
             "google",
             {
@@ -65,7 +66,7 @@ class TestOAuthGetOrCreateUser:
                 "name": "Carol D",
             },
         )
-        assert user1.id == user2.id
+        assert user1.id != user2.id
 
     def test_unique_username_collision(self):
         user1 = self.manager.get_or_create_user(
