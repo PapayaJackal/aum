@@ -565,12 +565,19 @@ class IngestPipeline:
         try:
             start = time.monotonic()
             empty_count: list[int] = [0]
+            seen_errors: set[tuple[str, str]] = set()
 
             def _record_sub_error(path: Path, etype: str, msg: str) -> None:
                 DOCS_FAILED.labels(error_type=etype).inc()
-                self._tracker.record_error(job_id, path, etype, msg)
                 if etype == "EmptyExtraction":
                     empty_count[0] += 1
+                # Only record the first occurrence per (path, error_type)
+                # so a container file with thousands of parts doesn't
+                # generate thousands of identical tracker entries.
+                key = (str(path), etype)
+                if key not in seen_errors:
+                    seen_errors.add(key)
+                    self._tracker.record_error(job_id, path, etype, msg)
 
             with self._extractor_pool.acquire() as extractor:
                 docs = extractor.extract(file_path, record_error=_record_sub_error)
@@ -606,15 +613,19 @@ class IngestPipeline:
             return 0, len(docs)
 
         # Record any content truncations so they show up in `aum status --errors`.
+        # Skip truncations for docs that also failed — indexing failure is
+        # the more important error and recording both duplicates the entry.
         docs_by_id = {doc_id: doc for doc_id, doc in docs}
+        failed_ids = {doc_id for doc_id, _ in result.failures} if result.failures else set()
         for doc_id, original_chars, truncated_chars in result.truncated:
+            if doc_id in failed_ids:
+                continue
             doc = docs_by_id.get(doc_id)
             path = doc.source_path if doc else doc_id
             msg = f"content truncated from {original_chars} to {truncated_chars} chars to fit payload limit"
             self._tracker.record_error(job_id, path, "ContentTruncated", msg)
 
         if result.failures:
-            failed_ids = {doc_id for doc_id, _ in result.failures}
             for doc_id, reason in result.failures:
                 DOCS_FAILED.labels(error_type="IndexingError").inc()
                 doc = docs_by_id.get(doc_id)

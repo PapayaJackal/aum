@@ -186,6 +186,10 @@ class AumConfig(BaseSettings):
     # Maximum nesting depth for recursive extraction of archives, email
     # attachments, and other compound documents.
     ingest_max_extract_depth: int = 5
+    # Maximum content length in characters per extracted document. Content
+    # exceeding this is truncated and a ContentTruncated warning recorded
+    # so the user can split or re-extract the file. 0 = no limit.
+    ingest_max_content_length: int = 10 * 1024 * 1024
 
     @property
     def db_path(self) -> str:

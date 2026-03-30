@@ -10,7 +10,7 @@ import httpx
 import structlog
 
 from aum.extraction.base import ExtractionDepthError, ExtractionError, RecordErrorFn
-from aum.metrics import EXTRACTION_DURATION, EXTRACTION_ERRORS
+from aum.metrics import DOCS_TRUNCATED, EXTRACTION_DURATION, EXTRACTION_ERRORS
 from aum.models import Document
 
 log = structlog.get_logger()
@@ -140,6 +140,7 @@ class TikaExtractor:
         index_name: str = "default",
         max_depth: int = 5,
         request_timeout: int = 300,
+        max_content_length: int = 0,
     ) -> None:
         self._server_url = server_url.rstrip("/")
         self._ocr_enabled = ocr_enabled
@@ -147,6 +148,7 @@ class TikaExtractor:
         self._extract_dir = Path(extract_dir)
         self._index_name = index_name
         self._max_depth = max_depth
+        self._max_content_length = max_content_length
         self._request_timeout = request_timeout
         self._client = httpx.Client(timeout=request_timeout)
 
@@ -199,18 +201,40 @@ class TikaExtractor:
             except ExtractionDepthError:
                 raise
             except ExtractionError as exc:
+                # Unpack failed entirely (e.g. corrupted/truncated archive).
+                # Drop all embedded parts — indexing thousands of empty
+                # documents just pollutes the index and error log.  Record
+                # a single error so the user can investigate the file.
                 log.warning(
-                    "unpack failed, embedded docs will lack download files",
+                    "unpack failed, dropping embedded documents",
                     file_path=str(file_path),
+                    embedded_count=len(parts) - 1,
                     error=str(exc),
                 )
+                EXTRACTION_ERRORS.labels(error_type="UnpackError").inc()
+                if record_error is not None:
+                    record_error(
+                        file_path,
+                        "UnpackError",
+                        f"failed to unpack {len(parts) - 1} embedded documents: {exc}",
+                    )
+                parts = parts[:1]  # keep only the container
 
         EXTRACTION_DURATION.observe(time.monotonic() - start)
 
         documents: list[Document] = []
+        empty_extractions = 0
+        _size_cache: dict[Path, int] = {}
 
         for i, part in enumerate(parts):
-            content = _condense_whitespace((part.get(TIKA_CONTENT_KEY) or "").strip())
+            raw = (part.get(TIKA_CONTENT_KEY) or "").strip()
+            # Truncate before whitespace condensing so we don't waste CPU
+            # processing megabytes of content that will be discarded.
+            original_length = 0
+            if self._max_content_length and len(raw) > self._max_content_length:
+                original_length = len(raw)
+                raw = raw[: self._max_content_length]
+            content = _condense_whitespace(raw)
             metadata = _normalize_metadata(part)
 
             if i == 0:
@@ -234,21 +258,46 @@ class TikaExtractor:
                 else:
                     metadata["_aum_extracted_from"] = str(file_path)
 
+            if original_length:
+                DOCS_TRUNCATED.inc()
+                log.warning(
+                    "content truncated",
+                    file_path=str(source),
+                    original_chars=original_length,
+                    truncated_chars=self._max_content_length,
+                )
+                if record_error is not None:
+                    record_error(
+                        source,
+                        "ContentTruncated",
+                        f"content truncated from {original_length} to {self._max_content_length} chars"
+                        " (exceeded ingest_max_content_length limit)",
+                    )
+
             documents.append(Document(source_path=source, content=content, metadata=metadata))
 
-            # Record empty extraction for any document (container or embedded)
-            # that produced no text from a non-zero-size source.
             if not content:
-                try:
-                    src_size = source.stat().st_size
-                except OSError:
-                    src_size = 0
-                if src_size > 0:
-                    EXTRACTION_ERRORS.labels(error_type="EmptyExtraction").inc()
-                    msg = f"Tika produced no text for {source} ({src_size} bytes)"
-                    log.warning("empty extraction", file_path=str(source), file_size=src_size)
-                    if record_error is not None:
-                        record_error(source, "EmptyExtraction", msg)
+                if source not in _size_cache:
+                    try:
+                        _size_cache[source] = source.stat().st_size
+                    except OSError:
+                        _size_cache[source] = 0
+                if _size_cache[source] > 0:
+                    empty_extractions += 1
+
+        if empty_extractions:
+            EXTRACTION_ERRORS.labels(error_type="EmptyExtraction").inc(empty_extractions)
+            log.warning(
+                "empty extractions",
+                file_path=str(file_path),
+                count=empty_extractions,
+            )
+            if record_error is not None:
+                record_error(
+                    file_path,
+                    "EmptyExtraction",
+                    f"Tika produced no text for {empty_extractions} document(s) from {file_path}",
+                )
 
         log.info(
             "extracted document",

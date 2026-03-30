@@ -504,3 +504,150 @@ class TestPipelineResume:
         assert job is not None
         assert job.processed == 1
         assert job.skipped == 0
+
+
+class TestSubErrorDeduplication:
+    """Verify that multiple identical sub-errors from a single file
+    (e.g. container with many empty embedded docs) produce only one
+    tracker entry."""
+
+    def test_many_empty_parts_produce_one_tracker_entry(self, tmp_path: Path, tracker: JobTracker) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "archive.zip").write_bytes(b"fake zip content")
+
+        def fake_extract(file_path: Path, record_error: RecordErrorFn | None = None) -> list[Document]:
+            # Simulate a container with 100 empty embedded documents
+            docs = []
+            for i in range(100):
+                docs.append(Document(source_path=file_path, content="", metadata={}))
+                if record_error is not None:
+                    record_error(file_path, "EmptyExtraction", f"no text for part {i}")
+            return docs
+
+        pipeline = IngestPipeline(
+            extractor_pool=_stub_extractor_pool(fake_extract),
+            search_backend=_stub_backend(),
+            tracker=tracker,
+            batch_size=200,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run(docs_dir)
+
+        job = tracker.get_job(job.job_id, include_errors=True)
+        assert job is not None
+        empty_errors = [e for e in job.errors if e.error_type == "EmptyExtraction"]
+        # Only one error entry despite 100 empty parts from the same file
+        assert len(empty_errors) == 1
+
+    def test_different_error_types_still_recorded_separately(self, tmp_path: Path, tracker: JobTracker) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "mixed.bin").write_bytes(b"content")
+
+        def fake_extract(file_path: Path, record_error: RecordErrorFn | None = None) -> list[Document]:
+            if record_error is not None:
+                record_error(file_path, "EmptyExtraction", "no text")
+                record_error(file_path, "ContentTruncated", "truncated")
+            return [Document(source_path=file_path, content="text", metadata={})]
+
+        pipeline = IngestPipeline(
+            extractor_pool=_stub_extractor_pool(fake_extract),
+            search_backend=_stub_backend(),
+            tracker=tracker,
+            batch_size=10,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run(docs_dir)
+
+        job = tracker.get_job(job.job_id, include_errors=True)
+        assert job is not None
+        assert len(job.errors) == 2
+        error_types = {e.error_type for e in job.errors}
+        assert error_types == {"EmptyExtraction", "ContentTruncated"}
+
+
+class TestTrackerUniqueConstraint:
+    """The UNIQUE(job_id, file_path, error_type) constraint silently
+    ignores duplicate error entries."""
+
+    def test_duplicate_error_ignored(self, tracker: JobTracker):
+        tracker.create_job("dup1", Path("/data"), total_files=5)
+        tracker.record_error("dup1", Path("/data/a.pdf"), "IndexingError", "first")
+        # Same (job, path, error_type) — should be silently ignored
+        tracker.record_error("dup1", Path("/data/a.pdf"), "IndexingError", "second")
+
+        errors = tracker.get_errors("dup1")
+        assert len(errors) == 1
+        assert errors[0].message == "first"
+
+    def test_different_error_types_not_affected(self, tracker: JobTracker):
+        tracker.create_job("dup2", Path("/data"), total_files=5)
+        tracker.record_error("dup2", Path("/data/a.pdf"), "IndexingError", "idx fail")
+        tracker.record_error("dup2", Path("/data/a.pdf"), "ContentTruncated", "truncated")
+
+        errors = tracker.get_errors("dup2")
+        assert len(errors) == 2
+
+
+class TestIndexBatchTruncatedAndFailed:
+    """A doc that is both truncated and fails indexing should produce
+    only the IndexingError entry, not both."""
+
+    def test_truncated_and_failed_doc_recorded_once(self, tmp_path: Path, tracker: JobTracker) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "big.pdf").write_bytes(b"x" * 100)
+
+        def fake_extract(file_path: Path, record_error: RecordErrorFn | None = None) -> list[Document]:
+            return [Document(source_path=file_path, content="hello", metadata={})]
+
+        backend = _stub_backend()
+        backend.index_batch.return_value = BatchResult(
+            truncated=[("doc-1", 500_000, 100_000)],
+            failures=[("doc-1", "payload_too_large: batch failed")],
+        )
+
+        pipeline = IngestPipeline(
+            extractor_pool=_stub_extractor_pool(fake_extract),
+            search_backend=backend,
+            tracker=tracker,
+            batch_size=10,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run(docs_dir)
+
+        job = tracker.get_job(job.job_id, include_errors=True)
+        assert job is not None
+        indexing_errors = [e for e in job.errors if e.error_type == "IndexingError"]
+        truncation_errors = [e for e in job.errors if e.error_type == "ContentTruncated"]
+        assert len(indexing_errors) == 1
+        assert len(truncation_errors) == 0
+
+    def test_truncated_only_doc_still_recorded(self, tmp_path: Path, tracker: JobTracker) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "big.pdf").write_bytes(b"x" * 100)
+
+        def fake_extract(file_path: Path, record_error: RecordErrorFn | None = None) -> list[Document]:
+            return [Document(source_path=file_path, content="hello", metadata={})]
+
+        backend = _stub_backend()
+        backend.index_batch.return_value = BatchResult(
+            truncated=[("doc-1", 500_000, 100_000)],
+            failures=[],
+        )
+
+        pipeline = IngestPipeline(
+            extractor_pool=_stub_extractor_pool(fake_extract),
+            search_backend=backend,
+            tracker=tracker,
+            batch_size=10,
+            max_workers=1,
+        )
+        job, _, _ = pipeline.run(docs_dir)
+
+        job = tracker.get_job(job.job_id, include_errors=True)
+        assert job is not None
+        truncation_errors = [e for e in job.errors if e.error_type == "ContentTruncated"]
+        assert len(truncation_errors) == 1

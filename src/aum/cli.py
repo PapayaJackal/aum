@@ -79,6 +79,7 @@ def _make_ingest_pipeline(
             index_name=idx,
             max_depth=config.ingest_max_extract_depth,
             request_timeout=config.tika_request_timeout,
+            max_content_length=config.ingest_max_content_length,
         )
         pool_items.append(Instance(url=ti.url, client=extractor, concurrency=ti.concurrency))
 

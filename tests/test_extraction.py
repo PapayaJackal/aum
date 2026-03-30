@@ -380,8 +380,10 @@ class TestTikaExtractor:
 
     # -- Unpack failure fallback -------------------------------------------
 
-    def test_unpack_failure_still_returns_text(self, tmp_path: Path) -> None:
-        """If /unpack fails, we still return docs from /rmeta (just no download files)."""
+    def test_unpack_failure_drops_embedded_docs(self, tmp_path: Path) -> None:
+        """If /unpack fails (e.g. corrupted archive), embedded parts are
+        dropped and a single UnpackError is recorded instead of thousands
+        of EmptyExtraction errors."""
         source = tmp_path / "email.eml"
         source.write_bytes(b"email")
 
@@ -393,16 +395,19 @@ class TestTikaExtractor:
             ]
         )
         unpack_fail = httpx.Response(500, text="Internal Server Error")
+        errors: list[tuple] = []
 
         with patch.object(extractor, "_client") as mock_client:
             mock_client.put.side_effect = [rmeta, unpack_fail]
-            docs = extractor.extract(source)
+            docs = extractor.extract(source, record_error=lambda p, et, msg: errors.append((p, et, msg)))
 
-        assert len(docs) == 2
+        # Only the container document is returned
+        assert len(docs) == 1
         assert docs[0].content == "Body"
-        assert docs[1].content == "Attachment"
-        # Falls back to container as source
-        assert docs[1].source_path == source
+        # A single UnpackError is recorded
+        assert len(errors) == 1
+        assert errors[0][1] == "UnpackError"
+        assert "1 embedded" in errors[0][2]
 
     def test_unpack_204_no_content(self, tmp_path: Path) -> None:
         """If /unpack returns 204, no attachments are saved."""
@@ -453,9 +458,11 @@ class TestTikaExtractor:
         assert docs[1].content == ""
         assert docs[1].metadata["Content-Type"] == "image/jpeg"
         assert docs[1].metadata["_aum_extracted_from"] == str(source)
-        # The image attachment should be recorded as empty
+        # A single aggregated EmptyExtraction error for the container
         assert len(errors) == 1
+        assert errors[0][0] == source
         assert errors[0][1] == "EmptyExtraction"
+        assert "1 document(s)" in errors[0][2]
 
     # -- Container metadata with empty content and embedded docs -----------
 
@@ -501,7 +508,9 @@ class TestTikaExtractor:
         assert docs[0].content == ""
         assert docs[0].metadata["Content-Type"] == "application/pdf"
         assert len(errors) == 1
+        assert errors[0][0] == source
         assert errors[0][1] == "EmptyExtraction"
+        assert "1 document(s)" in errors[0][2]
 
     def test_zero_length_file_no_error(self, tmp_path: Path) -> None:
         """A zero-byte file gets a placeholder but no failure recorded."""
@@ -536,7 +545,9 @@ class TestTikaExtractor:
         assert len(docs) == 1
         assert docs[0].content == ""
         assert len(errors) == 1
+        assert errors[0][0] == source
         assert errors[0][1] == "EmptyExtraction"
+        assert "1 document(s)" in errors[0][2]
 
     # -- Error handling ----------------------------------------------------
 
@@ -589,3 +600,95 @@ class TestTikaExtractor:
         assert "X-TIKA:Parsed-By" not in docs[0].metadata
         assert "X-TIKA:parse_time_millis" not in docs[0].metadata
         assert _ERP_KEY not in docs[0].metadata
+
+    # -- Content length truncation -----------------------------------------
+
+    def test_content_truncated_when_exceeding_limit(self, tmp_path: Path) -> None:
+        source = tmp_path / "huge.txt"
+        source.write_bytes(b"x" * 100)
+
+        extractor = TikaExtractor(
+            server_url="http://localhost:9998",
+            extract_dir=str(tmp_path / "extracted"),
+            max_content_length=50,
+        )
+        rmeta = _rmeta_response([{TIKA_CONTENT_KEY: "a" * 200}])
+        errors: list[tuple] = []
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.return_value = rmeta
+            docs = extractor.extract(source, record_error=lambda p, et, msg: errors.append((p, et, msg)))
+
+        assert len(docs) == 1
+        assert len(docs[0].content) == 50
+        assert len(errors) == 1
+        assert errors[0][1] == "ContentTruncated"
+        assert "200" in errors[0][2]
+
+    def test_content_under_limit_not_truncated(self, tmp_path: Path) -> None:
+        source = tmp_path / "small.txt"
+        source.write_bytes(b"x" * 10)
+
+        extractor = TikaExtractor(
+            server_url="http://localhost:9998",
+            extract_dir=str(tmp_path / "extracted"),
+            max_content_length=500,
+        )
+        rmeta = _rmeta_response([{TIKA_CONTENT_KEY: "hello world"}])
+        errors: list[tuple] = []
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.return_value = rmeta
+            docs = extractor.extract(source, record_error=lambda p, et, msg: errors.append((p, et, msg)))
+
+        assert docs[0].content == "hello world"
+        assert errors == []
+
+    def test_zero_max_content_length_disables_truncation(self, tmp_path: Path) -> None:
+        source = tmp_path / "big.txt"
+        source.write_bytes(b"x" * 100)
+
+        extractor = TikaExtractor(
+            server_url="http://localhost:9998",
+            extract_dir=str(tmp_path / "extracted"),
+            max_content_length=0,
+        )
+        long_content = "b" * 10_000
+        rmeta = _rmeta_response([{TIKA_CONTENT_KEY: long_content}])
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.return_value = rmeta
+            docs = extractor.extract(source)
+
+        assert len(docs[0].content) == 10_000
+
+    # -- Aggregated empty extraction errors --------------------------------
+
+    def test_many_empty_parts_produce_single_error(self, tmp_path: Path) -> None:
+        """A container with many empty embedded docs should record a single
+        aggregated EmptyExtraction error, not one per part."""
+        source = tmp_path / "archive.zip"
+        source.write_bytes(b"PK fake zip")
+
+        extractor = self._make_extractor(tmp_path)
+        parts = [{TIKA_CONTENT_KEY: "container text"}]
+        attachments = {}
+        for i in range(50):
+            name = f"empty_{i}.bin"
+            parts.append({"resourceName": name, _ERP_KEY: f"/{name}"})
+            attachments[name] = b"\xff" * 10  # non-zero so EmptyExtraction triggers
+
+        rmeta = _rmeta_response(parts)
+        unpack = _unpack_response(attachments)
+        errors: list[tuple] = []
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack]
+            docs = extractor.extract(source, record_error=lambda p, et, msg: errors.append((p, et, msg)))
+
+        assert len(docs) == 51  # container + 50 embedded
+        # Only one aggregated EmptyExtraction error for the container
+        empty_errors = [e for e in errors if e[1] == "EmptyExtraction"]
+        assert len(empty_errors) == 1
+        assert empty_errors[0][0] == source
+        assert "50 document(s)" in empty_errors[0][2]

@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS job_errors (
     file_path TEXT NOT NULL,
     error_type TEXT NOT NULL,
     message TEXT NOT NULL,
-    timestamp TEXT NOT NULL
+    timestamp TEXT NOT NULL,
+    UNIQUE(job_id, file_path, error_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_job_errors_job_id ON job_errors(job_id);
@@ -134,7 +135,8 @@ class JobTracker:
         now = datetime.now(UTC).isoformat()
         with self._lock:
             self._conn.execute(
-                "INSERT INTO job_errors (job_id, file_path, error_type, message, timestamp) VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO job_errors (job_id, file_path, error_type, message, timestamp)"
+                " VALUES (?, ?, ?, ?, ?)",
                 (job_id, str(file_path), error_type, message, now),
             )
             self._conn.commit()
