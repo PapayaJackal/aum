@@ -181,7 +181,10 @@
     if (indexParam) {
       searchState.selectedIndices = indexParam.split(",").filter(Boolean);
     }
-    searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
+    searchState.pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(params.get("pageSize") || String(searchState.pageSize)) || 20),
+    );
     const facetsStr = params.get("facets");
     if (facetsStr) {
       try {
@@ -229,7 +232,10 @@
     if (indexParam) {
       searchState.selectedIndices = indexParam.split(",").filter(Boolean);
     }
-    searchState.pageSize = parseInt(params.get("pageSize") || String(searchState.pageSize));
+    searchState.pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(params.get("pageSize") || String(searchState.pageSize)) || 20),
+    );
     const facetsStr = params.get("facets");
     if (facetsStr) {
       try {
