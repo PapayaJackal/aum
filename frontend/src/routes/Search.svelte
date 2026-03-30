@@ -143,6 +143,7 @@
     } finally {
       loading = false;
       updateSearchUrl();
+      window.scrollTo({ top: 0 });
     }
   }
 
