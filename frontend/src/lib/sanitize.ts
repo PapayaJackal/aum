@@ -144,19 +144,12 @@ purifier.addHook("afterSanitizeAttributes", (node: Element) => {
   }
 });
 
-// Injected after sanitization to prevent link clicks while keeping
-// right-click "Copy link address" functional.  Runs inside the sandboxed
-// iframe (allow-scripts but NOT allow-same-origin).
-const LINK_BLOCK_SCRIPT = `<script>document.addEventListener("click",function(e){if(e.target.closest("a"))e.preventDefault();})</script>`;
-
 /**
  * Sanitize an HTML string for safe rendering inside a sandboxed iframe.
  *
  * Strips scripts, event handlers, and external resource references.
  * Allows inline styles and ``data:`` image URIs.
- * Appends a small script to block link navigation (right-click still works).
  */
 export function sanitizeHtmlForPreview(dirty: string): string {
-  const clean = purifier.sanitize(dirty, HTML_PREVIEW_CONFIG);
-  return clean + LINK_BLOCK_SCRIPT;
+  return purifier.sanitize(dirty, HTML_PREVIEW_CONFIG);
 }

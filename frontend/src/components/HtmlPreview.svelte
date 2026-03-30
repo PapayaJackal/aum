@@ -13,6 +13,30 @@
   let sanitizedHtml = $state<string | null>(null);
   let loading = $state(true);
   let error = $state("");
+  let iframeEl = $state<HTMLIFrameElement | null>(null);
+  let resizeObserver: ResizeObserver | null = null;
+
+  function syncIframeHeight() {
+    if (!iframeEl?.contentDocument) return;
+    const h = iframeEl.contentDocument.documentElement.scrollHeight;
+    if (h > 0) iframeEl.style.height = h + "px";
+  }
+
+  function handleLoad() {
+    if (!iframeEl?.contentDocument) return;
+
+    // Block link navigation while keeping right-click "Copy link address" functional.
+    iframeEl.contentDocument.addEventListener("click", (e: MouseEvent) => {
+      if ((e.target as Element)?.closest("a")) e.preventDefault();
+    });
+
+    // Observe content size changes so the iframe always fits its content.
+    resizeObserver?.disconnect();
+    resizeObserver = new ResizeObserver(syncIframeHeight);
+    resizeObserver.observe(iframeEl.contentDocument.documentElement);
+
+    syncIframeHeight();
+  }
 
   $effect(() => {
     loading = true;
@@ -36,6 +60,8 @@
 
     return () => {
       cancelled = true;
+      resizeObserver?.disconnect();
+      resizeObserver = null;
     };
   });
 </script>
@@ -46,10 +72,12 @@
   <div class="bg-red-50 text-red-600 p-3 rounded text-sm">{error}</div>
 {:else if sanitizedHtml}
   <iframe
+    bind:this={iframeEl}
     srcdoc={sanitizedHtml}
-    sandbox="allow-scripts"
+    sandbox="allow-same-origin"
     class="w-full border-none rounded bg-white"
-    style="min-height: 400px; height: 70vh;"
+    style="min-height: 200px; overflow: hidden;"
     title="Document preview"
+    onload={handleLoad}
   ></iframe>
 {/if}

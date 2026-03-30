@@ -16,6 +16,7 @@
   import FacetPanel from "../components/FacetPanel.svelte";
   import IndexSelector from "../components/IndexSelector.svelte";
   import Document from "./Document.svelte";
+  import KeyboardHelp from "../components/KeyboardHelp.svelte";
 
   let { header }: { header: Snippet<[() => ReturnType<Snippet>, () => void]> } = $props();
 
@@ -250,6 +251,7 @@
     e.preventDefault();
     searchState.selectedDocId = "";
     searchState.selectedDocIndex = "";
+    (document.activeElement as HTMLElement)?.blur();
     doSearch(1);
   }
 
@@ -314,6 +316,10 @@
   let resultsSplit = $state(35);
   let facetVisible = $state(true);
   let previewFullscreen = $state(false);
+  let searchInputEl = $state<HTMLInputElement | null>(null);
+  let previewAsideEl = $state<HTMLElement | null>(null);
+  let showKeyboardHelp = $state(false);
+  let currentMarkIndex = $state(-1);
   let mainContainer = $state<HTMLElement | null>(null);
   let dragging = $state(false);
   let dragStartX = 0;
@@ -356,9 +362,142 @@
     document.removeEventListener("mousemove", onDragMove);
     document.removeEventListener("mouseup", stopDrag);
   }
+
+  // --- Vim-style keyboard navigation ---
+
+  // Reset mark index when selected document changes.
+  $effect(() => {
+    const _ = searchState.selectedDocId;
+    currentMarkIndex = -1;
+  });
+
+  function isEditableActive(): boolean {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+    if ((el as HTMLElement).isContentEditable) return true;
+    return false;
+  }
+
+  function scrollPreview(delta: number) {
+    if (!previewAsideEl) return;
+    previewAsideEl.scrollBy({ top: delta, behavior: "instant" });
+  }
+
+  function jumpToMark(direction: 1 | -1) {
+    if (!previewAsideEl) return;
+    const marks = previewAsideEl.querySelectorAll("mark");
+    if (marks.length === 0) return;
+
+    const prev = previewAsideEl.querySelector("mark.active-mark");
+    if (prev) prev.classList.remove("active-mark");
+
+    // Clamp in case mark count changed since last navigation.
+    if (currentMarkIndex >= marks.length) currentMarkIndex = -1;
+
+    if (currentMarkIndex < 0) {
+      currentMarkIndex = direction === 1 ? 0 : marks.length - 1;
+    } else {
+      currentMarkIndex += direction;
+      if (currentMarkIndex >= marks.length) currentMarkIndex = 0;
+      if (currentMarkIndex < 0) currentMarkIndex = marks.length - 1;
+    }
+
+    const target = marks[currentMarkIndex];
+    target.classList.add("active-mark");
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  async function navigateResult(direction: 1 | -1) {
+    const results = searchState.results;
+    if (results.length === 0) return;
+
+    const currentIdx = results.findIndex((r) => r.doc_id === searchState.selectedDocId);
+
+    if (currentIdx < 0) {
+      const target = direction === 1 ? results[0] : results[results.length - 1];
+      navigateDoc(target.doc_id, target.index);
+      return;
+    }
+
+    const nextIdx = currentIdx + direction;
+
+    if (nextIdx >= 0 && nextIdx < results.length) {
+      navigateDoc(results[nextIdx].doc_id, results[nextIdx].index);
+      return;
+    }
+
+    // Auto-pagination
+    if (direction === 1 && searchState.currentPage < totalPages) {
+      await doSearch(searchState.currentPage + 1, false);
+      if (searchState.results.length > 0) {
+        const first = searchState.results[0];
+        navigateDoc(first.doc_id, first.index);
+      }
+    } else if (direction === -1 && searchState.currentPage > 1) {
+      await doSearch(searchState.currentPage - 1, false);
+      if (searchState.results.length > 0) {
+        const last = searchState.results[searchState.results.length - 1];
+        navigateDoc(last.doc_id, last.index);
+      }
+    }
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    // ? toggles help (Shift+/ on US keyboards)
+    if (e.key === "?" && !e.ctrlKey && !e.metaKey && !isEditableActive()) {
+      e.preventDefault();
+      showKeyboardHelp = !showKeyboardHelp;
+      return;
+    }
+
+    if (e.key === "Escape") {
+      if (showKeyboardHelp) {
+        showKeyboardHelp = false;
+        return;
+      }
+      if (isEditableActive()) {
+        (document.activeElement as HTMLElement)?.blur();
+        return;
+      }
+      if (sidebarOpen) {
+        closeSidebar();
+        return;
+      }
+    }
+
+    // All other vim keys: skip if in editable element or help overlay is open
+    if (isEditableActive() || showKeyboardHelp) return;
+
+    switch (e.key) {
+      case "/":
+        e.preventDefault();
+        searchInputEl?.focus();
+        break;
+      case "j":
+        scrollPreview(120);
+        break;
+      case "k":
+        scrollPreview(-120);
+        break;
+      case "n":
+        jumpToMark(1);
+        break;
+      case "b":
+        jumpToMark(-1);
+        break;
+      case "l":
+        navigateResult(1);
+        break;
+      case "h":
+        navigateResult(-1);
+        break;
+    }
+  }
 </script>
 
-<svelte:window onhashchange={onHashChange} />
+<svelte:window onhashchange={onHashChange} onkeydown={handleKeydown} />
 
 <svelte:head>
   <title>{searchState.submittedQuery ? `aum - ${searchState.submittedQuery}` : "aum"}</title>
@@ -370,6 +509,7 @@
       type="search"
       placeholder="Search documents..."
       bind:value={searchState.query}
+      bind:this={searchInputEl}
       class="flex-1 px-3 py-[0.45rem] border-none rounded bg-white/95 text-gray-800 text-base min-w-0 focus:outline-2 focus:outline-(--color-accent)"
     />
     {#if indices.length > 0}
@@ -558,6 +698,7 @@
 
       {#if sidebarOpen}
         <aside
+          bind:this={previewAsideEl}
           class="flex-1 min-w-0 bg-gray-50 border-l border-gray-300 rounded-md shadow-[-2px_0_8px_rgba(0,0,0,0.05)] sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
         >
           {#key searchState.selectedDocId}
@@ -576,6 +717,10 @@
     </div>
   {/if}
 </main>
+
+{#if showKeyboardHelp}
+  <KeyboardHelp onClose={() => (showKeyboardHelp = false)} />
+{/if}
 
 <style>
   .drag-handle {
@@ -603,5 +748,10 @@
   .drag-handle:hover::after,
   .drag-handle.active::after {
     background: #4a7cf7;
+  }
+  :global(aside mark.active-mark) {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+    border-radius: 2px;
   }
 </style>

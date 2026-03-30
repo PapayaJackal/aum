@@ -30,6 +30,14 @@
   let fileType = $derived(result.metadata["File Type"] || "");
   let isSelected = $derived(searchState.selectedDocId === result.doc_id);
 
+  let buttonEl = $state<HTMLButtonElement | null>(null);
+
+  $effect(() => {
+    if (isSelected && buttonEl) {
+      buttonEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  });
+
   function handleClick() {
     searchState.selectedDocId = result.doc_id;
     searchState.selectedDocIndex = index;
@@ -38,6 +46,7 @@
 
 <button
   type="button"
+  bind:this={buttonEl}
   class="block w-full text-left font-[inherit] bg-white p-4 rounded-md shadow-sm no-underline text-inherit border-2 cursor-pointer transition-[box-shadow,border-color] duration-150 hover:shadow-md {isSelected
     ? 'border-(--color-accent) bg-blue-50'
     : 'border-transparent'}"

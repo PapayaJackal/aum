@@ -111,7 +111,7 @@
               });
             }
           },
-          { root: containerEl, rootMargin: "200px 0px" },
+          { root: null, rootMargin: "200px 0px" },
         );
 
         for (const el of pageEls) {
@@ -155,4 +155,4 @@
 {:else}
   <div class="text-xs text-gray-400 mb-2 text-center">{totalPages} page{totalPages === 1 ? "" : "s"}</div>
 {/if}
-<div bind:this={containerEl} class="overflow-y-auto max-h-[70vh] bg-gray-100 rounded"></div>
+<div bind:this={containerEl} class="bg-gray-100 rounded"></div>
