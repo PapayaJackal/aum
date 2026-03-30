@@ -781,8 +781,8 @@ class MeilisearchBackend:
         try:
             resp = self._client.get_indexes({"limit": 1000})
             return sorted(idx.uid for idx in resp.get("results", []) if not idx.uid.startswith("."))
-        except Exception:
-            log.exception("failed to list meilisearch indices")
+        except meilisearch.errors.MeilisearchCommunicationError:
+            log.exception("failed to list meilisearch indices (communication error)")
             return []
 
     # ---------------------------------------------------------------------------
