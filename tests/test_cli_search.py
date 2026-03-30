@@ -86,7 +86,7 @@ class TestSearchBasic:
         pass
 
     def test_text_search_returns_results(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia"])
+        result = runner.invoke(main, ["search", "test-idx", "russia"])
         assert result.exit_code == 0
         assert "docs/report.pdf" in result.output
         assert "docs/memo.docx" in result.output
@@ -99,28 +99,28 @@ class TestSearchBasic:
             1,
             None,
         )
-        result = runner.invoke(main, ["search", "test"])
+        result = runner.invoke(main, ["search", "test-idx", "test"])
         assert result.exit_code == 0
         assert "[1.000]" in result.output
 
     def test_no_results(self, runner, mock_backend):
         mock_backend.search_text.return_value = ([], 0, None)
-        result = runner.invoke(main, ["search", "nonexistent"])
+        result = runner.invoke(main, ["search", "test-idx", "nonexistent"])
         assert result.exit_code == 0
         assert "No results found" in result.output
 
     def test_result_count_display(self, runner):
-        result = runner.invoke(main, ["search", "russia"])
+        result = runner.invoke(main, ["search", "test-idx", "russia"])
         assert result.exit_code == 0
         assert "Showing 1-2 of 2 results" in result.output
 
     def test_score_displayed(self, runner):
-        result = runner.invoke(main, ["search", "russia"])
+        result = runner.invoke(main, ["search", "test-idx", "russia"])
         assert "[5.123]" in result.output
         assert "[3.456]" in result.output
 
     def test_display_path_used(self, runner):
-        result = runner.invoke(main, ["search", "russia"])
+        result = runner.invoke(main, ["search", "test-idx", "russia"])
         assert "docs/report.pdf" in result.output
         # Should not show the full source_path
         assert "/data/docs/report.pdf" not in result.output
@@ -131,7 +131,7 @@ class TestSearchBasic:
             1,
             None,
         )
-        result = runner.invoke(main, ["search", "test"])
+        result = runner.invoke(main, ["search", "test-idx", "test"])
         assert "/data/fallback.txt" in result.output
 
 
@@ -144,7 +144,7 @@ class TestSnippetDisplay:
         pass
 
     def test_strips_mark_tags(self, runner):
-        result = runner.invoke(main, ["search", "russia"])
+        result = runner.invoke(main, ["search", "test-idx", "russia"])
         assert "<mark>" not in result.output
         assert "</mark>" not in result.output
         assert "Russia is mentioned here" in result.output
@@ -156,7 +156,7 @@ class TestSnippetDisplay:
             1,
             None,
         )
-        result = runner.invoke(main, ["search", "test"])
+        result = runner.invoke(main, ["search", "test-idx", "test"])
         assert "..." in result.output
         # Should not contain the full 300 chars
         assert "x" * 201 not in result.output
@@ -171,7 +171,7 @@ class TestMetadataDisplay:
         pass
 
     def test_shows_metadata_inline(self, runner):
-        result = runner.invoke(main, ["search", "russia"])
+        result = runner.invoke(main, ["search", "test-idx", "russia"])
         assert "File Type: PDF" in result.output
         assert "Creator: Alice" in result.output
         assert "Created: 2023" in result.output
@@ -182,7 +182,7 @@ class TestMetadataDisplay:
             1,
             None,
         )
-        result = runner.invoke(main, ["search", "test"])
+        result = runner.invoke(main, ["search", "test-idx", "test"])
         # No metadata bracket line
         assert "[File Type" not in result.output
 
@@ -192,7 +192,7 @@ class TestMetadataDisplay:
             1,
             None,
         )
-        result = runner.invoke(main, ["search", "test"])
+        result = runner.invoke(main, ["search", "test-idx", "test"])
         assert "Creator: Alice, Bob" in result.output
 
 
@@ -205,7 +205,7 @@ class TestPagination:
         pass
 
     def test_offset_option(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--offset", "10"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--offset", "10"])
         assert result.exit_code == 0
         assert "Showing 11-12 of 2 results" in result.output
         mock_backend.search_text.assert_called_once_with(
@@ -213,7 +213,7 @@ class TestPagination:
         )
 
     def test_limit_option(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--limit", "5"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--limit", "5"])
         assert result.exit_code == 0
         mock_backend.search_text.assert_called_once_with(
             "russia", limit=5, offset=0, include_facets=False, filters=None, sort=None
@@ -225,7 +225,7 @@ class TestPagination:
             50,
             None,
         )
-        result = runner.invoke(main, ["search", "test", "--offset", "20"])
+        result = runner.invoke(main, ["search", "test-idx", "test", "--offset", "20"])
         assert "21." in result.output
         assert "Showing 21-21 of 50 results" in result.output
 
@@ -240,7 +240,7 @@ class TestFacets:
 
     def test_facets_hidden_by_default(self, runner, mock_backend):
         mock_backend.search_text.return_value = (SAMPLE_RESULTS, 2, SAMPLE_FACETS)
-        result = runner.invoke(main, ["search", "russia"])
+        result = runner.invoke(main, ["search", "test-idx", "russia"])
         assert "Available Facets" not in result.output
         # include_facets should be False when --show-facets not given
         mock_backend.search_text.assert_called_once_with(
@@ -249,7 +249,7 @@ class TestFacets:
 
     def test_show_facets_flag(self, runner, mock_backend):
         mock_backend.search_text.return_value = (SAMPLE_RESULTS, 2, SAMPLE_FACETS)
-        result = runner.invoke(main, ["search", "russia", "--show-facets"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--show-facets"])
         assert result.exit_code == 0
         assert "--- Available Facets ---" in result.output
         assert "File Type:" in result.output
@@ -265,7 +265,7 @@ class TestFacets:
 
     def test_show_facets_no_facets_returned(self, runner, mock_backend):
         mock_backend.search_text.return_value = (SAMPLE_RESULTS, 2, None)
-        result = runner.invoke(main, ["search", "russia", "--show-facets"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--show-facets"])
         assert result.exit_code == 0
         assert "Available Facets" not in result.output
 
@@ -279,7 +279,7 @@ class TestFilters:
         pass
 
     def test_file_type_filter(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--file-type", "PDF"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--file-type", "PDF"])
         assert result.exit_code == 0
         mock_backend.search_text.assert_called_once_with(
             "russia",
@@ -291,31 +291,31 @@ class TestFilters:
         )
 
     def test_multiple_file_type_filters(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--file-type", "PDF", "--file-type", "Word"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--file-type", "PDF", "--file-type", "Word"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["filters"]["File Type"] == ["PDF", "Word"]
 
     def test_creator_filter(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--creator", "Alice"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--creator", "Alice"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["filters"]["Creator"] == ["Alice"]
 
     def test_email_filter(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--email", "alice@example.com"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--email", "alice@example.com"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["filters"]["Email Addresses"] == ["alice@example.com"]
 
     def test_created_from_filter(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--created-from", "2020"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--created-from", "2020"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["filters"]["Created"] == ["2020", "2099"]
 
     def test_created_to_filter(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--created-to", "2023"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--created-to", "2023"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["filters"]["Created"] == ["1900", "2023"]
@@ -323,7 +323,7 @@ class TestFilters:
     def test_created_range_filter(self, runner, mock_backend):
         result = runner.invoke(
             main,
-            ["search", "russia", "--created-from", "2020", "--created-to", "2023"],
+            ["search", "test-idx", "russia", "--created-from", "2020", "--created-to", "2023"],
         )
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
@@ -334,6 +334,7 @@ class TestFilters:
             main,
             [
                 "search",
+                "test-idx",
                 "russia",
                 "--file-type",
                 "PDF",
@@ -351,7 +352,7 @@ class TestFilters:
         assert filters["Created"] == ["2020", "2099"]
 
     def test_no_filters_passes_none(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia"])
+        result = runner.invoke(main, ["search", "test-idx", "russia"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["filters"] is None
@@ -366,18 +367,18 @@ class TestSearchType:
         pass
 
     def test_default_is_text(self, runner, mock_backend):
-        runner.invoke(main, ["search", "russia"])
+        runner.invoke(main, ["search", "test-idx", "russia"])
         mock_backend.search_text.assert_called_once()
         mock_backend.search_vector.assert_not_called()
         mock_backend.search_hybrid.assert_not_called()
 
     def test_invalid_search_type(self, runner):
-        result = runner.invoke(main, ["search", "russia", "--type", "invalid"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--type", "invalid"])
         assert result.exit_code != 0
 
-    def test_index_option(self, runner, mock_backend):
+    def test_index_argument(self, runner, mock_backend):
         with patch("aum.api.deps.make_search_backend", return_value=mock_backend) as make_mock:
-            runner.invoke(main, ["search", "russia", "--index", "my-index"])
+            runner.invoke(main, ["search", "my-index", "russia"])
             make_mock.assert_called_once()
             call_args = make_mock.call_args
             assert call_args.kwargs.get("index") == "my-index" or call_args[1].get("index") == "my-index"
@@ -391,9 +392,9 @@ class TestMultiIndex:
     def setup(self, _patch_cli):
         pass
 
-    def test_multiple_index_options_joined(self, runner, mock_backend):
+    def test_comma_separated_index_joined(self, runner, mock_backend):
         with patch("aum.api.deps.make_search_backend", return_value=mock_backend) as make_mock:
-            result = runner.invoke(main, ["search", "russia", "--index", "idx1", "--index", "idx2"])
+            result = runner.invoke(main, ["search", "idx1,idx2", "russia"])
             assert result.exit_code == 0
             make_mock.assert_called_once()
             call_args = make_mock.call_args
@@ -422,7 +423,7 @@ class TestMultiIndex:
             ),
         ]
         mock_backend.search_text.return_value = (results_with_index, 2, None)
-        result = runner.invoke(main, ["search", "test", "--index", "idx1", "--index", "idx2"])
+        result = runner.invoke(main, ["search", "idx1,idx2", "test"])
         assert result.exit_code == 0
         assert "[idx1]" in result.output
         assert "[idx2]" in result.output
@@ -440,7 +441,7 @@ class TestMultiIndex:
             ),
         ]
         mock_backend.search_text.return_value = (results_with_index, 1, None)
-        result = runner.invoke(main, ["search", "test", "--index", "myidx"])
+        result = runner.invoke(main, ["search", "myidx", "test"])
         assert result.exit_code == 0
         # Single index: no [myidx] prefix shown
         assert "[myidx]" not in result.output
@@ -450,7 +451,7 @@ class TestMultiIndex:
         mock_tracker.get_embedding_model.return_value = None
         monkeypatch.setattr("aum.api.deps.make_tracker", lambda *a, **kw: mock_tracker)
 
-        result = runner.invoke(main, ["search", "test", "--type", "hybrid", "--index", "idx1", "--index", "idx2"])
+        result = runner.invoke(main, ["search", "idx1,idx2", "test", "--type", "hybrid"])
         assert result.exit_code != 0
         assert (
             "no embeddings found for index 'idx1'" in result.output.lower() or "no embeddings" in result.output.lower()
@@ -464,7 +465,7 @@ class TestMultiIndex:
         ]
         monkeypatch.setattr("aum.api.deps.make_tracker", lambda *a, **kw: mock_tracker)
 
-        result = runner.invoke(main, ["search", "test", "--type", "hybrid", "--index", "idx1", "--index", "idx2"])
+        result = runner.invoke(main, ["search", "idx1,idx2", "test", "--type", "hybrid"])
         assert result.exit_code != 0
         assert "mismatch" in result.output.lower()
 
@@ -478,34 +479,34 @@ class TestSort:
         pass
 
     def test_no_sort_passes_none(self, runner, mock_backend):
-        runner.invoke(main, ["search", "russia"])
+        runner.invoke(main, ["search", "test-idx", "russia"])
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["sort"] is None
 
     def test_sort_date_desc(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--sort", "date:desc"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--sort", "date:desc"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["sort"] == "date:desc"
 
     def test_sort_date_asc(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--sort", "date:asc"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--sort", "date:asc"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["sort"] == "date:asc"
 
     def test_sort_size_desc(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--sort", "size:desc"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--sort", "size:desc"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["sort"] == "size:desc"
 
     def test_sort_size_asc(self, runner, mock_backend):
-        result = runner.invoke(main, ["search", "russia", "--sort", "size:asc"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--sort", "size:asc"])
         assert result.exit_code == 0
         call_kwargs = mock_backend.search_text.call_args
         assert call_kwargs.kwargs["sort"] == "size:asc"
 
     def test_invalid_sort_value(self, runner):
-        result = runner.invoke(main, ["search", "russia", "--sort", "invalid"])
+        result = runner.invoke(main, ["search", "test-idx", "russia", "--sort", "invalid"])
         assert result.exit_code != 0

@@ -124,8 +124,8 @@ def _print_ingest_summary(job, elapsed: float, avg_extraction: float) -> None:
 
 
 @main.command()
+@click.argument("index")
 @click.argument("directory", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--index", default=None, help="Target index name (default: from config)")
 @click.option("--batch-size", default=None, type=int, help="Batch size for indexing")
 @click.option(
     "--workers", default=None, type=int, help="Total extraction workers (default: sum of instance concurrency)"
@@ -133,8 +133,8 @@ def _print_ingest_summary(job, elapsed: float, avg_extraction: float) -> None:
 @click.option("--ocr/--no-ocr", default=None, help="Enable or disable OCR (default: from config)")
 @click.option("--ocr-language", default=None, help="OCR language (e.g. eng, deu, fra+eng)")
 def ingest(
+    index: str,
     directory: Path,
-    index: str | None,
     batch_size: int | None,
     workers: int | None,
     ocr: bool | None,
@@ -144,11 +144,11 @@ def ingest(
     config = _load_config()
     _setup(config)
 
-    from aum.api.deps import default_index_name, make_tracker
+    from aum.api.deps import make_tracker
     from aum.ingest.lock import IngestLock
     from aum.models import JobStatus
 
-    idx = index or default_index_name(config)
+    idx = index
 
     # Warn about stale/running jobs for this directory
     tracker = make_tracker(config)
@@ -270,37 +270,41 @@ def resume(
 
 
 @main.command("init")
-@click.option("--index", default=None, help="Index name (default: from config)")
-def init_index(index: str | None) -> None:
+@click.argument("index")
+def init_index(index: str) -> None:
     """Initialize the search index."""
     config = _load_config()
     _setup(config)
 
-    from aum.api.deps import default_index_name, make_search_backend
+    from aum.api.deps import make_search_backend
 
-    idx = index or default_index_name(config)
-    backend = make_search_backend(config, index=idx)
+    backend = make_search_backend(config, index=index)
     vector_dim = config.embeddings_dimension if config.embeddings_enabled else None
     backend.initialize(vector_dimension=vector_dim)
-    click.echo(f"Index '{idx}' initialized (backend={config.search_backend}, vectors={'yes' if vector_dim else 'no'})")
+    click.echo(
+        f"Index '{index}' initialized (backend={config.search_backend}, vectors={'yes' if vector_dim else 'no'})"
+    )
 
 
 @main.command("reset")
-@click.option("--index", default=None, help="Index name (default: from config)")
-@click.confirmation_option(prompt="This will delete all indexed documents. Continue?")
-def reset_index(index: str | None) -> None:
-    """Delete and recreate the search index."""
+@click.argument("index")
+@click.confirmation_option(prompt="This will delete the search index and all tracker data. Continue?")
+def reset_index(index: str) -> None:
+    """Delete and recreate the search index, clearing all tracker data."""
     config = _load_config()
     _setup(config)
 
-    from aum.api.deps import default_index_name, make_search_backend
+    from aum.api.deps import make_search_backend, make_tracker
 
-    idx = index or default_index_name(config)
-    backend = make_search_backend(config, index=idx)
+    backend = make_search_backend(config, index=index)
     backend.delete_index()
+
+    tracker = make_tracker(config)
+    tracker.clear_index(index)
+
     vector_dim = config.embeddings_dimension if config.embeddings_enabled else None
     backend.initialize(vector_dimension=vector_dim)
-    click.echo(f"Index '{idx}' reset.")
+    click.echo(f"Index '{index}' reset.")
 
 
 # --- Embedding ---
@@ -332,7 +336,7 @@ def _setup_embedder(config: AumConfig, idx: str, pull: bool = True):
                 f"WARNING: index '{idx}' was previously embedded with '{prev_model}' "
                 f"but current model is '{config.embeddings_model}'.\n"
                 f"Mixing models in one index will produce bad search results.\n"
-                f"Run 'aum reset --index {idx}' and re-ingest to switch models.",
+                f"Run 'aum reset {idx}' and re-ingest to switch models.",
                 err=True,
             )
             sys.exit(1)
@@ -350,7 +354,7 @@ def _setup_embedder(config: AumConfig, idx: str, pull: bool = True):
 
 
 @main.command()
-@click.option("--index", default=None, help="Target index name (default: from config)")
+@click.argument("index")
 @click.option("--batch-size", default=None, type=int, help="Batch size for embedding")
 @click.option(
     "--workers", default=None, type=int, help="Parallel embedding workers (default: sum of instance concurrency)"
@@ -359,7 +363,7 @@ def _setup_embedder(config: AumConfig, idx: str, pull: bool = True):
 @click.option("--model", default=None, help="Embedding model name")
 @click.option("--pull/--no-pull", default=True, help="Auto-pull model in Ollama (default: yes)")
 def embed(
-    index: str | None,
+    index: str,
     batch_size: int | None,
     workers: int | None,
     backend: str | None,
@@ -372,8 +376,6 @@ def embed(
     un-embedded documents, generates embeddings via the configured backend
     (Ollama or OpenAI-compatible API), and updates them in place.
     """
-    from aum.api.deps import default_index_name
-
     config = _load_config()
     _setup(config)
 
@@ -382,7 +384,7 @@ def embed(
     if model:
         config.embeddings_model = model
 
-    idx = index or default_index_name(config)
+    idx = index
     search, tracker, embedder_pool = _setup_embedder(config, idx, pull)
 
     bs = batch_size or config.embeddings_batch_size
@@ -716,8 +718,8 @@ def _retry_embed(config: AumConfig, job, batch_size: int | None, pull: bool) -> 
 
 
 @main.command()
+@click.argument("index")
 @click.argument("query")
-@click.option("--index", multiple=True, help="Index name(s) to search (repeatable, default: from config)")
 @click.option("--type", "search_type", type=click.Choice(["text", "hybrid"]), default="text")
 @click.option("--limit", default=20, type=int, help="Max results")
 @click.option("--offset", default=0, type=int, help="Offset for pagination")
@@ -734,8 +736,8 @@ def _retry_embed(config: AumConfig, job, batch_size: int | None, pull: bool) -> 
 )
 @click.option("--show-facets", is_flag=True, help="Display available facet values")
 def search(
+    index: str,
     query: str,
-    index: tuple[str, ...],
     search_type: str,
     limit: int,
     offset: int,
@@ -753,10 +755,10 @@ def search(
     config = _load_config()
     _setup(config)
 
-    from aum.api.deps import default_index_name, make_search_backend
+    from aum.api.deps import make_search_backend
     from aum.search.base import SearchResult
 
-    idx_list = list(index) if index else [default_index_name(config)]
+    idx_list = [idx.strip() for idx in index.split(",")]
     joined_index = ",".join(idx_list)
     multi_index = len(idx_list) > 1
     backend = make_search_backend(config, index=joined_index)
@@ -792,9 +794,7 @@ def search(
         for idx in idx_list:
             prev = tracker.get_embedding_model(idx)
             if prev is None:
-                click.echo(
-                    f"Error: no embeddings found for index '{idx}'. Run 'aum embed --index {idx}' first.", err=True
-                )
+                click.echo(f"Error: no embeddings found for index '{idx}'. Run 'aum embed {idx}' first.", err=True)
                 sys.exit(1)
             if model_info is None:
                 model_info = prev

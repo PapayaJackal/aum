@@ -175,6 +175,33 @@ class TestEmbeddingModelTracking:
         assert tracker.get_embedding_model("idx2") == ("model-b", "openai", 1024)
 
 
+class TestClearIndex:
+    def test_clears_jobs_errors_and_embeddings(self, tracker: JobTracker):
+        # Create jobs for two different indices
+        tracker.create_job("j1", Path("/data"), total_files=10, index_name="target")
+        tracker.record_error("j1", Path("/data/a.pdf"), "ExtractionError", "corrupt")
+        tracker.create_job("j2", Path("/data"), total_files=5, index_name="other")
+        tracker.record_error("j2", Path("/data/b.pdf"), "ExtractionError", "bad")
+        tracker.set_embedding_model("target", "model-a", "ollama", 768)
+        tracker.set_embedding_model("other", "model-b", "ollama", 1024)
+
+        tracker.clear_index("target")
+
+        # Target index data should be gone
+        assert tracker.get_job("j1") is None
+        assert tracker.get_errors("j1") == []
+        assert tracker.get_embedding_model("target") is None
+
+        # Other index data should be untouched
+        assert tracker.get_job("j2") is not None
+        assert len(tracker.get_errors("j2")) == 1
+        assert tracker.get_embedding_model("other") == ("model-b", "ollama", 1024)
+
+    def test_clear_nonexistent_index_is_noop(self, tracker: JobTracker):
+        tracker.clear_index("nonexistent")
+        # Should not raise
+
+
 # ---------------------------------------------------------------------------
 # Pipeline integration tests (real tracker, mock extractor + backend)
 # ---------------------------------------------------------------------------

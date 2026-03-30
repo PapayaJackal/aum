@@ -267,6 +267,28 @@ class JobTracker:
         ).fetchall()
         return [row["file_path"] for row in rows]
 
+    # --- Index cleanup ---
+
+    def clear_index(self, index_name: str) -> None:
+        """Delete all tracker data (jobs, errors, embeddings) for a given index."""
+        with self._lock:
+            # Delete errors for jobs belonging to this index
+            self._conn.execute(
+                "DELETE FROM job_errors WHERE job_id IN (SELECT job_id FROM jobs WHERE index_name = ?)",
+                (index_name,),
+            )
+            job_count = self._conn.execute("DELETE FROM jobs WHERE index_name = ?", (index_name,)).rowcount
+            embed_count = self._conn.execute(
+                "DELETE FROM index_embeddings WHERE index_name = ?", (index_name,)
+            ).rowcount
+            self._conn.commit()
+        log.info(
+            "cleared tracker data for index",
+            index_name=index_name,
+            jobs_deleted=job_count,
+            embeddings_cleared=embed_count,
+        )
+
     # --- Embedding model tracking ---
 
     def get_embedding_model(self, index_name: str) -> tuple[str, str, int] | None:

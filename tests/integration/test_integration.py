@@ -36,7 +36,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.order(1)
 def test_init_default_index(cli_runner: CliRunner) -> None:
-    result = cli_runner.invoke(cli_main, ["init", "--index", "aum"])
+    result = cli_runner.invoke(cli_main, ["init", "aum"])
     assert result.exit_code == 0, result.output
     assert "initialized" in result.output.lower()
 
@@ -47,9 +47,8 @@ def test_ingest_emails_no_ocr(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "ingest",
-            str(EMAILS_DIR),
-            "--index",
             "aum",
+            str(EMAILS_DIR),
             "--no-ocr",
         ],
     )
@@ -79,9 +78,8 @@ def test_search_basic_text(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "search",
-            "Ukraine",
-            "--index",
             "aum",
+            "Ukraine",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -97,7 +95,7 @@ def test_search_basic_text(cli_runner: CliRunner) -> None:
 
 @pytest.mark.order(5)
 def test_reset_index(cli_runner: CliRunner) -> None:
-    result = cli_runner.invoke(cli_main, ["reset", "--index", "aum", "--yes"])
+    result = cli_runner.invoke(cli_main, ["reset", "aum", "--yes"])
     assert result.exit_code == 0, result.output
     assert "reset" in result.output.lower()
 
@@ -127,9 +125,8 @@ def test_ingest_emails_with_ocr(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "ingest",
-            str(EMAILS_DIR),
-            "--index",
             "aum",
+            str(EMAILS_DIR),
             "--ocr",
         ],
     )
@@ -162,9 +159,8 @@ def test_search_cli_show_facets(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "search",
-            "Boris",
-            "--index",
             "aum",
+            "Boris",
             "--show-facets",
         ],
     )
@@ -211,9 +207,8 @@ def test_search_cli_date_facet(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "search",
-            "Ukraine",
-            "--index",
             "aum",
+            "Ukraine",
             "--created-from",
             min_year,
             "--created-to",
@@ -228,9 +223,8 @@ def test_search_cli_date_facet(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "search",
-            "Ukraine",
-            "--index",
             "aum",
+            "Ukraine",
             "--created-from",
             "1800",
             "--created-to",
@@ -250,9 +244,8 @@ def test_search_cli_email_facet(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "search",
-            "meeting",
-            "--index",
             "aum",
+            "meeting",
             "--email",
             emails[0],
         ],
@@ -269,9 +262,8 @@ def test_search_cli_creator_facet(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "search",
-            "meeting",
-            "--index",
             "aum",
+            "meeting",
             "--creator",
             creators[0],
         ],
@@ -285,9 +277,8 @@ def test_search_cli_file_type_filter(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "search",
-            "Ukraine",
-            "--index",
             "aum",
+            "Ukraine",
             "--file-type",
             "Email",
         ],
@@ -530,7 +521,7 @@ def test_gui_document_response_shape(api_client: TestClient, auth_headers: dict)
 
 @pytest.mark.order(22)
 def test_init_embed_test_index(cli_runner: CliRunner) -> None:
-    result = cli_runner.invoke(cli_main, ["init", "--index", "embed_test"])
+    result = cli_runner.invoke(cli_main, ["init", "embed_test"])
     assert result.exit_code == 0, result.output
 
 
@@ -540,9 +531,8 @@ def test_ingest_embed_test_data(cli_runner: CliRunner) -> None:
         cli_main,
         [
             "ingest",
-            str(EMBED_TEST_DIR),
-            "--index",
             "embed_test",
+            str(EMBED_TEST_DIR),
             "--no-ocr",
         ],
     )
@@ -553,7 +543,7 @@ def test_ingest_embed_test_data(cli_runner: CliRunner) -> None:
 def test_embed_index(cli_runner: CliRunner) -> None:
     enable_embeddings()
     try:
-        result = cli_runner.invoke(cli_main, ["embed", "--index", "embed_test"])
+        result = cli_runner.invoke(cli_main, ["embed", "embed_test"])
         assert result.exit_code == 0, result.output
         assert "completed" in result.output.lower() or "already have embeddings" in result.output.lower()
     finally:
@@ -568,9 +558,8 @@ def test_search_hybrid_cli(cli_runner: CliRunner) -> None:
             cli_main,
             [
                 "search",
-                "TLS handshake",
-                "--index",
                 "embed_test",
+                "TLS handshake",
                 "--type",
                 "hybrid",
             ],
