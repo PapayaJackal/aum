@@ -1,6 +1,6 @@
 [project]
 name = "aum"
-version = "0.2.0"
+version = "0.3.0"
 description = "Document search engine with pluggable backends"
 requires-python = ">=3.11"
 dependencies = [
