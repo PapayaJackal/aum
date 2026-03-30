@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import io
+import tempfile
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -96,26 +96,6 @@ def _safe_archive_path(name: str) -> Path | None:
     if parts[-1].startswith("."):
         return None
     return Path(*parts)
-
-
-def _parse_unpack_zip(data: bytes) -> dict[str, bytes]:
-    """Parse the zip returned by /unpack/all into {filename: bytes}.
-
-    Skips per-file .metadata.json sidecars and the original document
-    (which we already have on disk).
-    """
-    attachments: dict[str, bytes] = {}
-    if not data:
-        return attachments
-
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        for name in zf.namelist():
-            # Skip metadata sidecars produced when includeMetadataInZip=true
-            if name.endswith(".metadata.json"):
-                continue
-            attachments[name] = zf.read(name)
-
-    return attachments
 
 
 def _find_container_paths(parts: list[dict]) -> set[str]:
@@ -375,12 +355,11 @@ class TikaExtractor:
             EXTRACTION_ERRORS.labels(error_type="RmetaParseError").inc()
             raise ExtractionError(f"Failed to parse Tika /rmeta JSON for {file_path}: {exc}") from exc
 
-    def _unpack_raw(self, file_path: Path) -> dict[str, bytes]:
-        """Call ``PUT /unpack/all`` and return the raw attachment bytes.
+    def _unpack_raw(self, file_path: Path) -> Path | None:
+        """Stream ``PUT /unpack/all`` response to a temp zip file on disk.
 
-        Returns ``{filename: bytes}`` for immediate children only.
-        Returns an empty dict on 204 (no embedded files).
-        Raises ExtractionError on failure.
+        Returns the path to the temporary zip, or *None* on 204 (no
+        embedded files).  The caller is responsible for deleting the file.
         """
         headers = {
             **self._tika_headers(),
@@ -388,24 +367,42 @@ class TikaExtractor:
         }
 
         try:
-            with open(file_path, "rb") as f:
-                resp = self._client.put(
+            with (
+                open(file_path, "rb") as f,
+                self._client.stream(
+                    "PUT",
                     f"{self._server_url}/unpack/all",
                     content=f,
                     headers=headers,
+                ) as resp,
+            ):
+                if resp.status_code == 204:
+                    return None
+
+                if resp.status_code != 200:
+                    EXTRACTION_ERRORS.labels(error_type="UnpackError").inc()
+                    raise ExtractionError(f"Tika /unpack returned HTTP {resp.status_code} for {file_path}")
+
+                self._extract_dir.mkdir(parents=True, exist_ok=True)
+                tmp = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=".zip",
+                    dir=str(self._extract_dir),
                 )
+                try:
+                    for chunk in resp.iter_bytes():
+                        tmp.write(chunk)
+                    tmp.close()
+                except BaseException:
+                    tmp.close()
+                    Path(tmp.name).unlink(missing_ok=True)
+                    raise
+
         except httpx.HTTPError as exc:
             EXTRACTION_ERRORS.labels(error_type="UnpackConnectionError").inc()
             raise ExtractionError(f"Tika /unpack request failed for {file_path}: {exc}") from exc
 
-        if resp.status_code == 204:
-            return {}
-
-        if resp.status_code != 200:
-            EXTRACTION_ERRORS.labels(error_type="UnpackError").inc()
-            raise ExtractionError(f"Tika /unpack returned HTTP {resp.status_code} for {file_path}: {resp.text[:200]}")
-
-        return _parse_unpack_zip(resp.content)
+        return Path(tmp.name)
 
     def _unpack_recursive(
         self,
@@ -426,58 +423,63 @@ class TikaExtractor:
         if depth > self._max_depth:
             raise ExtractionDepthError(f"extraction depth limit ({self._max_depth}) exceeded at {file_path}")
 
-        raw = self._unpack_raw(file_path)
-        if not raw:
+        zip_path = self._unpack_raw(file_path)
+        if zip_path is None:
             return {}
 
-        dest_dir = _container_dir(self._extract_dir, self._index_name, file_path)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        resolved_dest = dest_dir.resolve()
-
         result: dict[str, Path] = {}
-        for name, data in raw.items():
-            safe_rel = _safe_archive_path(name)
-            if safe_rel is None:
-                continue
-            att_path = dest_dir / safe_rel
-            # Guard against symlink-based escapes that pure path sanitization cannot catch.
-            try:
-                att_path.resolve().relative_to(resolved_dest)
-            except ValueError:
-                log.warning("path traversal blocked", name=name, dest_dir=str(dest_dir))
-                continue
-            att_path.parent.mkdir(parents=True, exist_ok=True)
-            att_path.write_bytes(data)
+        try:
+            dest_dir = _container_dir(self._extract_dir, self._index_name, file_path)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            resolved_dest = dest_dir.resolve()
+            with zipfile.ZipFile(zip_path) as zf:
+                for name in zf.namelist():
+                    if name.endswith(".metadata.json"):
+                        continue
+                    safe_rel = _safe_archive_path(name)
+                    if safe_rel is None:
+                        continue
+                    att_path = dest_dir / safe_rel
+                    # Guard against symlink-based escapes that pure path sanitization cannot catch.
+                    try:
+                        att_path.resolve().relative_to(resolved_dest)
+                    except ValueError:
+                        log.warning("path traversal blocked", name=name, dest_dir=str(dest_dir))
+                        continue
+                    att_path.parent.mkdir(parents=True, exist_ok=True)
+                    att_path.write_bytes(zf.read(name))
 
-            child_erp = f"{current_erp}/{name}"
-            result[child_erp] = att_path
-            log.debug(
-                "saved attachment",
-                container=str(file_path),
-                attachment=str(att_path),
-                erp=child_erp,
-                size=len(data),
-            )
-
-            # If this child is itself a container, recursively unpack it.
-            if child_erp in container_paths:
-                try:
-                    nested = self._unpack_recursive(
-                        att_path,
-                        container_paths,
-                        depth + 1,
-                        child_erp,
-                    )
-                    result.update(nested)
-                except ExtractionDepthError:
-                    raise
-                except ExtractionError as exc:
-                    log.warning(
-                        "recursive unpack failed for attachment",
-                        attachment=str(att_path),
+                    child_erp = f"{current_erp}/{name}"
+                    result[child_erp] = att_path
+                    log.debug(
+                        "saved attachment",
                         container=str(file_path),
+                        attachment=str(att_path),
                         erp=child_erp,
-                        error=str(exc),
+                        size=zf.getinfo(name).file_size,
                     )
+
+                    # If this child is itself a container, recursively unpack it.
+                    if child_erp in container_paths:
+                        try:
+                            nested = self._unpack_recursive(
+                                att_path,
+                                container_paths,
+                                depth + 1,
+                                child_erp,
+                            )
+                            result.update(nested)
+                        except ExtractionDepthError:
+                            raise
+                        except ExtractionError as exc:
+                            log.warning(
+                                "recursive unpack failed for attachment",
+                                attachment=str(att_path),
+                                container=str(file_path),
+                                erp=child_erp,
+                                error=str(exc),
+                            )
+        finally:
+            zip_path.unlink(missing_ok=True)
 
         return result
