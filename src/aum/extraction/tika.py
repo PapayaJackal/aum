@@ -4,7 +4,7 @@ import hashlib
 import io
 import time
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import httpx
 import structlog
@@ -76,6 +76,26 @@ def _container_dir(extract_dir: Path, index_name: str, file_path: Path) -> Path:
     """
     file_hash = hashlib.sha256(str(file_path.resolve()).encode()).hexdigest()[:16]
     return extract_dir / index_name / file_hash[:2] / file_hash[2:4] / file_hash
+
+
+def _safe_archive_path(name: str) -> Path | None:
+    """Sanitize an archive entry name, preserving directory structure.
+
+    Returns *None* when the name is unsafe or empty so the caller can skip it.
+    Guards against path traversal (``..`` components, absolute paths, null
+    bytes) while keeping legitimate subdirectory structure intact.
+    """
+    if not name or "\x00" in name:
+        return None
+    p = PurePosixPath(name)
+    if p.is_absolute():
+        return None
+    parts = [part for part in p.parts if part != "."]
+    if not parts or ".." in parts:
+        return None
+    if parts[-1].startswith("."):
+        return None
+    return Path(*parts)
 
 
 def _parse_unpack_zip(data: bytes) -> dict[str, bytes]:
@@ -412,13 +432,21 @@ class TikaExtractor:
 
         dest_dir = _container_dir(self._extract_dir, self._index_name, file_path)
         dest_dir.mkdir(parents=True, exist_ok=True)
+        resolved_dest = dest_dir.resolve()
 
         result: dict[str, Path] = {}
         for name, data in raw.items():
-            safe_name = Path(name).name or name.replace("/", "_")
-            if not safe_name or safe_name.startswith(".") or "\x00" in safe_name:
+            safe_rel = _safe_archive_path(name)
+            if safe_rel is None:
                 continue
-            att_path = dest_dir / safe_name
+            att_path = dest_dir / safe_rel
+            # Guard against symlink-based escapes that pure path sanitization cannot catch.
+            try:
+                att_path.resolve().relative_to(resolved_dest)
+            except ValueError:
+                log.warning("path traversal blocked", name=name, dest_dir=str(dest_dir))
+                continue
+            att_path.parent.mkdir(parents=True, exist_ok=True)
             att_path.write_bytes(data)
 
             child_erp = f"{current_erp}/{name}"

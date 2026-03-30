@@ -16,6 +16,7 @@ from aum.extraction.tika import (
     _container_dir,
     _find_container_paths,
     _parse_unpack_zip,
+    _safe_archive_path,
 )
 
 _ERP_KEY = "X-TIKA:embedded_resource_path"
@@ -107,6 +108,54 @@ class TestContainerDir:
     def test_stable_across_calls(self, tmp_path: Path) -> None:
         file_path = tmp_path / "doc.pdf"
         assert _container_dir(Path("/ex"), "idx", file_path) == _container_dir(Path("/ex"), "idx", file_path)
+
+
+# ---------------------------------------------------------------------------
+# _safe_archive_path
+# ---------------------------------------------------------------------------
+
+
+class TestSafeArchivePath:
+    def test_simple_filename(self) -> None:
+        assert _safe_archive_path("file.txt") == Path("file.txt")
+
+    def test_preserves_directory_structure(self) -> None:
+        assert _safe_archive_path("dir1/dir2/file.txt") == Path("dir1/dir2/file.txt")
+
+    def test_rejects_null_bytes(self) -> None:
+        assert _safe_archive_path("file\x00.txt") is None
+
+    def test_rejects_empty_string(self) -> None:
+        assert _safe_archive_path("") is None
+
+    def test_rejects_absolute_path(self) -> None:
+        assert _safe_archive_path("/etc/passwd") is None
+
+    def test_rejects_dotdot_components(self) -> None:
+        assert _safe_archive_path("../../etc/passwd") is None
+        assert _safe_archive_path("../..") is None
+        assert _safe_archive_path("dir/../etc/passwd") is None
+
+    def test_rejects_hidden_leaf_file(self) -> None:
+        assert _safe_archive_path(".hidden") is None
+        assert _safe_archive_path("dir/.hidden") is None
+
+    def test_allows_hidden_intermediate_directory(self) -> None:
+        assert _safe_archive_path(".hidden/file.txt") == Path(".hidden/file.txt")
+
+    def test_rejects_only_dots(self) -> None:
+        assert _safe_archive_path("..") is None
+        assert _safe_archive_path(".") is None
+
+    def test_normalizes_redundant_separators(self) -> None:
+        assert _safe_archive_path("dir//file.txt") == Path("dir/file.txt")
+
+    def test_windows_style_separators(self) -> None:
+        # PurePosixPath treats backslash as part of the name, not a separator.
+        # The result is a single component with a backslash in it.
+        result = _safe_archive_path("dir\\file.txt")
+        assert result is not None
+        assert result.name == "dir\\file.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -692,3 +741,91 @@ class TestTikaExtractor:
         assert len(empty_errors) == 1
         assert empty_errors[0][0] == source
         assert "50 document(s)" in empty_errors[0][2]
+
+    # -- Path preservation in archives --------------------------------------
+
+    def test_same_filename_different_dirs_no_collision(self, tmp_path: Path) -> None:
+        """Files with the same name under different archive directories must
+        not overwrite each other."""
+        source = tmp_path / "archive.zip"
+        source.write_bytes(b"zip content")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Archive", "Content-Type": "application/zip"},
+                {TIKA_CONTENT_KEY: "Config 1", _ERP_KEY: "/dir1/config.txt"},
+                {TIKA_CONTENT_KEY: "Config 2", _ERP_KEY: "/dir2/config.txt"},
+            ]
+        )
+        unpack = _unpack_response(
+            {
+                "dir1/config.txt": b"config-one",
+                "dir2/config.txt": b"config-two",
+            }
+        )
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack]
+            docs = extractor.extract(source)
+
+        assert len(docs) == 3
+        # Both files exist on disk with distinct content
+        assert docs[1].source_path.read_bytes() == b"config-one"
+        assert docs[2].source_path.read_bytes() == b"config-two"
+        assert docs[1].source_path != docs[2].source_path
+
+    def test_path_traversal_in_archive_skipped(self, tmp_path: Path) -> None:
+        """Archive entries with path traversal components are silently skipped."""
+        source = tmp_path / "evil.zip"
+        source.write_bytes(b"zip")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Archive"},
+                {TIKA_CONTENT_KEY: "Legit", _ERP_KEY: "/legit.txt"},
+                {TIKA_CONTENT_KEY: "Evil", _ERP_KEY: "/../../../etc/passwd"},
+            ]
+        )
+        unpack = _unpack_response(
+            {
+                "legit.txt": b"ok",
+                "../../../etc/passwd": b"evil",
+            }
+        )
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack]
+            docs = extractor.extract(source)
+
+        assert len(docs) == 3
+        # Legit file extracted normally
+        assert docs[1].source_path.read_bytes() == b"ok"
+        # Traversal entry rejected — its source_path falls back to the container
+        assert docs[2].source_path == source
+
+    def test_subdirectory_structure_preserved_on_disk(self, tmp_path: Path) -> None:
+        """Extracted files preserve their archive-internal directory structure."""
+        source = tmp_path / "archive.zip"
+        source.write_bytes(b"zip content")
+
+        extractor = self._make_extractor(tmp_path)
+        rmeta = _rmeta_response(
+            [
+                {TIKA_CONTENT_KEY: "Archive"},
+                {TIKA_CONTENT_KEY: "Deep file", _ERP_KEY: "/a/b/c/deep.txt"},
+            ]
+        )
+        unpack = _unpack_response({"a/b/c/deep.txt": b"deep content"})
+
+        with patch.object(extractor, "_client") as mock_client:
+            mock_client.put.side_effect = [rmeta, unpack]
+            docs = extractor.extract(source)
+
+        assert len(docs) == 2
+        assert docs[1].source_path.read_bytes() == b"deep content"
+        # The file should be nested under subdirectories, not flattened
+        assert "a" in docs[1].source_path.parts
+        assert "b" in docs[1].source_path.parts
+        assert "c" in docs[1].source_path.parts
