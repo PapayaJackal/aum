@@ -93,7 +93,7 @@
   }
 
   function oauthLogin(provider: string) {
-    window.location.href = `/api/auth/oauth/${provider}/authorize`;
+    window.location.href = `/api/auth/oauth/${encodeURIComponent(provider)}/authorize`;
   }
 </script>
 

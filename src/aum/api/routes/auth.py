@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import time
 from collections import defaultdict
@@ -399,7 +400,7 @@ async def invite_webauthn_begin(
     temp_user = User(id=0, username=invitation.username, password_hash=None, is_admin=invitation.is_admin)
     options_json, _challenge = webauthn_mgr.generate_registration_options(temp_user)
     # Store challenge keyed by a negative hash of the token to avoid collision with real user IDs
-    webauthn_mgr._store_challenge(-hash(token), _challenge)
+    webauthn_mgr._store_challenge(-int(hashlib.sha256(token.encode()).hexdigest(), 16), _challenge)
     return {"options": options_json}
 
 
@@ -423,7 +424,7 @@ async def redeem_invite(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     if data.passkey_credential:
-        challenge = webauthn_mgr._pop_challenge(-hash(token))
+        challenge = webauthn_mgr._pop_challenge(-int(hashlib.sha256(token.encode()).hexdigest(), 16))
         if challenge is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

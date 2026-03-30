@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import weakref
 from dataclasses import dataclass
 
 import structlog
@@ -96,16 +97,15 @@ class Invitation:
     used_at: str | None
 
 
-_initialized_connections: set[int] = set()
+_initialized_connections: weakref.WeakSet[sqlite3.Connection] = weakref.WeakSet()
 
 
 def init_auth_tables(conn: sqlite3.Connection) -> None:
-    conn_id = id(conn)
-    if conn_id in _initialized_connections:
+    if conn in _initialized_connections:
         return
     conn.executescript(AUTH_SCHEMA)
     conn.commit()
-    _initialized_connections.add(conn_id)
+    _initialized_connections.add(conn)
     log.debug("auth tables initialized")
 
 

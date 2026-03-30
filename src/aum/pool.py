@@ -85,6 +85,12 @@ class InstancePool(Generic[T]):
     def instances(self) -> list[Instance[T]]:
         return list(self._instances)
 
+    def close(self) -> None:
+        """Close all instance clients that have a ``close()`` method."""
+        for inst in self._instances:
+            if hasattr(inst.client, "close"):
+                inst.client.close()
+
     @contextmanager
     def acquire(self) -> Iterator[T]:
         """Acquire a slot on an instance and yield its client.

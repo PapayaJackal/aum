@@ -38,7 +38,7 @@ _PREVIEWABLE_TYPES = frozenset(
     }
 )
 _BLOCKED_PREVIEW_TYPES = frozenset({"image/svg+xml"})
-_HTML_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+_HTML_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
 _BINARY_CSP = "default-src 'none'; style-src 'unsafe-inline'"
 
 _INTERNAL_METADATA_KEYS = {"_aum_display_path", "_aum_extracted_from"}
@@ -316,12 +316,17 @@ async def get_document(
 
 
 def _safe_file_path(source_path: str) -> Path:
-    """Resolve stored source_path, rejecting symlinks to prevent path traversal."""
-    path = Path(source_path)
+    """Resolve stored source_path, rejecting symlinks and paths outside allowed directories."""
+    path = Path(source_path).resolve()
     if path.is_symlink():
         raise HTTPException(status_code=403, detail="Access to symlinked files is not permitted")
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Source file not found on disk")
+    # Validate the resolved path falls within the extract directory.
+    config = get_config()
+    extract_dir = Path(config.extract_dir).resolve()
+    if not str(path).startswith(str(extract_dir) + "/"):
+        raise HTTPException(status_code=403, detail="Access denied: file is outside the data directory")
     return path
 
 

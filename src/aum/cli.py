@@ -169,9 +169,11 @@ def ingest(
             )
 
     pipeline = _make_ingest_pipeline(config, idx, batch_size, workers, ocr, ocr_language)
-
-    job, elapsed, avg_extraction = pipeline.run(directory)
-    _print_ingest_summary(job, elapsed, avg_extraction)
+    try:
+        job, elapsed, avg_extraction = pipeline.run(directory)
+        _print_ingest_summary(job, elapsed, avg_extraction)
+    finally:
+        pipeline.close()
 
 
 @main.command()
@@ -265,8 +267,11 @@ def resume(
         pipeline = _make_ingest_pipeline(config, idx, batch_size, workers, ocr, ocr_language)
 
         click.echo(f"Resuming ingest of {job.source_dir} (index: {idx}, parent: {job.job_id})")
-        resume_job, elapsed, avg_extraction = pipeline.run_resume(job.source_dir, parent_job_id=job.job_id)
-        _print_ingest_summary(resume_job, elapsed, avg_extraction)
+        try:
+            resume_job, elapsed, avg_extraction = pipeline.run_resume(job.source_dir, parent_job_id=job.job_id)
+            _print_ingest_summary(resume_job, elapsed, avg_extraction)
+        finally:
+            pipeline.close()
 
 
 @main.command("init")
@@ -688,8 +693,11 @@ def _retry_ingest(
         click.echo(f"  ({skipped} files no longer on disk, skipped)")
 
     pipeline = _make_ingest_pipeline(config, job.index_name, batch_size, workers, ocr, ocr_language)
-    retry_job, elapsed, avg_extraction = pipeline.run_retry(existing, job.source_dir)
-    _print_ingest_summary(retry_job, elapsed, avg_extraction)
+    try:
+        retry_job, elapsed, avg_extraction = pipeline.run_retry(existing, job.source_dir)
+        _print_ingest_summary(retry_job, elapsed, avg_extraction)
+    finally:
+        pipeline.close()
 
 
 def _retry_embed(config: AumConfig, job, batch_size: int | None, pull: bool) -> None:

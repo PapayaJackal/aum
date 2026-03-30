@@ -755,11 +755,15 @@ class MeilisearchBackend:
         if not all_ids:
             return []
 
-        escaped = ", ".join(f'"{_escape_filter_value(mid)}"' for mid in all_ids)
-        filter_expr = f"meta_message_id IN [{escaped}] OR meta_in_reply_to IN [{escaped}]"
-        # Meilisearch array fields match if ANY element is in the list.
-        for mid in all_ids:
-            filter_expr += f' OR meta_references = "{_escape_filter_value(mid)}"'
+        # Cap the number of IDs to avoid exceeding Meilisearch's filter size limit.
+        _MAX_THREAD_IDS = 50
+        capped_ids = list(all_ids)[:_MAX_THREAD_IDS]
+
+        escaped = ", ".join(f'"{_escape_filter_value(mid)}"' for mid in capped_ids)
+        # Meilisearch array fields match if ANY element is in the IN list.
+        filter_expr = (
+            f"meta_message_id IN [{escaped}] OR meta_in_reply_to IN [{escaped}] OR meta_references IN [{escaped}]"
+        )
 
         params: dict = {
             "filter": filter_expr,

@@ -33,7 +33,7 @@ from aum.search.base import SearchBackend
 
 log = structlog.get_logger()
 
-_SENTINEL = None  # signals the walker is done
+_SENTINEL = object()  # signals the walker is done
 
 
 def _file_doc_id(file_path: Path, index: int = 0) -> str:
@@ -103,7 +103,7 @@ def _make_progress_line(
 
 def _walk_files(
     root: Path,
-    queue: Queue[Path | None],
+    queue: Queue[Path | object],
     tracker: JobTracker,
     job_id: str,
     discovered: list[int],
@@ -173,6 +173,10 @@ class IngestPipeline:
         self._batch_size = batch_size
         self._max_workers = max_workers or extractor_pool.total_concurrency
         self._data_dir = Path(data_dir) if data_dir else None
+
+    def close(self) -> None:
+        """Release resources held by the extractor pool."""
+        self._extractor_pool.close()
 
     def run_retry(self, file_paths: list[Path], source_dir: Path) -> tuple[IngestJob, float, float]:
         """Re-run ingest for specific file paths (retry failed items).
@@ -286,8 +290,8 @@ class IngestPipeline:
         # When skip_existing is enabled the walker feeds into a separate queue
         # and a filter thread sits between the walker and the workers.
         if skip_existing:
-            walker_queue: Queue[Path | None] = Queue(maxsize=1000)
-            file_queue: Queue[Path | None] = Queue(maxsize=1000)
+            walker_queue: Queue[Path | object] = Queue(maxsize=1000)
+            file_queue: Queue[Path | object] = Queue(maxsize=1000)
         else:
             walker_queue = file_queue = Queue(maxsize=1000)
 
@@ -467,8 +471,8 @@ class IngestPipeline:
 
     def _filter_existing_worker(
         self,
-        input_queue: Queue[Path | None],
-        output_queue: Queue[Path | None],
+        input_queue: Queue[Path | object],
+        output_queue: Queue[Path | object],
         skip_counter: list[int],
         check_batch_size: int = 200,
     ) -> None:
@@ -497,7 +501,7 @@ class IngestPipeline:
     def _flush_filter_batch(
         self,
         paths: list[Path],
-        output_queue: Queue[Path | None],
+        output_queue: Queue[Path | object],
         skip_counter: list[int],
     ) -> None:
         """Check a batch of paths against the index and forward new ones."""

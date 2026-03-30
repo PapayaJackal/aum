@@ -150,6 +150,10 @@ class TikaExtractor:
         self._request_timeout = request_timeout
         self._client = httpx.Client(timeout=request_timeout)
 
+    def close(self) -> None:
+        """Close the underlying HTTP client to free connections."""
+        self._client.close()
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
