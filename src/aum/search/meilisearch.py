@@ -920,18 +920,24 @@ class MeilisearchBackend:
         """Return the subset of *doc_ids* that already exist in the index."""
         if not doc_ids:
             return set()
-        ids_str = ", ".join(f'"{doc_id}"' for doc_id in doc_ids)
-        try:
-            resp = self._idx().search(
-                "",
-                {
-                    "filter": f"id IN [{ids_str}]",
-                    "attributesToRetrieve": ["id"],
-                    "limit": len(doc_ids),
-                },
-            )
-        except meilisearch.errors.MeilisearchApiError as exc:
-            if exc.code == "index_not_found":
-                return set()
-            raise
-        return {hit["id"] for hit in resp.get("hits", [])}
+        found: set[str] = set()
+        # Process in chunks to stay within Meilisearch's search result limit.
+        _CHUNK = 200
+        for i in range(0, len(doc_ids), _CHUNK):
+            chunk = doc_ids[i : i + _CHUNK]
+            ids_str = ", ".join(f'"{doc_id}"' for doc_id in chunk)
+            try:
+                resp = self._idx().search(
+                    "",
+                    {
+                        "filter": f"id IN [{ids_str}]",
+                        "attributesToRetrieve": ["id"],
+                        "limit": len(chunk),
+                    },
+                )
+            except meilisearch.errors.MeilisearchApiError as exc:
+                if exc.code == "index_not_found":
+                    return set()
+                raise
+            found.update(hit["id"] for hit in resp.get("hits", []))
+        return found
