@@ -67,27 +67,16 @@ class OAuthManager:
         if row:
             return row_to_user(row)
 
-        # Check if a user with this email already exists (link accounts)
-        user_row = None
-        if email:
-            user_row = self._conn.execute(
-                """SELECT u.* FROM users u
-                   JOIN oauth_accounts oa ON u.id = oa.user_id
-                   WHERE oa.email = ?""",
-                (email,),
-            ).fetchone()
-
-        if user_row:
-            user_id = user_row["id"]
-        else:
-            # Create new user
-            username = self._unique_username(name)
-            cursor = self._conn.execute(
-                "INSERT INTO users (username, password_hash, is_admin) VALUES (?, NULL, 0)",
-                (username,),
-            )
-            user_id = cursor.lastrowid
-            log.info("created oauth user", username=username, provider=provider_name)
+        # Create new user — we intentionally do NOT link by email across
+        # providers, as a malicious provider could claim an arbitrary email
+        # and hijack an existing account.
+        username = self._unique_username(name)
+        cursor = self._conn.execute(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (?, NULL, 0)",
+            (username,),
+        )
+        user_id = cursor.lastrowid
+        log.info("created oauth user", username=username, provider=provider_name)
 
         # Link OAuth account
         self._conn.execute(
