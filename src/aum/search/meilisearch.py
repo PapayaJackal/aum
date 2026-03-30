@@ -268,7 +268,15 @@ def _truncate_oversized(item: dict, max_bytes: int) -> tuple[dict, tuple[str, in
     if budget >= content_json_size:
         return item, None
     if budget <= 0:
-        return item, None
+        doc_id = item.get("id", "unknown")
+        log.warning(
+            "document metadata alone exceeds payload limit, dropping content",
+            doc_id=doc_id,
+            overhead=overhead,
+            max_bytes=max_bytes,
+        )
+        DOCS_TRUNCATED.inc()
+        return {**item, "content": ""}, (doc_id, len(content), 0)
     # Use the escaping ratio to estimate how many raw chars fit in the budget.
     # This avoids expensive repeated json.dumps on large strings.
     ratio = content_json_size / len(content)
