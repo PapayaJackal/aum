@@ -367,7 +367,7 @@ class TikaExtractor:
         result: dict[str, Path] = {}
         for name, data in raw.items():
             safe_name = Path(name).name or name.replace("/", "_")
-            if not safe_name:
+            if not safe_name or safe_name.startswith(".") or "\x00" in safe_name:
                 continue
             att_path = dest_dir / safe_name
             att_path.write_bytes(data)
