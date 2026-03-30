@@ -296,7 +296,7 @@ def init_index(index: str) -> None:
 @click.argument("index")
 @click.confirmation_option(prompt="This will delete the search index and all tracker data. Continue?")
 def reset_index(index: str) -> None:
-    """Delete and recreate the search index, clearing all tracker data."""
+    """Delete the search index and clear all tracker data."""
     config = _load_config()
     _setup(config)
 
@@ -308,9 +308,7 @@ def reset_index(index: str) -> None:
     tracker = make_tracker(config)
     tracker.clear_index(index)
 
-    vector_dim = config.embeddings_dimension if config.embeddings_enabled else None
-    backend.initialize(vector_dimension=vector_dim)
-    click.echo(f"Index '{index}' reset.")
+    click.echo(f"Index '{index}' deleted.")
 
 
 # --- Embedding ---

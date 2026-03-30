@@ -97,7 +97,7 @@ def test_search_basic_text(cli_runner: CliRunner) -> None:
 def test_reset_index(cli_runner: CliRunner) -> None:
     result = cli_runner.invoke(cli_main, ["reset", "aum", "--yes"])
     assert result.exit_code == 0, result.output
-    assert "reset" in result.output.lower()
+    assert "deleted" in result.output.lower()
 
 
 @pytest.mark.order(6)
