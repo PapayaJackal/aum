@@ -6,6 +6,9 @@ pub mod config;
 /// Logging initialisation from [`crate::config::LoggingConfig`].
 pub mod log;
 
+/// Prometheus metrics helpers for the aum workspace.
+pub mod metrics;
+
 /// Domain models shared across the aum workspace.
 pub mod models;
 
@@ -26,5 +29,6 @@ pub fn bootstrap() -> config::AumConfig {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+    metrics::record_build_info();
     config
 }

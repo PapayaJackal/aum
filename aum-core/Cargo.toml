@@ -15,6 +15,7 @@ figment = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+metrics = { workspace = true }
 
 [dev-dependencies]
 serde_json = "1"
