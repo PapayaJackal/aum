@@ -286,7 +286,8 @@ pub struct ServerConfig {
     /// Port to bind the API server to.
     #[config_default = "8000"]
     pub port: u16,
-    /// Enable the `OpenAPI` documentation UI at `/docs`.
+    /// Enable the OpenAPI documentation UI at `/docs`.
+    #[allow(clippy::doc_markdown)]
     #[config_default = "false"]
     pub enable_docs: bool,
     /// List of allowed CORS origins (e.g. `["https://app.example.com"]`).
@@ -432,7 +433,8 @@ impl AumConfig {
     /// Returns the effective embedder instances to use.
     ///
     /// If `embeddings.instances` is empty, falls back to a single instance
-    /// using `embeddings.ollama_url` (Ollama) or `embeddings.api_url` (`OpenAI`).
+    /// using `embeddings.ollama_url` (Ollama) or `embeddings.api_url` (OpenAI).
+    #[allow(clippy::doc_markdown)]
     #[must_use]
     pub fn effective_embedder_instances(&self) -> Vec<EmbedderInstance> {
         if !self.embeddings.instances.is_empty() {
