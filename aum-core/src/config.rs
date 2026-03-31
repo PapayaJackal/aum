@@ -52,7 +52,7 @@ impl fmt::Display for EmbeddingsBackend {
 }
 
 /// Minimum severity level for emitted log messages.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum LogLevel {
     /// Verbose debug output.
     #[serde(rename = "DEBUG")]
@@ -63,7 +63,7 @@ pub enum LogLevel {
     Info,
     /// Warnings about unexpected but recoverable conditions.
     #[serde(rename = "WARNING")]
-    Warning,
+    Warn,
     /// Errors that require attention.
     #[serde(rename = "ERROR")]
     Error,
@@ -74,14 +74,14 @@ impl fmt::Display for LogLevel {
         match self {
             LogLevel::Debug => write!(f, "DEBUG"),
             LogLevel::Info => write!(f, "INFO"),
-            LogLevel::Warning => write!(f, "WARNING"),
+            LogLevel::Warn => write!(f, "WARNING"),
             LogLevel::Error => write!(f, "ERROR"),
         }
     }
 }
 
 /// Output format for log messages.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LogFormat {
     /// Human-readable text output (default).
@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(EmbeddingsBackend::OpenAi.to_string(), "openai");
         assert_eq!(LogLevel::Debug.to_string(), "DEBUG");
         assert_eq!(LogLevel::Info.to_string(), "INFO");
-        assert_eq!(LogLevel::Warning.to_string(), "WARNING");
+        assert_eq!(LogLevel::Warn.to_string(), "WARNING");
         assert_eq!(LogLevel::Error.to_string(), "ERROR");
         assert_eq!(LogFormat::Console.to_string(), "console");
         assert_eq!(LogFormat::Json.to_string(), "json");

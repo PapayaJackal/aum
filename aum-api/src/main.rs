@@ -1,3 +1,8 @@
+//! aum HTTP API server.
+
+use tracing::info;
+
 fn main() {
-    println!("Hello from aum-api!");
+    let _config = aum_core::bootstrap();
+    info!("aum-api starting");
 }

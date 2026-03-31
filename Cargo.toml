@@ -28,3 +28,5 @@ figment = { version = "0.10.19", features = ["toml", "env"] }
 syn = { version = "2.0.117", features = ["full"] }
 quote = "1.0.45"
 chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
