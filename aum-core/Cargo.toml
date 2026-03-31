@@ -4,3 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aum-macros = { path = "../aum-macros" }
+serde = { workspace = true }
+figment = { workspace = true }

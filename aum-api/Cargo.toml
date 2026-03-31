@@ -9,5 +9,8 @@ license.workspace = true
 name = "aum-api"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 aum-core = { path = "../aum-core" }
