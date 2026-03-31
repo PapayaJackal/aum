@@ -1,0 +1,13 @@
+[package]
+name = "aum-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aum-api"
+path = "src/main.rs"
+
+[dependencies]
+aum-core = { path = "../aum-core" }

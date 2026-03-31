@@ -8,10 +8,10 @@ excludes = [
   ".git/**",
 ]
 
-[formatter.ruff-format]
-command = "uv"
-options = ["run", "ruff", "format"]
-includes = ["*.py"]
+[formatter.rustfmt]
+command = "rustfmt"
+options = ["--edition", "2024"]
+includes = ["*.rs"]
 
 [formatter.prettier]
 command = "./frontend/node_modules/.bin/prettier"

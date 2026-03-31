@@ -1,5 +1,6 @@
 .*_cache/
 /*.md
+/target/
 /.venv/
 __pycache__
 data/
