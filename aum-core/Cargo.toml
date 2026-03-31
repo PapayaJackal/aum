@@ -12,3 +12,7 @@ workspace = true
 aum-macros = { path = "../aum-macros" }
 serde = { workspace = true }
 figment = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
