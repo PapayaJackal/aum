@@ -4,6 +4,7 @@ members = [
     "aum-cli",
     "aum-api",
 ]
+default-members = ["aum-cli"]
 resolver = "2"
 
 [workspace.package]
