@@ -9,6 +9,9 @@ pub mod log;
 /// Prometheus metrics helpers for the aum workspace.
 pub mod metrics;
 
+/// Database layer: connection pool, repository traits, and sqlx implementations.
+pub mod db;
+
 /// Domain models shared across the aum workspace.
 pub mod models;
 
@@ -31,4 +34,29 @@ pub fn bootstrap() -> config::AumConfig {
     }
     metrics::record_build_info();
     config
+}
+
+/// Open the database pool and run pending migrations, printing errors to stderr and exiting
+/// on failure.
+///
+/// Call this after [`bootstrap`] once the async runtime is available. The migrations directory
+/// is resolved relative to the `aum-core` crate at compile time, so no runtime path
+/// configuration is required.
+///
+/// # Panics / Exits
+///
+/// Calls [`std::process::exit`] with status 1 if the pool cannot be initialised or migrations
+/// fail.
+pub async fn bootstrap_db(config: &config::AumConfig) -> sqlx::AnyPool {
+    let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    db::init_pool(
+        &config.database_url(),
+        config.database.max_connections,
+        &migrations_dir,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        eprintln!("error: failed to open database: {e}");
+        std::process::exit(1);
+    })
 }

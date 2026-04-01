@@ -105,8 +105,9 @@ mod path_serde {
 // ---------------------------------------------------------------------------
 
 /// The current lifecycle state of an ingest job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, sqlx::Type)]
 #[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
 pub enum JobStatus {
     /// Job is queued but has not started.
     #[default]
@@ -122,8 +123,9 @@ pub enum JobStatus {
 }
 
 /// The type of work performed by an ingest job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, sqlx::Type)]
 #[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
 pub enum JobType {
     /// Document extraction and indexing.
     #[default]
@@ -183,6 +185,28 @@ pub struct IngestError {
     /// UTC timestamp when the error was recorded.
     #[serde(with = "iso8601")]
     pub timestamp: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// JobProgress
+// ---------------------------------------------------------------------------
+
+/// Counters for tracking ingest/embed job progress.
+///
+/// Used by [`crate::db::repository::JobRepository::update_progress`] to
+/// atomically overwrite all counters in a single call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JobProgress {
+    /// Files successfully extracted so far.
+    pub extracted: i64,
+    /// Files successfully processed (embedded/indexed) so far.
+    pub processed: i64,
+    /// Files that failed processing.
+    pub failed: i64,
+    /// Files that produced empty content.
+    pub empty: i64,
+    /// Files skipped (already up to date).
+    pub skipped: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +282,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn job_status_serde_roundtrip() {
+    fn job_status_serde_roundtrip() -> anyhow::Result<()> {
         let cases = [
             (JobStatus::Pending, "\"pending\""),
             (JobStatus::Running, "\"running\""),
@@ -267,103 +291,115 @@ mod tests {
             (JobStatus::Interrupted, "\"interrupted\""),
         ];
         for (status, expected_json) in cases {
-            let json = serde_json::to_string(&status).expect("serialize");
+            let json = serde_json::to_string(&status)?;
             assert_eq!(json, expected_json);
-            let roundtripped: JobStatus = serde_json::from_str(&json).expect("deserialize");
+            let roundtripped: JobStatus = serde_json::from_str(&json)?;
             assert_eq!(roundtripped, status);
         }
+        Ok(())
     }
 
     #[test]
-    fn job_type_serde_roundtrip() {
+    fn job_type_serde_roundtrip() -> anyhow::Result<()> {
         let cases = [
             (JobType::Ingest, "\"ingest\""),
             (JobType::Embed, "\"embed\""),
         ];
         for (job_type, expected_json) in cases {
-            let json = serde_json::to_string(&job_type).expect("serialize");
+            let json = serde_json::to_string(&job_type)?;
             assert_eq!(json, expected_json);
-            let roundtripped: JobType = serde_json::from_str(&json).expect("deserialize");
+            let roundtripped: JobType = serde_json::from_str(&json)?;
             assert_eq!(roundtripped, job_type);
         }
+        Ok(())
     }
 
     #[test]
-    fn metadata_value_single_roundtrip() {
+    fn metadata_value_single_roundtrip() -> anyhow::Result<()> {
         let val = MetadataValue::Single("hello".to_owned());
-        let json = serde_json::to_string(&val).expect("serialize");
+        let json = serde_json::to_string(&val)?;
         assert_eq!(json, "\"hello\"");
-        let roundtripped: MetadataValue = serde_json::from_str(&json).expect("deserialize");
+        let roundtripped: MetadataValue = serde_json::from_str(&json)?;
         assert_eq!(roundtripped, val);
+        Ok(())
     }
 
     #[test]
-    fn metadata_value_list_roundtrip() {
+    fn metadata_value_list_roundtrip() -> anyhow::Result<()> {
         let val = MetadataValue::List(vec!["a".to_owned(), "b".to_owned()]);
-        let json = serde_json::to_string(&val).expect("serialize");
+        let json = serde_json::to_string(&val)?;
         assert_eq!(json, "[\"a\",\"b\"]");
-        let roundtripped: MetadataValue = serde_json::from_str(&json).expect("deserialize");
+        let roundtripped: MetadataValue = serde_json::from_str(&json)?;
         assert_eq!(roundtripped, val);
+        Ok(())
     }
 
     #[test]
-    fn iso8601_datetime_roundtrip() {
+    fn iso8601_datetime_roundtrip() -> anyhow::Result<()> {
         #[derive(Serialize, Deserialize)]
         struct Wrapper {
             #[serde(with = "super::iso8601")]
             ts: DateTime<Utc>,
         }
-        let dt = Utc.with_ymd_and_hms(2024, 6, 15, 12, 34, 56).unwrap();
-        let json = serde_json::to_string(&Wrapper { ts: dt }).expect("serialize");
-        let roundtripped: Wrapper = serde_json::from_str(&json).expect("deserialize");
+        let dt = Utc
+            .with_ymd_and_hms(2024, 6, 15, 12, 34, 56)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("invalid datetime"))?;
+        let json = serde_json::to_string(&Wrapper { ts: dt })?;
+        let roundtripped: Wrapper = serde_json::from_str(&json)?;
         assert_eq!(roundtripped.ts, dt);
+        Ok(())
     }
 
     #[test]
-    fn iso8601_option_some_and_none() {
+    fn iso8601_option_some_and_none() -> anyhow::Result<()> {
         #[derive(Serialize, Deserialize)]
         struct Wrapper {
             #[serde(with = "super::iso8601::option")]
             ts: Option<DateTime<Utc>>,
         }
-        let dt = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let dt = Utc
+            .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("invalid datetime"))?;
 
         let some = Wrapper { ts: Some(dt) };
-        let json = serde_json::to_string(&some).expect("serialize");
-        let roundtripped: Wrapper = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&some)?;
+        let roundtripped: Wrapper = serde_json::from_str(&json)?;
         assert_eq!(roundtripped.ts, Some(dt));
 
         let none = Wrapper { ts: None };
-        let json = serde_json::to_string(&none).expect("serialize");
-        let roundtripped: Wrapper = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&none)?;
+        let roundtripped: Wrapper = serde_json::from_str(&json)?;
         assert_eq!(roundtripped.ts, None);
+        Ok(())
     }
 
     #[test]
-    fn path_serde_forward_slashes_on_serialize() {
+    fn path_serde_forward_slashes_on_serialize() -> anyhow::Result<()> {
         #[derive(Serialize, Deserialize)]
         struct Wrapper {
             #[serde(with = "super::path_serde")]
             p: PathBuf,
         }
-        // A path built from backslash-separated components serializes with forward slashes.
         let w = Wrapper {
             p: PathBuf::from("C:\\Users\\foo\\bar.pdf"),
         };
-        let json = serde_json::to_string(&w).expect("serialize");
+        let json = serde_json::to_string(&w)?;
         assert_eq!(json, r#"{"p":"C:/Users/foo/bar.pdf"}"#);
+        Ok(())
     }
 
     #[test]
-    fn path_serde_backslashes_normalized_on_deserialize() {
+    fn path_serde_backslashes_normalized_on_deserialize() -> anyhow::Result<()> {
         #[derive(Serialize, Deserialize)]
         struct Wrapper {
             #[serde(with = "super::path_serde")]
             p: PathBuf,
         }
-        let w: Wrapper =
-            serde_json::from_str(r#"{"p":"C:\\Users\\foo\\bar.pdf"}"#).expect("deserialize");
+        let w: Wrapper = serde_json::from_str(r#"{"p":"C:\\Users\\foo\\bar.pdf"}"#)?;
         assert_eq!(w.p, PathBuf::from("C:/Users/foo/bar.pdf"));
+        Ok(())
     }
 
     #[test]
@@ -379,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn path_serde_unix_paths_unchanged() {
+    fn path_serde_unix_paths_unchanged() -> anyhow::Result<()> {
         #[derive(Serialize, Deserialize)]
         struct Wrapper {
             #[serde(with = "super::path_serde")]
@@ -388,10 +424,11 @@ mod tests {
         let w = Wrapper {
             p: PathBuf::from("/var/data/docs/file.pdf"),
         };
-        let json = serde_json::to_string(&w).expect("serialize");
+        let json = serde_json::to_string(&w)?;
         assert_eq!(json, r#"{"p":"/var/data/docs/file.pdf"}"#);
-        let rt: Wrapper = serde_json::from_str(&json).expect("deserialize");
+        let rt: Wrapper = serde_json::from_str(&json)?;
         assert_eq!(rt.p, w.p);
+        Ok(())
     }
 
     #[test]
@@ -419,8 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn ingest_job_missing_fields_use_defaults() {
-        // Simulate a DB row that predates the job_type column (field absent in JSON).
+    fn ingest_job_missing_fields_use_defaults() -> anyhow::Result<()> {
         let json = r#"{
             "job_id": "abc",
             "source_dir": "/data",
@@ -428,11 +464,12 @@ mod tests {
             "created_at": "2024-01-01T00:00:00+00:00",
             "finished_at": null
         }"#;
-        let job: IngestJob = serde_json::from_str(json).expect("deserialize");
+        let job: IngestJob = serde_json::from_str(json)?;
         assert_eq!(job.job_type, JobType::Ingest);
         assert_eq!(job.index_name, "aum");
         assert_eq!(job.total_files, 0);
         assert!(job.errors.is_empty());
         assert!(job.finished_at.is_none());
+        Ok(())
     }
 }

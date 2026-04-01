@@ -331,6 +331,21 @@ pub struct LoggingConfig {
     pub format: LogFormat,
 }
 
+/// Configuration for the database connection.
+#[derive(Debug, Clone, Serialize, Deserialize, ConfigDocs, ConfigDefault, ConfigValues)]
+#[serde(default)]
+#[config_section = "database"]
+pub struct DatabaseConfig {
+    #[allow(clippy::doc_markdown)] // SQLite is a proper noun
+    /// Database connection URL. Supports `sqlite:`, `postgres://`, and `mysql://` schemes.
+    /// If empty, defaults to a SQLite database (`aum.db`) in the data directory.
+    #[config_default = ""]
+    pub url: String,
+    /// Maximum number of connections in the database pool.
+    #[config_default = "16"]
+    pub max_connections: u32,
+}
+
 /// Configuration for the document ingest pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize, ConfigDocs, ConfigDefault, ConfigValues)]
 #[serde(default)]
@@ -369,6 +384,8 @@ pub struct AumConfig {
     pub prometheus: PrometheusConfig,
     /// Meilisearch connection and index settings.
     pub meilisearch: MeilisearchConfig,
+    /// Database connection settings.
+    pub database: DatabaseConfig,
     /// Document ingest pipeline settings.
     pub ingest: IngestConfig,
     /// Apache Tika extraction settings.
@@ -390,6 +407,7 @@ impl AumConfig {
     pub fn config_docs() -> impl Iterator<Item = &'static ConfigDoc> {
         [
             DataConfig::config_docs(),
+            DatabaseConfig::config_docs(),
             LoggingConfig::config_docs(),
             PrometheusConfig::config_docs(),
             MeilisearchConfig::config_docs(),
@@ -403,10 +421,17 @@ impl AumConfig {
         .flat_map(|s| s.iter())
     }
 
-    /// Returns the path to the `SQLite` database file within the data directory.
+    /// Returns the database connection URL to use.
+    ///
+    /// If `database.url` is empty, returns a `sqlite:` URL pointing to `aum.db`
+    /// in the configured data directory.
     #[must_use]
-    pub fn db_path(&self) -> PathBuf {
-        self.data.dir.join("aum.db")
+    pub fn database_url(&self) -> String {
+        if self.database.url.is_empty() {
+            format!("sqlite:{}", self.data.dir.join("aum.db").display())
+        } else {
+            self.database.url.clone()
+        }
     }
 
     /// Returns the path to the directory where extracted document content is stored.
@@ -503,6 +528,11 @@ pub fn format_config(config: &AumConfig) -> String {
     );
     write_section(
         &mut out,
+        DatabaseConfig::config_docs(),
+        config.database.config_values(),
+    );
+    write_section(
+        &mut out,
         LoggingConfig::config_docs(),
         config.log.config_values(),
     );
@@ -559,39 +589,37 @@ mod tests {
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
-    fn config_from_env(pairs: &[(&str, &str)]) -> AumConfig {
-        let _guard = ENV_MUTEX.lock().unwrap();
+    fn config_from_env(pairs: &[(&str, &str)]) -> anyhow::Result<AumConfig> {
+        let _guard = ENV_MUTEX.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         for (k, v) in pairs {
             unsafe { std::env::set_var(k, v) };
         }
         let result = Figment::new()
             .merge(Serialized::defaults(AumConfig::default()))
             .merge(Env::prefixed("AUM_").split("__"))
-            .extract()
-            .expect("env config extraction failed");
+            .extract()?;
         for (k, _) in pairs {
             unsafe { std::env::remove_var(k) };
         }
-        result
+        Ok(result)
     }
 
     // --- Figment pipeline sanity ---
 
     /// A completely empty config source (no TOML, no env) must successfully
-    /// produce an AumConfig and preserve every default value from the Default
+    /// produce an `AumConfig` and preserve every default value from the Default
     /// impl — this is what consumers actually rely on at startup.
     #[test]
-    fn test_empty_source_roundtrips_defaults() {
+    fn test_empty_source_roundtrips_defaults() -> anyhow::Result<()> {
         let expected = AumConfig::default();
         let actual: AumConfig = Figment::new()
             .merge(Serialized::defaults(AumConfig::default()))
-            .extract()
-            .expect("extraction from defaults-only figment failed");
+            .extract()?;
 
         assert_eq!(actual.meilisearch.url, expected.meilisearch.url);
-        assert_eq!(
-            actual.meilisearch.semantic_ratio,
-            expected.meilisearch.semantic_ratio
+        assert!(
+            (actual.meilisearch.semantic_ratio - expected.meilisearch.semantic_ratio).abs()
+                < f64::EPSILON
         );
         assert_eq!(
             actual.meilisearch.crop_length,
@@ -615,6 +643,7 @@ mod tests {
         );
         assert_eq!(actual.log.level, LogLevel::Info);
         assert_eq!(actual.log.format, LogFormat::Console);
+        Ok(())
     }
 
     #[test]
@@ -625,66 +654,75 @@ mod tests {
     // --- Env var overlay ---
 
     #[test]
-    fn test_env_overlay_string() {
-        let cfg = config_from_env(&[("AUM_MEILISEARCH__URL", "http://env-meili:7700")]);
+    fn test_env_overlay_string() -> anyhow::Result<()> {
+        let cfg = config_from_env(&[("AUM_MEILISEARCH__URL", "http://env-meili:7700")])?;
         assert_eq!(cfg.meilisearch.url, "http://env-meili:7700");
-        assert_eq!(cfg.meilisearch.semantic_ratio, 0.5); // untouched default
+        assert!((cfg.meilisearch.semantic_ratio - 0.5).abs() < f64::EPSILON); // untouched default
+        Ok(())
     }
 
     #[test]
-    fn test_env_overlay_bool() {
-        let cfg = config_from_env(&[("AUM_TIKA__OCR_ENABLED", "true")]);
+    fn test_env_overlay_bool() -> anyhow::Result<()> {
+        let cfg = config_from_env(&[("AUM_TIKA__OCR_ENABLED", "true")])?;
         assert!(cfg.tika.ocr_enabled);
         assert!(!cfg.embeddings.enabled); // untouched default
+        Ok(())
     }
 
     #[test]
-    fn test_env_overlay_integer() {
-        let cfg = config_from_env(&[("AUM_SERVER__PORT", "9001")]);
+    fn test_env_overlay_integer() -> anyhow::Result<()> {
+        let cfg = config_from_env(&[("AUM_SERVER__PORT", "9001")])?;
         assert_eq!(cfg.server.port, 9001);
         assert_eq!(cfg.prometheus.port, 9090); // untouched default
+        Ok(())
     }
 
     #[test]
-    fn test_env_overlay_has_lower_priority_than_toml() {
-        // TOML sets port=9999; env sets it to 1234. Env wins over TOML.
-        let _guard = ENV_MUTEX.lock().unwrap();
+    fn test_env_overlay_has_lower_priority_than_toml() -> anyhow::Result<()> {
+        let _guard = ENV_MUTEX.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         unsafe { std::env::set_var("AUM_SERVER__PORT", "1234") };
         let result: AumConfig = Figment::new()
             .merge(Serialized::defaults(AumConfig::default()))
             .merge(FigmentToml::string("[server]\nport = 9999"))
             .merge(Env::prefixed("AUM_").split("__"))
-            .extract()
-            .unwrap();
+            .extract()?;
         unsafe { std::env::remove_var("AUM_SERVER__PORT") };
         assert_eq!(result.server.port, 1234);
+        Ok(())
     }
 
     // --- Missing TOML file ---
 
     #[test]
-    fn test_missing_toml_file_does_not_error() {
+    fn test_missing_toml_file_does_not_error() -> anyhow::Result<()> {
         let cfg: AumConfig = Figment::new()
             .merge(Serialized::defaults(AumConfig::default()))
             .merge(FigmentToml::file("__nonexistent_aum_config__.toml"))
-            .extract()
-            .expect("should succeed with missing file");
+            .extract()?;
         assert_eq!(cfg.meilisearch.url, "http://localhost:7700");
         assert_eq!(cfg.server.port, 8000);
         assert_eq!(cfg.data.dir, PathBuf::from("data"));
+        Ok(())
     }
 
     // --- Derived methods ---
 
     #[test]
-    fn test_db_path_and_extract_dir() {
+    fn test_database_url_default_derives_from_data_dir() {
         let mut cfg = AumConfig::default();
-        assert_eq!(cfg.db_path(), PathBuf::from("data/aum.db"));
+        assert_eq!(cfg.database_url(), "sqlite:data/aum.db");
         assert_eq!(cfg.extract_dir(), PathBuf::from("data/extracted"));
 
         cfg.data.dir = "/opt/aum".into();
-        assert_eq!(cfg.db_path(), PathBuf::from("/opt/aum/aum.db"));
+        assert_eq!(cfg.database_url(), "sqlite:/opt/aum/aum.db");
         assert_eq!(cfg.extract_dir(), PathBuf::from("/opt/aum/extracted"));
+    }
+
+    #[test]
+    fn test_database_url_explicit_overrides_data_dir() {
+        let mut cfg = AumConfig::default();
+        cfg.database.url = "postgres://user:pass@db:5432/aum".into();
+        assert_eq!(cfg.database_url(), "postgres://user:pass@db:5432/aum");
     }
 
     // --- effective_tika_instances ---
@@ -791,20 +829,20 @@ mod tests {
     // --- load_config / load_config_from ---
 
     #[test]
-    fn test_load_config_from_missing_file_returns_defaults() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        let cfg = load_config_from("__nonexistent__.toml").expect("should succeed");
+    fn test_load_config_from_missing_file_returns_defaults() -> anyhow::Result<()> {
+        let _guard = ENV_MUTEX.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let cfg = load_config_from("__nonexistent__.toml")?;
         assert_eq!(cfg.meilisearch.url, "http://localhost:7700");
         assert_eq!(cfg.server.port, 8000);
+        Ok(())
     }
 
     #[test]
-    fn test_load_config_succeeds_without_aum_toml() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        // Verifies load_config() itself (not just load_config_from) is reachable
-        // and returns defaults when no aum.toml exists in the working directory.
-        let cfg = load_config().expect("load_config should not fail without aum.toml");
+    fn test_load_config_succeeds_without_aum_toml() -> anyhow::Result<()> {
+        let _guard = ENV_MUTEX.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let cfg = load_config()?;
         assert_eq!(cfg.data.dir, PathBuf::from("data"));
+        Ok(())
     }
 
     // --- format_config ---
@@ -817,6 +855,8 @@ mod tests {
         assert!(out.contains("AUM_SERVER__PORT=8000"));
         assert!(out.contains("AUM_DATA__DIR=data"));
         assert!(out.contains("AUM_PROMETHEUS__ENABLED=false"));
+        assert!(out.contains("AUM_DATABASE__URL="));
+        assert!(out.contains("AUM_DATABASE__MAX_CONNECTIONS=16"));
     }
 
     #[test]
@@ -827,7 +867,7 @@ mod tests {
             if line.starts_with("AUM_") {
                 let var = line.split('=').next().unwrap_or("");
                 assert!(
-                    out.contains(&format!("\n# ")),
+                    out.contains("\n# "),
                     "no description comment found before {var}"
                 );
             }
@@ -863,6 +903,7 @@ mod tests {
     fn test_config_docs_section_names_match_toml_keys() {
         let expected_sections = [
             "data",
+            "database",
             "log",
             "prometheus",
             "meilisearch",
