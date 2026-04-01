@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 use sqlx::AnyPool;
-use tracing::{info_span, instrument};
+use tracing::info_span;
 use tracing_futures::Instrument as _;
 
 use crate::models::{IngestError, IngestJob, JobProgress, JobStatus, JobType};
@@ -116,6 +116,7 @@ impl From<JobRow> for IngestJob {
 // ---------------------------------------------------------------------------
 
 /// sqlx-backed implementation of [`JobRepository`].
+#[derive(Clone)]
 pub struct SqlxJobRepository {
     pool: AnyPool,
 }
@@ -132,7 +133,6 @@ use super::record_db_metrics;
 
 #[async_trait]
 impl JobRepository for SqlxJobRepository {
-    #[instrument(skip(self), fields(table = "jobs"))]
     async fn create_job(
         &self,
         job_id: &str,
@@ -145,9 +145,9 @@ impl JobRepository for SqlxJobRepository {
         let source_dir_str = source_dir.to_string_lossy();
         let start = Instant::now();
 
-        // INSERT then SELECT to stay compatible with all backends (MySQL does
-        // not support RETURNING).
-        let insert_result = sqlx::query(
+        let mut tx = self.pool.begin().await.map_err(DbError::from)?;
+
+        sqlx::query(
             "INSERT INTO jobs \
              (job_id, source_dir, index_name, status, job_type, total_files, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
@@ -159,29 +159,27 @@ impl JobRepository for SqlxJobRepository {
         .bind(job_type_str(job_type))
         .bind(total_files)
         .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
-        .map_err(DbError::from);
-        record_db_metrics("create_job_insert", "jobs", start, insert_result.is_ok());
-        insert_result?;
+        .map_err(DbError::from)?;
 
-        let fetch_start = Instant::now();
-        let result = sqlx::query_as::<sqlx::Any, JobRow>(
+        let job = sqlx::query_as::<sqlx::Any, JobRow>(
             "SELECT job_id, source_dir, index_name, status, total_files, \
              extracted, processed, failed, empty, skipped, \
              created_at, finished_at, job_type \
              FROM jobs WHERE job_id = $1",
         )
         .bind(job_id)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map(IngestJob::from)
-        .map_err(DbError::from);
-        record_db_metrics("create_job_fetch", "jobs", fetch_start, result.is_ok());
-        result
+        .map_err(DbError::from)?;
+
+        tx.commit().await.map_err(DbError::from)?;
+        record_db_metrics("create_job", "jobs", start, true);
+        Ok(job)
     }
 
-    #[instrument(skip(self), fields(table = "jobs"))]
     async fn update_progress(&self, job_id: &str, progress: &JobProgress) -> DbResult<()> {
         let start = Instant::now();
         let result = sqlx::query(
@@ -203,7 +201,19 @@ impl JobRepository for SqlxJobRepository {
         result
     }
 
-    #[instrument(skip(self), fields(table = "jobs"))]
+    async fn update_total_files(&self, job_id: &str, total_files: i64) -> DbResult<()> {
+        let start = Instant::now();
+        let result = sqlx::query("UPDATE jobs SET total_files = $1 WHERE job_id = $2")
+            .bind(total_files)
+            .bind(job_id)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(DbError::from);
+        record_db_metrics("update_total_files", "jobs", start, result.is_ok());
+        result
+    }
+
     async fn complete_job(&self, job_id: &str, status: JobStatus) -> DbResult<()> {
         let now = Utc::now().to_rfc3339();
         let start = Instant::now();
@@ -219,8 +229,7 @@ impl JobRepository for SqlxJobRepository {
         result
     }
 
-    #[instrument(skip(self), fields(table = "jobs"))]
-    async fn get_job(&self, job_id: &str, include_errors: bool) -> DbResult<Option<IngestJob>> {
+    async fn get_job(&self, job_id: &str) -> DbResult<Option<IngestJob>> {
         let start = Instant::now();
         let result = sqlx::query_as::<sqlx::Any, JobRow>(
             "SELECT job_id, source_dir, index_name, status, total_files, \
@@ -231,34 +240,10 @@ impl JobRepository for SqlxJobRepository {
         .bind(job_id)
         .fetch_optional(&self.pool)
         .await
+        .map(|opt| opt.map(IngestJob::from))
         .map_err(DbError::from);
         record_db_metrics("get_job", "jobs", start, result.is_ok());
-
-        let mut job = match result? {
-            Some(row) => IngestJob::from(row),
-            None => return Ok(None),
-        };
-
-        if include_errors {
-            let errors_start = Instant::now();
-            let errors_result = sqlx::query_as::<sqlx::Any, ErrorRow>(
-                "SELECT job_id, file_path, error_type, message, timestamp \
-                 FROM job_errors WHERE job_id = $1 ORDER BY timestamp",
-            )
-            .bind(job_id)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(DbError::from);
-            record_db_metrics(
-                "get_job_errors",
-                "job_errors",
-                errors_start,
-                errors_result.is_ok(),
-            );
-            job.errors = errors_result?.into_iter().map(IngestError::from).collect();
-        }
-
-        Ok(Some(job))
+        result
     }
 
     fn list_jobs(&self, status: Option<JobStatus>) -> BoxStream<'_, DbResult<IngestJob>> {
@@ -290,7 +275,6 @@ impl JobRepository for SqlxJobRepository {
         }
     }
 
-    #[instrument(skip(self), fields(table = "jobs"))]
     async fn find_resumable_job(
         &self,
         source_dir: Option<&Path>,
@@ -331,27 +315,29 @@ impl JobRepository for SqlxJobRepository {
         result
     }
 
-    #[instrument(skip(self), fields(table = "jobs"))]
     async fn clear_index(&self, index_name: &str) -> DbResult<u64> {
         let start = Instant::now();
-        // Delete errors first to satisfy the FK constraint.
+        let mut tx = self.pool.begin().await.map_err(DbError::from)?;
+
         sqlx::query(
             "DELETE FROM job_errors WHERE job_id IN \
              (SELECT job_id FROM jobs WHERE index_name = $1)",
         )
         .bind(index_name)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(DbError::from)?;
 
-        let result = sqlx::query("DELETE FROM jobs WHERE index_name = $1")
+        let deleted = sqlx::query("DELETE FROM jobs WHERE index_name = $1")
             .bind(index_name)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map(|r| r.rows_affected())
-            .map_err(DbError::from);
-        record_db_metrics("clear_index", "jobs", start, result.is_ok());
-        result
+            .map_err(DbError::from)?;
+
+        tx.commit().await.map_err(DbError::from)?;
+        record_db_metrics("clear_index", "jobs", start, true);
+        Ok(deleted)
     }
 }
 
@@ -386,6 +372,8 @@ impl From<ErrorRow> for IngestError {
 
 #[cfg(test)]
 mod tests {
+    use futures::TryStreamExt as _;
+
     use super::*;
     use crate::db::test_pool;
     use crate::models::JobProgress;
@@ -413,7 +401,7 @@ mod tests {
         assert!(job.finished_at.is_none());
 
         let fetched = repo
-            .get_job("happy_fox_abc", false)
+            .get_job("happy_fox_abc")
             .await?
             .ok_or_else(|| anyhow::anyhow!("job should exist"))?;
         assert_eq!(fetched.job_id, job.job_id);
@@ -426,7 +414,7 @@ mod tests {
     async fn test_get_job_not_found_returns_none() -> anyhow::Result<()> {
         let pool = test_pool().await?;
         let repo = SqlxJobRepository::new(pool);
-        let result = repo.get_job("no_such_job_xyz", false).await?;
+        let result = repo.get_job("no_such_job_xyz").await?;
         assert!(result.is_none());
         Ok(())
     }
@@ -457,7 +445,7 @@ mod tests {
         .await?;
 
         let job = repo
-            .get_job("brave_owl_def", false)
+            .get_job("brave_owl_def")
             .await?
             .ok_or_else(|| anyhow::anyhow!("job should exist"))?;
         assert_eq!(job.extracted, 10);
@@ -465,6 +453,30 @@ mod tests {
         assert_eq!(job.failed, 2);
         assert_eq!(job.empty, 1);
         assert_eq!(job.skipped, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_total_files() -> anyhow::Result<()> {
+        let pool = test_pool().await?;
+        let repo = SqlxJobRepository::new(pool);
+        repo.create_job("walk_job", Path::new("/walk"), "aum", JobType::Ingest, 0)
+            .await?;
+
+        repo.update_total_files("walk_job", 500).await?;
+
+        let job = repo
+            .get_job("walk_job")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("job should exist"))?;
+        assert_eq!(job.total_files, 500);
+
+        repo.update_total_files("walk_job", 1234).await?;
+        let job = repo
+            .get_job("walk_job")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("job should exist"))?;
+        assert_eq!(job.total_files, 1234);
         Ok(())
     }
 
@@ -479,7 +491,7 @@ mod tests {
             .await?;
 
         let job = repo
-            .get_job("calm_deer_ghi", false)
+            .get_job("calm_deer_ghi")
             .await?
             .ok_or_else(|| anyhow::anyhow!("job should exist"))?;
         assert_eq!(job.status, JobStatus::Completed);
@@ -498,20 +510,13 @@ mod tests {
             .await?;
         repo.complete_job("job_a", JobStatus::Completed).await?;
 
-        let all: Vec<_> = repo
-            .list_jobs(None)
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<_, _>>()?;
+        let all: Vec<_> = repo.list_jobs(None).try_collect().await?;
         assert_eq!(all.len(), 2);
 
         let pending: Vec<_> = repo
             .list_jobs(Some(JobStatus::Pending))
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<_, _>>()?;
+            .try_collect()
+            .await?;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].job_id, "job_b");
         Ok(())
@@ -554,8 +559,8 @@ mod tests {
         let deleted = repo.clear_index("my_index").await?;
         assert_eq!(deleted, 2);
 
-        assert!(repo.get_job("to_del_1", false).await?.is_none());
-        assert!(repo.get_job("keep_me", false).await?.is_some());
+        assert!(repo.get_job("to_del_1").await?.is_none());
+        assert!(repo.get_job("keep_me").await?.is_some());
         Ok(())
     }
 }

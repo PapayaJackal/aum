@@ -4,13 +4,15 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use sqlx::AnyPool;
-use tracing::instrument;
+
+use crate::models::EmbeddingModelInfo;
 
 use super::error::{DbError, DbResult};
 use super::record_db_metrics;
 use super::repository::IndexEmbeddingRepository;
 
 /// sqlx-backed implementation of [`IndexEmbeddingRepository`].
+#[derive(Clone)]
 pub struct SqlxIndexEmbeddingRepository {
     pool: AnyPool,
 }
@@ -25,11 +27,7 @@ impl SqlxIndexEmbeddingRepository {
 
 #[async_trait]
 impl IndexEmbeddingRepository for SqlxIndexEmbeddingRepository {
-    #[instrument(skip(self), fields(table = "index_embeddings"))]
-    async fn get_embedding_model(
-        &self,
-        index_name: &str,
-    ) -> DbResult<Option<(String, String, i64)>> {
+    async fn get_embedding_model(&self, index_name: &str) -> DbResult<Option<EmbeddingModelInfo>> {
         let start = Instant::now();
         let result = sqlx::query_as::<sqlx::Any, (String, String, i64)>(
             "SELECT model, backend, dimension FROM index_embeddings WHERE index_name = $1",
@@ -37,6 +35,13 @@ impl IndexEmbeddingRepository for SqlxIndexEmbeddingRepository {
         .bind(index_name)
         .fetch_optional(&self.pool)
         .await
+        .map(|opt| {
+            opt.map(|(model, backend, dimension)| EmbeddingModelInfo {
+                model,
+                backend,
+                dimension,
+            })
+        })
         .map_err(DbError::from);
         record_db_metrics(
             "get_embedding_model",
@@ -47,7 +52,6 @@ impl IndexEmbeddingRepository for SqlxIndexEmbeddingRepository {
         result
     }
 
-    #[instrument(skip(self), fields(table = "index_embeddings"))]
     async fn set_embedding_model(
         &self,
         index_name: &str,
@@ -84,7 +88,6 @@ impl IndexEmbeddingRepository for SqlxIndexEmbeddingRepository {
         result
     }
 
-    #[instrument(skip(self), fields(table = "index_embeddings"))]
     async fn clear_embedding_model(&self, index_name: &str) -> DbResult<()> {
         let start = Instant::now();
         let result = sqlx::query("DELETE FROM index_embeddings WHERE index_name = $1")
@@ -127,13 +130,13 @@ mod tests {
         let repo = SqlxIndexEmbeddingRepository::new(pool);
         repo.set_embedding_model("my_index", "arctic-embed", "ollama", 1024)
             .await?;
-        let (model, backend, dim) = repo
+        let info = repo
             .get_embedding_model("my_index")
             .await?
             .ok_or_else(|| anyhow::anyhow!("should exist"))?;
-        assert_eq!(model, "arctic-embed");
-        assert_eq!(backend, "ollama");
-        assert_eq!(dim, 1024);
+        assert_eq!(info.model, "arctic-embed");
+        assert_eq!(info.backend, "ollama");
+        assert_eq!(info.dimension, 1024);
         Ok(())
     }
 
@@ -145,13 +148,13 @@ mod tests {
             .await?;
         repo.set_embedding_model("idx", "new-model", "openai", 1536)
             .await?;
-        let (model, backend, dim) = repo
+        let info = repo
             .get_embedding_model("idx")
             .await?
             .ok_or_else(|| anyhow::anyhow!("should exist"))?;
-        assert_eq!(model, "new-model");
-        assert_eq!(backend, "openai");
-        assert_eq!(dim, 1536);
+        assert_eq!(info.model, "new-model");
+        assert_eq!(info.backend, "openai");
+        assert_eq!(info.dimension, 1536);
         Ok(())
     }
 

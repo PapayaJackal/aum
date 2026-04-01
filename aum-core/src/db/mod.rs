@@ -25,6 +25,7 @@ pub mod errors;
 pub mod jobs;
 pub mod pool;
 pub mod repository;
+pub mod tracker;
 
 use std::time::Instant;
 
@@ -50,6 +51,7 @@ pub use errors::SqlxJobErrorRepository;
 pub use jobs::SqlxJobRepository;
 pub use pool::init_pool;
 pub use repository::{IndexEmbeddingRepository, JobErrorRepository, JobRepository};
+pub use tracker::JobTracker;
 
 // ---------------------------------------------------------------------------
 // Test helper

@@ -10,7 +10,9 @@ use std::path::Path;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 
-use crate::models::{IngestError, IngestJob, JobProgress, JobStatus, JobType};
+use crate::models::{
+    EmbeddingModelInfo, ErrorFilter, IngestError, IngestJob, JobProgress, JobStatus, JobType,
+};
 
 use super::error::DbResult;
 
@@ -38,10 +40,7 @@ pub trait JobRepository: Send + Sync {
     async fn complete_job(&self, job_id: &str, status: JobStatus) -> DbResult<()>;
 
     /// Fetch a single job by ID.
-    ///
-    /// When `include_errors` is `true` the returned job's `errors` field is
-    /// populated from the `job_errors` table; otherwise it is left empty.
-    async fn get_job(&self, job_id: &str, include_errors: bool) -> DbResult<Option<IngestJob>>;
+    async fn get_job(&self, job_id: &str) -> DbResult<Option<IngestJob>>;
 
     /// Stream all jobs ordered by `created_at DESC`, optionally filtered by status.
     ///
@@ -56,6 +55,12 @@ pub trait JobRepository: Send + Sync {
         source_dir: Option<&Path>,
         job_type: JobType,
     ) -> DbResult<Option<IngestJob>>;
+
+    /// Update just the `total_files` count for a job.
+    ///
+    /// Called periodically by the file walker as new files are discovered,
+    /// without overwriting the progress counters.
+    async fn update_total_files(&self, job_id: &str, total_files: i64) -> DbResult<()>;
 
     /// Delete all jobs (and their errors) for a given index.
     ///
@@ -85,16 +90,19 @@ pub trait JobErrorRepository: Send + Sync {
     /// Stream all errors for a job ordered by `timestamp`.
     fn list_errors<'a>(&'a self, job_id: &str) -> BoxStream<'a, DbResult<IngestError>>;
 
-    /// Return the distinct file paths that have errors for a job.
+    /// Stream the distinct `file_path` values from errors for a job as raw
+    /// strings.
     ///
-    /// - `exclude_type`: skip errors of this type.
-    /// - `only_type`: return only errors of this type.
-    async fn get_failed_paths(
-        &self,
+    /// Used for embed jobs where `file_path` stores document ID hashes
+    /// rather than filesystem paths.
+    fn get_failed_doc_ids<'a>(&'a self, job_id: &str) -> BoxStream<'a, DbResult<String>>;
+
+    /// Stream the distinct file paths that have errors for a job.
+    fn get_failed_paths<'a>(
+        &'a self,
         job_id: &str,
-        exclude_type: Option<&str>,
-        only_type: Option<&str>,
-    ) -> DbResult<Vec<std::path::PathBuf>>;
+        filter: ErrorFilter<'_>,
+    ) -> BoxStream<'a, DbResult<std::path::PathBuf>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,12 +113,7 @@ pub trait JobErrorRepository: Send + Sync {
 #[async_trait]
 pub trait IndexEmbeddingRepository: Send + Sync {
     /// Retrieve the embedding model metadata for an index.
-    ///
-    /// Returns `(model, backend, dimension)` or `None` if no record exists.
-    async fn get_embedding_model(
-        &self,
-        index_name: &str,
-    ) -> DbResult<Option<(String, String, i64)>>;
+    async fn get_embedding_model(&self, index_name: &str) -> DbResult<Option<EmbeddingModelInfo>>;
 
     /// Upsert the embedding model metadata for an index.
     async fn set_embedding_model(

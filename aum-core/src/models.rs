@@ -135,6 +135,36 @@ pub enum JobType {
 }
 
 // ---------------------------------------------------------------------------
+// ErrorFilter
+// ---------------------------------------------------------------------------
+
+/// Filter for querying failed file paths by error type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorFilter<'a> {
+    /// Return all failed paths regardless of error type.
+    All,
+    /// Return only paths with this specific error type.
+    Only(&'a str),
+    /// Return paths excluding this specific error type.
+    Exclude(&'a str),
+}
+
+// ---------------------------------------------------------------------------
+// EmbeddingModelInfo
+// ---------------------------------------------------------------------------
+
+/// Metadata about the embedding model used for a search index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddingModelInfo {
+    /// Embedding model name (e.g. `snowflake-arctic-embed2`).
+    pub model: String,
+    /// Backend provider (e.g. `ollama`, `openai`).
+    pub backend: String,
+    /// Vector dimension (e.g. 768, 1024).
+    pub dimension: i64,
+}
+
+// ---------------------------------------------------------------------------
 // MetadataValue
 // ---------------------------------------------------------------------------
 

@@ -7,10 +7,10 @@ use async_trait::async_trait;
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 use sqlx::AnyPool;
-use tracing::{info_span, instrument};
+use tracing::info_span;
 use tracing_futures::Instrument as _;
 
-use crate::models::IngestError;
+use crate::models::{ErrorFilter, IngestError};
 
 use super::error::{DbError, DbResult};
 use super::jobs::ErrorRow;
@@ -18,6 +18,7 @@ use super::record_db_metrics;
 use super::repository::JobErrorRepository;
 
 /// sqlx-backed implementation of [`JobErrorRepository`].
+#[derive(Clone)]
 pub struct SqlxJobErrorRepository {
     pool: AnyPool,
 }
@@ -32,7 +33,6 @@ impl SqlxJobErrorRepository {
 
 #[async_trait]
 impl JobErrorRepository for SqlxJobErrorRepository {
-    #[instrument(skip(self), fields(table = "job_errors"))]
     async fn record_error(
         &self,
         job_id: &str,
@@ -78,49 +78,61 @@ impl JobErrorRepository for SqlxJobErrorRepository {
         )
     }
 
-    #[instrument(skip(self), fields(table = "job_errors"))]
-    async fn get_failed_paths(
-        &self,
+    fn get_failed_doc_ids<'a>(&'a self, job_id: &str) -> BoxStream<'a, DbResult<String>> {
+        let span = info_span!(
+            "db.query",
+            operation = "get_failed_doc_ids",
+            table = "job_errors"
+        );
+        let job_id = job_id.to_owned();
+        Box::pin(
+            sqlx::query_as::<sqlx::Any, (String,)>(
+                "SELECT DISTINCT file_path FROM job_errors WHERE job_id = $1",
+            )
+            .bind(job_id)
+            .fetch(&self.pool)
+            .instrument(span)
+            .map(|r| r.map(|(p,)| p).map_err(DbError::from)),
+        )
+    }
+
+    fn get_failed_paths<'a>(
+        &'a self,
         job_id: &str,
-        exclude_type: Option<&str>,
-        only_type: Option<&str>,
-    ) -> DbResult<Vec<PathBuf>> {
-        let start = Instant::now();
-        let result = match (exclude_type, only_type) {
-            (Some(excl), None) => {
-                sqlx::query_as::<sqlx::Any, (String,)>(
-                    "SELECT DISTINCT file_path FROM job_errors \
-                     WHERE job_id = $1 AND error_type != $2",
-                )
-                .bind(job_id)
-                .bind(excl)
-                .fetch_all(&self.pool)
-                .await
-            }
-            (None, Some(only)) => {
-                sqlx::query_as::<sqlx::Any, (String,)>(
-                    "SELECT DISTINCT file_path FROM job_errors \
-                     WHERE job_id = $1 AND error_type = $2",
-                )
-                .bind(job_id)
-                .bind(only)
-                .fetch_all(&self.pool)
-                .await
-            }
-            _ => {
-                sqlx::query_as::<sqlx::Any, (String,)>(
-                    "SELECT DISTINCT file_path FROM job_errors WHERE job_id = $1",
-                )
-                .bind(job_id)
-                .fetch_all(&self.pool)
-                .await
-            }
+        filter: ErrorFilter<'_>,
+    ) -> BoxStream<'a, DbResult<PathBuf>> {
+        let span = info_span!(
+            "db.query",
+            operation = "get_failed_paths",
+            table = "job_errors"
+        );
+        let job_id = job_id.to_owned();
+        let (sql, type_filter) = match filter {
+            ErrorFilter::Exclude(t) => (
+                "SELECT DISTINCT file_path FROM job_errors \
+                 WHERE job_id = $1 AND error_type != $2",
+                Some(t.to_owned()),
+            ),
+            ErrorFilter::Only(t) => (
+                "SELECT DISTINCT file_path FROM job_errors \
+                 WHERE job_id = $1 AND error_type = $2",
+                Some(t.to_owned()),
+            ),
+            ErrorFilter::All => (
+                "SELECT DISTINCT file_path FROM job_errors WHERE job_id = $1",
+                None,
+            ),
         };
-        let result = result
-            .map(|rows| rows.into_iter().map(|(p,)| PathBuf::from(p)).collect())
-            .map_err(DbError::from);
-        record_db_metrics("get_failed_paths", "job_errors", start, result.is_ok());
-        result
+        let mut query = sqlx::query_as::<sqlx::Any, (String,)>(sql).bind(job_id);
+        if let Some(t) = type_filter {
+            query = query.bind(t);
+        }
+        Box::pin(
+            query
+                .fetch(&self.pool)
+                .instrument(span)
+                .map(|r| r.map(|(p,)| PathBuf::from(p)).map_err(DbError::from)),
+        )
     }
 }
 
@@ -130,6 +142,8 @@ impl JobErrorRepository for SqlxJobErrorRepository {
 
 #[cfg(test)]
 mod tests {
+    use futures::TryStreamExt as _;
+
     use super::*;
     use crate::db::repository::JobRepository as _;
     use crate::db::{SqlxJobRepository, test_pool};
@@ -151,12 +165,7 @@ mod tests {
         repo.record_error("err_job_1", Path::new("/a/b.pdf"), "ParseError", "oops")
             .await?;
 
-        let errors: Vec<_> = repo
-            .list_errors("err_job_1")
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<_, _>>()?;
+        let errors: Vec<_> = repo.list_errors("err_job_1").try_collect().await?;
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].file_path, PathBuf::from("/a/b.pdf"));
         assert_eq!(errors[0].error_type, "ParseError");
@@ -175,12 +184,7 @@ mod tests {
         repo.record_error("err_job_2", Path::new("/x.pdf"), "Timeout", "still slow")
             .await?;
 
-        let errors: Vec<_> = repo
-            .list_errors("err_job_2")
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<_, _>>()?;
+        let errors: Vec<_> = repo.list_errors("err_job_2").try_collect().await?;
         assert_eq!(errors.len(), 1, "duplicate should not insert a second row");
         Ok(())
     }
@@ -196,7 +200,10 @@ mod tests {
         repo.record_error("err_job_3", Path::new("/b.pdf"), "TypeB", "msg")
             .await?;
 
-        let paths = repo.get_failed_paths("err_job_3", None, None).await?;
+        let paths: Vec<_> = repo
+            .get_failed_paths("err_job_3", ErrorFilter::All)
+            .try_collect()
+            .await?;
         assert_eq!(paths.len(), 2);
         Ok(())
     }
@@ -212,11 +219,43 @@ mod tests {
         repo.record_error("err_job_4", Path::new("/b.pdf"), "TypeB", "msg")
             .await?;
 
-        let paths = repo
-            .get_failed_paths("err_job_4", None, Some("TypeA"))
+        let paths: Vec<_> = repo
+            .get_failed_paths("err_job_4", ErrorFilter::Only("TypeA"))
+            .try_collect()
             .await?;
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], PathBuf::from("/a.pdf"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_failed_doc_ids_streams_distinct_values() -> anyhow::Result<()> {
+        let pool = test_pool().await?;
+        setup_job(&pool, "embed_job").await?;
+        let repo = SqlxJobErrorRepository::new(pool);
+
+        repo.record_error(
+            "embed_job",
+            Path::new("doc_abc123"),
+            "EmbeddingError",
+            "fail1",
+        )
+        .await?;
+        repo.record_error(
+            "embed_job",
+            Path::new("doc_def456"),
+            "EmbeddingError",
+            "fail2",
+        )
+        .await?;
+        // Same doc_id with different error type — should still appear only once
+        repo.record_error("embed_job", Path::new("doc_abc123"), "TimeoutError", "slow")
+            .await?;
+
+        let ids: Vec<_> = repo.get_failed_doc_ids("embed_job").try_collect().await?;
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"doc_abc123".to_owned()));
+        assert!(ids.contains(&"doc_def456".to_owned()));
         Ok(())
     }
 
@@ -231,8 +270,9 @@ mod tests {
         repo.record_error("err_job_5", Path::new("/b.pdf"), "ParseError", "msg")
             .await?;
 
-        let paths = repo
-            .get_failed_paths("err_job_5", Some("EmptyExtraction"), None)
+        let paths: Vec<_> = repo
+            .get_failed_paths("err_job_5", ErrorFilter::Exclude("EmptyExtraction"))
+            .try_collect()
             .await?;
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], PathBuf::from("/b.pdf"));

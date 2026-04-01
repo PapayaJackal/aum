@@ -29,9 +29,6 @@ CREATE TABLE IF NOT EXISTS job_errors (
     PRIMARY KEY (job_id, file_path, error_type)
 );
 
-CREATE INDEX IF NOT EXISTS idx_job_errors_job_id
-    ON job_errors (job_id);
-
 -- One row per search index recording which embedding model was used.
 CREATE TABLE IF NOT EXISTS index_embeddings (
     index_name TEXT    PRIMARY KEY,
