@@ -21,7 +21,9 @@ use tracing_futures::Instrument as _;
 
 use serde::Deserializer as _;
 
-use crate::extraction::{ExtractionError, Extractor, RecordErrorFn};
+use crate::extraction::{
+    AUM_DISPLAY_PATH_KEY, AUM_EXTRACTED_FROM_KEY, ExtractionError, Extractor, RecordErrorFn,
+};
 use crate::models::{Document, MetadataValue};
 
 // ---------------------------------------------------------------------------
@@ -31,8 +33,6 @@ use crate::models::{Document, MetadataValue};
 const TIKA_CONTENT_KEY: &str = "X-TIKA:content";
 const EMBEDDED_RESOURCE_PATH_KEY: &str = "X-TIKA:embedded_resource_path";
 const RESOURCE_NAME_KEY: &str = "resourceName";
-const AUM_DISPLAY_PATH_KEY: &str = "_aum_display_path";
-const AUM_EXTRACTED_FROM_KEY: &str = "_aum_extracted_from";
 /// Maximum characters of an HTTP error body included in [`ExtractionError::RmetaHttp`].
 const RMETA_ERROR_BODY_LIMIT: usize = 512;
 
@@ -979,6 +979,7 @@ impl TikaExtractor {
 mod tests {
     use std::sync::Mutex;
 
+    use anyhow::Context as _;
     use serde_json::json;
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
@@ -992,7 +993,7 @@ mod tests {
     // Helpers
     // -----------------------------------------------------------------------
 
-    fn make_extractor(tmp: &TempDir, server_url: &str) -> TikaExtractor {
+    fn make_extractor(tmp: &TempDir, server_url: &str) -> anyhow::Result<TikaExtractor> {
         TikaExtractor::new(TikaExtractorConfig {
             server_url: server_url.to_owned(),
             ocr_enabled: false,
@@ -1003,15 +1004,15 @@ mod tests {
             request_timeout_secs: 10,
             max_content_length: 0,
         })
-        .expect("client build")
+        .context("make_extractor")
     }
 
-    async fn make_zip_bytes(files: &[(&str, &[u8])]) -> Vec<u8> {
+    async fn make_zip_bytes(files: &[(&str, &[u8])]) -> anyhow::Result<Vec<u8>> {
         use async_zip::base::write::ZipFileWriter;
         use async_zip::{Compression, ZipEntryBuilder};
 
-        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        let std_file = tmp.as_file().try_clone().expect("clone");
+        let tmp = tempfile::NamedTempFile::new().context("tempfile")?;
+        let std_file = tmp.as_file().try_clone().context("clone")?;
         let tokio_file = tokio::fs::File::from_std(std_file);
         let mut writer = ZipFileWriter::with_tokio(tokio_file);
         for (name, data) in files {
@@ -1019,10 +1020,10 @@ mod tests {
             writer
                 .write_entry_whole(entry, data)
                 .await
-                .expect("write entry");
+                .context("write entry")?;
         }
-        writer.close().await.expect("close zip");
-        tokio::fs::read(tmp.path()).await.expect("read zip")
+        writer.close().await.context("close zip")?;
+        tokio::fs::read(tmp.path()).await.context("read zip")
     }
 
     type ErrorLog = Arc<Mutex<Vec<(PathBuf, String, String)>>>;
@@ -1033,7 +1034,7 @@ mod tests {
         let cb: RecordErrorFn = Arc::new(move |p, et, msg| {
             log_cb
                 .lock()
-                .expect("lock")
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((p.to_path_buf(), et.to_owned(), msg.to_owned()));
         });
         (log, cb)
@@ -1121,47 +1122,33 @@ mod tests {
 
     #[test]
     fn find_container_paths_flat_archive() {
-        let parts = vec![{
-            let mut m = Map::new();
-            m.insert(EMBEDDED_RESOURCE_PATH_KEY.to_owned(), json!("/file.txt"));
-            m
-        }];
-        assert!(find_container_paths(parts.iter()).is_empty());
+        let mut m = Map::new();
+        m.insert(EMBEDDED_RESOURCE_PATH_KEY.to_owned(), json!("/file.txt"));
+        assert!(find_container_paths([m].iter()).is_empty());
     }
 
     #[test]
     fn find_container_paths_single_level() {
-        let parts = vec![
-            {
-                let mut m = Map::new();
-                m.insert(EMBEDDED_RESOURCE_PATH_KEY.to_owned(), json!("/archive.zip"));
-                m
-            },
-            {
-                let mut m = Map::new();
-                m.insert(
-                    EMBEDDED_RESOURCE_PATH_KEY.to_owned(),
-                    json!("/archive.zip/doc.pdf"),
-                );
-                m
-            },
-        ];
-        let c = find_container_paths(parts.iter());
+        let mut m1 = Map::new();
+        m1.insert(EMBEDDED_RESOURCE_PATH_KEY.to_owned(), json!("/archive.zip"));
+        let mut m2 = Map::new();
+        m2.insert(
+            EMBEDDED_RESOURCE_PATH_KEY.to_owned(),
+            json!("/archive.zip/doc.pdf"),
+        );
+        let c = find_container_paths([m1, m2].iter());
         assert!(c.contains("/archive.zip"));
         assert_eq!(c.len(), 1);
     }
 
     #[test]
     fn find_container_paths_deep_nesting() {
-        let parts = vec![{
-            let mut m = Map::new();
-            m.insert(
-                EMBEDDED_RESOURCE_PATH_KEY.to_owned(),
-                json!("/a.zip/b.tar/c.txt"),
-            );
-            m
-        }];
-        let c = find_container_paths(parts.iter());
+        let mut m = Map::new();
+        m.insert(
+            EMBEDDED_RESOURCE_PATH_KEY.to_owned(),
+            json!("/a.zip/b.tar/c.txt"),
+        );
+        let c = find_container_paths([m].iter());
         assert!(c.contains("/a.zip"));
         assert!(c.contains("/a.zip/b.tar"));
         assert_eq!(c.len(), 2);
@@ -1205,27 +1192,26 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn extract_simple_document() {
+    async fn extract_simple_document() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([{
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
                 "X-TIKA:content": "  Hello world  ",
                 "dc:title": "My Doc",
             }])))
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("doc.pdf");
-        tokio::fs::write(&source, b"pdf").await.expect("write");
+        tokio::fs::write(&source, b"pdf").await?;
 
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         let docs = extractor
             .extract(&source, None)
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "Hello world");
@@ -1233,35 +1219,40 @@ mod tests {
         assert!(!docs[0].metadata.contains_key("X-TIKA:content"));
 
         // No /unpack/all call for a simple document.
-        assert_eq!(server.received_requests().await.expect("reqs").len(), 1);
+        let reqs = server
+            .received_requests()
+            .await
+            .context("request recording disabled")?;
+        assert_eq!(reqs.len(), 1);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_empty_rmeta_gives_one_empty_doc() {
+    async fn extract_empty_rmeta_gives_one_empty_doc() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([])))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("empty.pdf");
-        tokio::fs::write(&source, b"").await.expect("write");
+        tokio::fs::write(&source, b"").await?;
 
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         let docs = extractor
             .extract(&source, None)
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
         assert_eq!(docs.len(), 1);
         assert!(docs[0].content.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_rmeta_http_error() {
+    async fn extract_rmeta_http_error() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
@@ -1269,24 +1260,25 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("doc.pdf");
-        tokio::fs::write(&source, b"x").await.expect("write");
+        tokio::fs::write(&source, b"x").await?;
 
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         let result: Result<Vec<_>, _> = extractor.extract(&source, None).try_collect().await;
         assert!(matches!(
             result,
             Err(ExtractionError::RmetaHttp { status: 500, .. })
         ));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_internal_keys_stripped() {
+    async fn extract_internal_keys_stripped() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([{
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
                 "X-TIKA:content": "text",
                 "X-TIKA:content_handler": "h",
                 "X-TIKA:parse_time_millis": "10",
@@ -1295,98 +1287,98 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("doc.pdf");
-        tokio::fs::write(&source, b"x").await.expect("write");
+        tokio::fs::write(&source, b"x").await?;
 
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         let docs = extractor
             .extract(&source, None)
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
         assert!(!docs[0].metadata.contains_key("X-TIKA:content_handler"));
         assert!(!docs[0].metadata.contains_key("X-TIKA:parse_time_millis"));
         assert!(docs[0].metadata.contains_key("dc:title"));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_content_truncated() {
+    async fn extract_content_truncated() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_json(&json!([{"X-TIKA:content": "abcdefghij1234567890"}])),
+                    .set_body_json(json!([{"X-TIKA:content": "abcdefghij1234567890"}])),
             )
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("doc.txt");
-        tokio::fs::write(&source, b"x").await.expect("write");
+        tokio::fs::write(&source, b"x").await?;
 
         let (log, cb) = make_error_log();
         let extractor = TikaExtractor::new(TikaExtractorConfig {
             max_content_length: 10,
             server_url: server.uri(),
-            ..make_extractor(&tmp, &server.uri()).config
-        })
-        .expect("client");
+            ..make_extractor(&tmp, &server.uri())?.config
+        })?;
 
         let docs = extractor
             .extract(&source, Some(&cb))
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
         assert_eq!(docs[0].content, "abcdefghij");
 
-        let errors = log.lock().expect("lock");
+        let errors = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].1, "ContentTruncated");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_content_truncation_is_char_safe() {
+    async fn extract_content_truncation_is_char_safe() -> anyhow::Result<()> {
         // 7 multibyte chars, limit 3 → "こんに"
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_json(&json!([{"X-TIKA:content": "こんにちは世界"}])),
+                    .set_body_json(json!([{"X-TIKA:content": "こんにちは世界"}])),
             )
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("doc.txt");
-        tokio::fs::write(&source, b"x").await.expect("write");
+        tokio::fs::write(&source, b"x").await?;
 
         let extractor = TikaExtractor::new(TikaExtractorConfig {
             max_content_length: 3,
             server_url: server.uri(),
-            ..make_extractor(&tmp, &server.uri()).config
-        })
-        .expect("client");
+            ..make_extractor(&tmp, &server.uri())?.config
+        })?;
 
         let docs = extractor
             .extract(&source, None)
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
         assert_eq!(docs[0].content, "こんに");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_with_embedded_calls_unpack() {
-        let zip_bytes = make_zip_bytes(&[("attach.txt", b"attachment content")]).await;
+    async fn extract_with_embedded_calls_unpack() -> anyhow::Result<()> {
+        let zip_bytes = make_zip_bytes(&[("attach.txt", b"attachment content")]).await?;
 
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
                 {"X-TIKA:content": "email body"},
                 {
                     "X-TIKA:content": "attachment text",
@@ -1406,18 +1398,15 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("email.eml");
-        tokio::fs::write(&source, b"raw email")
-            .await
-            .expect("write");
+        tokio::fs::write(&source, b"raw email").await?;
 
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         let docs = extractor
             .extract(&source, None)
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
         assert_eq!(docs.len(), 2);
         assert_eq!(docs[0].content, "email body");
@@ -1425,14 +1414,15 @@ mod tests {
         // Embedded doc source is the extracted file, not the container.
         assert!(docs[1].source_path.exists());
         assert_ne!(docs[1].source_path, source);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_unpack_204_keeps_both_parts() {
+    async fn extract_unpack_204_keeps_both_parts() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
                 {"X-TIKA:content": "email body"},
                 {"X-TIKA:content": "part", "X-TIKA:embedded_resource_path": "/part.txt"},
             ])))
@@ -1444,28 +1434,28 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("email.eml");
-        tokio::fs::write(&source, b"raw").await.expect("write");
+        tokio::fs::write(&source, b"raw").await?;
 
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         let docs = extractor
             .extract(&source, None)
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
         // Both parts returned; embedded falls back to container path.
         assert_eq!(docs.len(), 2);
         assert_eq!(docs[1].source_path, source);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_unpack_failure_drops_embedded() {
+    async fn extract_unpack_failure_drops_embedded() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
                 {"X-TIKA:content": "container"},
                 {"X-TIKA:content": "e1", "X-TIKA:embedded_resource_path": "/a.txt"},
                 {"X-TIKA:content": "e2", "X-TIKA:embedded_resource_path": "/b.txt"},
@@ -1478,36 +1468,38 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("archive.zip");
-        tokio::fs::write(&source, b"data").await.expect("write");
+        tokio::fs::write(&source, b"data").await?;
 
         let (log, cb) = make_error_log();
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         let docs = extractor
             .extract(&source, Some(&cb))
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "container");
 
-        let errors = log.lock().expect("lock");
+        let errors = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].1, "UnpackError");
         assert!(errors[0].2.contains("2 embedded"));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_depth_limit_exceeded() {
-        let inner_zip = make_zip_bytes(&[("inner.txt", b"deep")]).await;
-        let outer_zip = make_zip_bytes(&[("inner.zip", &inner_zip)]).await;
+    async fn extract_depth_limit_exceeded() -> anyhow::Result<()> {
+        let inner_zip = make_zip_bytes(&[("inner.txt", b"deep")]).await?;
+        let outer_zip = make_zip_bytes(&[("inner.zip", &inner_zip)]).await?;
 
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
                 {"X-TIKA:content": "outer"},
                 {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/inner.zip"},
                 {"X-TIKA:content": "deep", "X-TIKA:embedded_resource_path": "/inner.zip/inner.txt"},
@@ -1528,65 +1520,68 @@ mod tests {
             .and(path("/unpack/all"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_bytes(make_zip_bytes(&[("inner.txt", b"deep")]).await)
+                    .set_body_bytes(make_zip_bytes(&[("inner.txt", b"deep")]).await?)
                     .insert_header("Content-Type", "application/zip"),
             )
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("outer.zip");
-        tokio::fs::write(&source, b"data").await.expect("write");
+        tokio::fs::write(&source, b"data").await?;
 
         let extractor = TikaExtractor::new(TikaExtractorConfig {
             max_depth: 0,
             server_url: server.uri(),
-            ..make_extractor(&tmp, &server.uri()).config
-        })
-        .expect("client");
+            ..make_extractor(&tmp, &server.uri())?.config
+        })?;
 
         let result: Result<Vec<_>, _> = extractor.extract(&source, None).try_collect().await;
         assert!(
             matches!(result, Err(ExtractionError::DepthLimitExceeded { .. })),
             "expected DepthLimitExceeded, got {result:?}"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_empty_file_no_error() {
+    async fn extract_empty_file_no_error() -> anyhow::Result<()> {
         // Zero-byte file: empty content but no EmptyExtraction error.
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&json!([{"X-TIKA:content": ""}])),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"X-TIKA:content": ""}])))
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("empty.txt");
-        tokio::fs::write(&source, b"").await.expect("write");
+        tokio::fs::write(&source, b"").await?;
 
         let (log, cb) = make_error_log();
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         extractor
             .extract(&source, Some(&cb))
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
-        assert!(log.lock().expect("lock").is_empty());
+        assert!(
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_many_empty_parts_single_error() {
-        let zip_bytes = make_zip_bytes(&[("a.bin", b"a"), ("b.bin", b"b"), ("c.bin", b"c")]).await;
+    async fn extract_many_empty_parts_single_error() -> anyhow::Result<()> {
+        let zip_bytes =
+            make_zip_bytes(&[("a.bin", b"a"), ("b.bin", b"b"), ("c.bin", b"c")]).await?;
 
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
                 {"X-TIKA:content": ""},
                 {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/a.bin"},
                 {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/b.bin"},
@@ -1604,31 +1599,33 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("archive.zip");
-        tokio::fs::write(&source, b"data").await.expect("write");
+        tokio::fs::write(&source, b"data").await?;
 
         let (log, cb) = make_error_log();
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         extractor
             .extract(&source, Some(&cb))
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
-        let errors = log.lock().expect("lock");
+        let errors = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let empty_errors: Vec<_> = errors.iter().filter(|e| e.1 == "EmptyExtraction").collect();
         assert_eq!(empty_errors.len(), 1);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_subdir_structure_preserved() {
-        let zip_bytes = make_zip_bytes(&[("subdir/file.txt", b"nested")]).await;
+    async fn extract_subdir_structure_preserved() -> anyhow::Result<()> {
+        let zip_bytes = make_zip_bytes(&[("subdir/file.txt", b"nested")]).await?;
 
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
                 {"X-TIKA:content": "container"},
                 {
                     "X-TIKA:content": "nested",
@@ -1647,30 +1644,30 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("archive.zip");
-        tokio::fs::write(&source, b"data").await.expect("write");
+        tokio::fs::write(&source, b"data").await?;
 
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         let docs = extractor
             .extract(&source, None)
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
         assert_eq!(docs.len(), 2);
         assert!(docs[1].source_path.exists());
         assert!(docs[1].source_path.to_string_lossy().contains("subdir"));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn extract_display_path_and_extracted_from_set() {
-        let zip_bytes = make_zip_bytes(&[("attach.pdf", b"content")]).await;
+    async fn extract_display_path_and_extracted_from_set() -> anyhow::Result<()> {
+        let zip_bytes = make_zip_bytes(&[("attach.pdf", b"content")]).await?;
 
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
             .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&json!([
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
                 {"X-TIKA:content": "email"},
                 {
                     "X-TIKA:content": "attach",
@@ -1690,16 +1687,15 @@ mod tests {
             .mount(&server)
             .await;
 
-        let tmp = TempDir::new().expect("tempdir");
+        let tmp = TempDir::new()?;
         let source = tmp.path().join("email.eml");
-        tokio::fs::write(&source, b"raw").await.expect("write");
+        tokio::fs::write(&source, b"raw").await?;
 
-        let extractor = make_extractor(&tmp, &server.uri());
+        let extractor = make_extractor(&tmp, &server.uri())?;
         let docs = extractor
             .extract(&source, None)
             .try_collect::<Vec<_>>()
-            .await
-            .expect("extract");
+            .await?;
 
         let meta = &docs[1].metadata;
         let MetadataValue::Single(display) = &meta[AUM_DISPLAY_PATH_KEY] else {
@@ -1711,5 +1707,6 @@ mod tests {
             panic!("expected Single for {AUM_EXTRACTED_FROM_KEY}");
         };
         assert!(extracted_from.contains("email.eml"));
+        Ok(())
     }
 }

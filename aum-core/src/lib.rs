@@ -21,6 +21,12 @@ pub mod extraction;
 /// Async generic instance pool with health-aware round-robin and per-instance concurrency.
 pub mod pool;
 
+/// Human-readable name generator for job IDs.
+pub mod names;
+
+/// Document ingest pipeline: concurrent extraction, batching, and progress tracking.
+pub mod ingest;
+
 /// Load config and initialise logging, printing errors to stderr and exiting on failure.
 ///
 /// Call this at the very start of `main()` before any `tracing` macros.

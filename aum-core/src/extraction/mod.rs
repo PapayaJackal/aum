@@ -13,6 +13,17 @@ use futures::stream::BoxStream;
 
 use crate::models::Document;
 
+/// Metadata key for the human-readable path shown to end users.
+///
+/// Relative to the ingest source directory.  Set by the extractor for embedded
+/// documents; relativised by the ingest pipeline for top-level documents.
+pub const AUM_DISPLAY_PATH_KEY: &str = "_aum_display_path";
+
+/// Metadata key for the container file that a document was extracted from.
+///
+/// For embedded documents only; absent on top-level documents.
+pub const AUM_EXTRACTED_FROM_KEY: &str = "_aum_extracted_from";
+
 /// Callback invoked for non-fatal sub-errors encountered during extraction.
 ///
 /// Called with `(file_path, error_type, message)`. Non-fatal errors include

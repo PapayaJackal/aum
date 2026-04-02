@@ -79,3 +79,22 @@ pub enum ExtractionError {
         source: async_zip::error::ZipError,
     },
 }
+
+impl ExtractionError {
+    /// A short machine-readable error category for this error variant.
+    ///
+    /// Suitable for recording in the job-error table and for metrics labels.
+    #[must_use]
+    pub fn error_type(&self) -> &'static str {
+        match self {
+            Self::RmetaConnection { .. } => "RmetaConnectionError",
+            Self::RmetaHttp { .. } => "RmetaHttpError",
+            Self::RmetaJson { .. } => "RmetaJsonError",
+            Self::UnpackConnection { .. } => "UnpackConnectionError",
+            Self::UnpackHttp { .. } => "UnpackHttpError",
+            Self::DepthLimitExceeded { .. } => "DepthLimitExceeded",
+            Self::Io { .. } => "IoError",
+            Self::Zip { .. } => "ZipError",
+        }
+    }
+}

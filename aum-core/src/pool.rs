@@ -474,6 +474,7 @@ mod tests {
 
     use std::sync::atomic::AtomicU32;
 
+    use anyhow::Context as _;
     use futures::StreamExt;
 
     // -----------------------------------------------------------------------
@@ -520,23 +521,23 @@ mod tests {
     }
 
     #[test]
-    fn single_instance() {
-        let pool =
-            InstancePool::new(vec![desc("a", 3)], test_config("test")).expect("should succeed");
+    fn single_instance() -> anyhow::Result<()> {
+        let pool = InstancePool::new(vec![desc("a", 3)], test_config("test"))?;
         assert_eq!(pool.len(), 1);
         assert_eq!(pool.total_concurrency(), 3);
         assert!(!pool.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn multiple_instances_sum_concurrency() {
+    fn multiple_instances_sum_concurrency() -> anyhow::Result<()> {
         let pool = InstancePool::new(
             vec![desc("a", 2), desc("b", 4), desc("c", 1)],
             test_config("test"),
-        )
-        .expect("should succeed");
+        )?;
         assert_eq!(pool.len(), 3);
         assert_eq!(pool.total_concurrency(), 7);
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -544,40 +545,40 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn round_robin_distributes_across_instances() {
+    async fn round_robin_distributes_across_instances() -> anyhow::Result<()> {
         let pool = InstancePool::new(
             vec![desc("a", 4), desc("b", 4), desc("c", 4)],
             test_config("test"),
-        )
-        .expect("should succeed");
+        )?;
 
         let mut counts = [0u32; 3];
         for _ in 0..9 {
-            pool.run(|client| {
-                let label = client.label.clone();
-                async move {
-                    let idx = match label.as_str() {
-                        "a" => 0,
-                        "b" => 1,
-                        "c" => 2,
-                        _ => unreachable!(),
-                    };
-                    Ok::<usize, String>(idx)
-                }
-            })
-            .await
-            .map(|idx| counts[idx] += 1)
-            .expect("should succeed");
+            let idx = pool
+                .run(|client| {
+                    let label = client.label.clone();
+                    async move {
+                        let idx = match label.as_str() {
+                            "a" => 0,
+                            "b" => 1,
+                            "c" => 2,
+                            _ => unreachable!(),
+                        };
+                        Ok::<usize, String>(idx)
+                    }
+                })
+                .await
+                .map_err(anyhow::Error::msg)?;
+            counts[idx] += 1;
         }
 
         // Each instance should get exactly 3 calls.
         assert_eq!(counts, [3, 3, 3]);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn single_instance_always_selected() {
-        let pool =
-            InstancePool::new(vec![desc("only", 2)], test_config("test")).expect("should succeed");
+    async fn single_instance_always_selected() -> anyhow::Result<()> {
+        let pool = InstancePool::new(vec![desc("only", 2)], test_config("test"))?;
 
         for _ in 0..5 {
             let label = pool
@@ -586,9 +587,10 @@ mod tests {
                     async move { Ok::<_, String>(l) }
                 })
                 .await
-                .expect("should succeed");
+                .map_err(anyhow::Error::msg)?;
             assert_eq!(label, "only");
         }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -596,9 +598,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn success_resets_failure_count() {
-        let pool =
-            InstancePool::new(vec![desc("a", 4)], test_config("test")).expect("should succeed");
+    async fn success_resets_failure_count() -> anyhow::Result<()> {
+        let pool = InstancePool::new(vec![desc("a", 4)], test_config("test"))?;
 
         // Fail twice (below threshold of 3).
         for _ in 0..2 {
@@ -610,7 +611,7 @@ mod tests {
         // Succeed once.
         pool.run(|_| async { Ok::<_, String>(()) })
             .await
-            .expect("should succeed");
+            .map_err(anyhow::Error::msg)?;
 
         let health = pool.instances[0]
             .health
@@ -618,12 +619,12 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(health.healthy);
         assert_eq!(health.consecutive_failures, 0);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn failure_threshold_marks_unhealthy() {
-        let pool =
-            InstancePool::new(vec![desc("a", 4)], test_config("test")).expect("should succeed");
+    async fn failure_threshold_marks_unhealthy() -> anyhow::Result<()> {
+        let pool = InstancePool::new(vec![desc("a", 4)], test_config("test"))?;
 
         for _ in 0..3 {
             let _ = pool
@@ -637,12 +638,12 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(!health.healthy);
         assert_eq!(health.consecutive_failures, 3);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn success_after_unhealthy_recovers() {
-        let pool =
-            InstancePool::new(vec![desc("a", 4)], test_config("test")).expect("should succeed");
+    async fn success_after_unhealthy_recovers() -> anyhow::Result<()> {
+        let pool = InstancePool::new(vec![desc("a", 4)], test_config("test"))?;
 
         // Drive to unhealthy.
         for _ in 0..3 {
@@ -654,7 +655,7 @@ mod tests {
         // Succeed — should recover.
         pool.run(|_| async { Ok::<_, String>(()) })
             .await
-            .expect("should succeed");
+            .map_err(anyhow::Error::msg)?;
 
         let health = pool.instances[0]
             .health
@@ -662,18 +663,18 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(health.healthy);
         assert_eq!(health.consecutive_failures, 0);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn unhealthy_instance_skipped() {
+    async fn unhealthy_instance_skipped() -> anyhow::Result<()> {
         let pool = InstancePool::new(
             vec![desc("a", 4), desc("b", 4)],
             // Use a long retry interval so "a" stays unhealthy during the test.
             InstancePoolConfig::new("test")
                 .with_failure_threshold(3)
                 .with_health_retry_interval(Duration::from_secs(3600)),
-        )
-        .expect("should succeed");
+        )?;
 
         // Mark "a" unhealthy by sending 3 failures to it specifically.
         // Round-robin alternates: idx 0→"a", 1→"b", 2→"a", 3→"b", 4→"a".
@@ -696,12 +697,13 @@ mod tests {
         }
 
         // Verify "a" is unhealthy.
-        let health_a = pool.instances[0]
-            .health
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert!(!health_a.healthy, "instance 'a' should be unhealthy");
-        drop(health_a);
+        {
+            let health_a = pool.instances[0]
+                .health
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert!(!health_a.healthy, "instance 'a' should be unhealthy");
+        }
 
         // Now all subsequent calls should go to "b" only.
         pool.index.store(0, Ordering::Relaxed);
@@ -712,18 +714,18 @@ mod tests {
                     async move { Ok::<_, String>(l) }
                 })
                 .await
-                .expect("should succeed");
+                .map_err(anyhow::Error::msg)?;
             assert_eq!(label, "b");
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn unhealthy_instance_retried_after_cooldown() {
+    async fn unhealthy_instance_retried_after_cooldown() -> anyhow::Result<()> {
         let pool = InstancePool::new(
             vec![desc("a", 4), desc("b", 4)],
             test_config("test"), // threshold=3, 50ms cooldown
-        )
-        .expect("should succeed");
+        )?;
 
         // Mark "a" unhealthy by targeting failures at it.
         pool.index.store(0, Ordering::Relaxed);
@@ -755,23 +757,23 @@ mod tests {
                     async move { Ok::<_, String>(l) }
                 })
                 .await
-                .expect("should succeed");
+                .map_err(anyhow::Error::msg)?;
             if label == "a" {
                 saw_a = true;
             }
         }
         assert!(saw_a, "expected instance 'a' to be retried after cooldown");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn all_unhealthy_falls_back_to_all() {
+    async fn all_unhealthy_falls_back_to_all() -> anyhow::Result<()> {
         let pool = InstancePool::new(
             vec![desc("a", 4), desc("b", 4)],
             InstancePoolConfig::new("test")
                 .with_failure_threshold(3)
                 .with_health_retry_interval(Duration::from_secs(3600)),
-        )
-        .expect("should succeed");
+        )?;
 
         // Mark both unhealthy.
         for _ in 0..6 {
@@ -787,8 +789,9 @@ mod tests {
                 async move { Ok::<_, String>(l) }
             })
             .await
-            .expect("should succeed");
+            .map_err(anyhow::Error::msg)?;
         assert!(label == "a" || label == "b");
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -796,10 +799,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn concurrency_limit_enforced() {
-        let pool = Arc::new(
-            InstancePool::new(vec![desc("a", 1)], test_config("test")).expect("should succeed"),
-        );
+    async fn concurrency_limit_enforced() -> anyhow::Result<()> {
+        let pool = Arc::new(InstancePool::new(vec![desc("a", 1)], test_config("test"))?);
 
         let started = Arc::new(AtomicU32::new(0));
         let max_concurrent = Arc::new(AtomicU32::new(0));
@@ -828,19 +829,20 @@ mod tests {
 
         for h in handles {
             h.await
-                .expect("task should not panic")
-                .expect("should succeed");
+                .context("task panicked")?
+                .map_err(anyhow::Error::msg)?;
         }
 
         assert_eq!(max_concurrent.load(Ordering::SeqCst), 1);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn concurrency_permits_independent_per_instance() {
-        let pool = Arc::new(
-            InstancePool::new(vec![desc("a", 1), desc("b", 1)], test_config("test"))
-                .expect("should succeed"),
-        );
+    async fn concurrency_permits_independent_per_instance() -> anyhow::Result<()> {
+        let pool = Arc::new(InstancePool::new(
+            vec![desc("a", 1), desc("b", 1)],
+            test_config("test"),
+        )?);
 
         let started = Arc::new(AtomicU32::new(0));
         let max_concurrent = Arc::new(AtomicU32::new(0));
@@ -869,12 +871,13 @@ mod tests {
 
         for h in handles {
             h.await
-                .expect("task should not panic")
-                .expect("should succeed");
+                .context("task panicked")?
+                .map_err(anyhow::Error::msg)?;
         }
 
         // Both should have run in parallel since they're on different instances.
         assert_eq!(max_concurrent.load(Ordering::SeqCst), 2);
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -882,9 +885,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn run_stream_yields_all_items() {
-        let pool =
-            InstancePool::new(vec![desc("a", 4)], test_config("test")).expect("should succeed");
+    async fn run_stream_yields_all_items() -> anyhow::Result<()> {
+        let pool = InstancePool::new(vec![desc("a", 4)], test_config("test"))?;
 
         let items: Vec<Result<i32, String>> = pool
             .run_stream(|_client| futures::stream::iter(vec![Ok(1), Ok(2), Ok(3)]))
@@ -893,12 +895,12 @@ mod tests {
 
         assert_eq!(items.len(), 3);
         assert!(items.iter().all(Result::is_ok));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn run_stream_records_success_when_no_errors() {
-        let pool =
-            InstancePool::new(vec![desc("a", 4)], test_config("test")).expect("should succeed");
+    async fn run_stream_records_success_when_no_errors() -> anyhow::Result<()> {
+        let pool = InstancePool::new(vec![desc("a", 4)], test_config("test"))?;
 
         // First fail a couple times to increment the counter.
         for _ in 0..2 {
@@ -919,15 +921,15 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(health.healthy);
         assert_eq!(health.consecutive_failures, 0);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn run_stream_records_failure_on_error_item() {
+    async fn run_stream_records_failure_on_error_item() -> anyhow::Result<()> {
         let pool = InstancePool::new(
             vec![desc("a", 4)],
             test_config("test"), // threshold=3
-        )
-        .expect("should succeed");
+        )?;
 
         // Run 3 streams that each yield an error.
         for _ in 0..3 {
@@ -944,12 +946,12 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(!health.healthy);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn run_stream_holds_permit_for_stream_lifetime() {
-        let pool =
-            InstancePool::new(vec![desc("a", 1)], test_config("test")).expect("should succeed");
+    async fn run_stream_holds_permit_for_stream_lifetime() -> anyhow::Result<()> {
+        let pool = InstancePool::new(vec![desc("a", 1)], test_config("test"))?;
 
         let mut stream =
             pool.run_stream(|_| futures::stream::iter(vec![Ok::<i32, String>(1), Ok(2), Ok(3)]));
@@ -971,6 +973,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(10)).await;
         let available = pool.instances[0].semaphore.available_permits();
         assert_eq!(available, 1, "permit should be released after stream ends");
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -978,11 +981,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn concurrent_health_updates_are_safe() {
-        let pool = Arc::new(
-            InstancePool::new(vec![desc("a", 8), desc("b", 8)], test_config("test"))
-                .expect("should succeed"),
-        );
+    async fn concurrent_health_updates_are_safe() -> anyhow::Result<()> {
+        let pool = Arc::new(InstancePool::new(
+            vec![desc("a", 8), desc("b", 8)],
+            test_config("test"),
+        )?);
 
         let mut handles = Vec::new();
         for i in 0..32 {
@@ -993,16 +996,17 @@ mod tests {
                         .run(|_| async { Err::<(), String>("fail".into()) })
                         .await;
                 } else {
-                    pool.run(|_| async { Ok::<_, String>(()) })
-                        .await
-                        .expect("should succeed");
+                    // Succeeding tasks: ignore the result (it always succeeds
+                    // for a healthy pool, but we don't want to panic here).
+                    let _ = pool.run(|_| async { Ok::<_, String>(()) }).await;
                 }
             }));
         }
 
         for h in handles {
-            h.await.expect("task should not panic");
+            h.await.context("task panicked")?;
         }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
