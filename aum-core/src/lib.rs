@@ -15,6 +15,9 @@ pub mod db;
 /// Domain models shared across the aum workspace.
 pub mod models;
 
+/// Document extraction pipeline: async Extractor trait and backend implementations.
+pub mod extraction;
+
 /// Load config and initialise logging, printing errors to stderr and exiting on failure.
 ///
 /// Call this at the very start of `main()` before any `tracing` macros.
