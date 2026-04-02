@@ -18,6 +18,9 @@ pub mod models;
 /// Document extraction pipeline: async Extractor trait and backend implementations.
 pub mod extraction;
 
+/// Async generic instance pool with health-aware round-robin and per-instance concurrency.
+pub mod pool;
+
 /// Load config and initialise logging, printing errors to stderr and exiting on failure.
 ///
 /// Call this at the very start of `main()` before any `tracing` macros.
