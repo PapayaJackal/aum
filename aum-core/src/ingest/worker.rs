@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use futures::TryStreamExt as _;
@@ -59,7 +60,8 @@ pub enum WorkerResult {
 /// result to `result_tx`.
 ///
 /// Workers exit when `rx` is closed (all paths consumed) or `result_tx` is
-/// dropped (pipeline shutting down).
+/// dropped (pipeline shutting down).  `in_flight` is incremented while a
+/// worker is actively extracting a file and decremented immediately after.
 pub fn spawn_workers<E: Extractor + 'static>(
     pool: &Arc<InstancePool<E>>,
     rx: &Arc<Mutex<mpsc::Receiver<PathBuf>>>,
@@ -67,6 +69,7 @@ pub fn spawn_workers<E: Extractor + 'static>(
     tracker: &JobTracker,
     job_id: &str,
     max_workers: u32,
+    in_flight: &Arc<AtomicU64>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     (0..max_workers)
         .map(|worker_id| {
@@ -75,9 +78,13 @@ pub fn spawn_workers<E: Extractor + 'static>(
             let result_tx = result_tx.clone();
             let tracker = tracker.clone();
             let job_id = job_id.to_owned();
+            let in_flight = in_flight.clone();
 
             tokio::spawn(async move {
-                worker_loop(worker_id, &pool, &rx, &result_tx, &tracker, &job_id).await;
+                worker_loop(
+                    worker_id, &pool, &rx, &result_tx, &tracker, &job_id, &in_flight,
+                )
+                .await;
             })
         })
         .collect()
@@ -91,6 +98,7 @@ async fn worker_loop<E: Extractor + 'static>(
     result_tx: &mpsc::Sender<WorkerResult>,
     tracker: &JobTracker,
     job_id: &str,
+    in_flight: &AtomicU64,
 ) {
     let record_error = super::make_record_error_fn(tracker.clone(), job_id.to_owned());
 
@@ -103,7 +111,9 @@ async fn worker_loop<E: Extractor + 'static>(
             }
         };
 
+        in_flight.fetch_add(1, Ordering::Relaxed);
         let result = extract_one(pool, &path, &record_error).await;
+        in_flight.fetch_sub(1, Ordering::Relaxed);
 
         if result_tx.send(result).await.is_err() {
             debug!(worker_id, "result channel closed, worker exiting");
@@ -189,6 +199,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
 
     use futures::stream::BoxStream;
     use tokio::sync::{Mutex, mpsc};
@@ -259,7 +270,8 @@ mod tests {
         let (result_tx, mut result_rx) = mpsc::channel(10);
         let path_rx = Arc::new(Mutex::new(path_rx));
 
-        let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj1", 2);
+        let in_flight = Arc::new(AtomicU64::new(0));
+        let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj1", 2, &in_flight);
 
         path_tx.send(PathBuf::from("/tmp/test.txt")).await?;
         drop(path_tx);
@@ -296,7 +308,8 @@ mod tests {
         let (result_tx, mut result_rx) = mpsc::channel(10);
         let path_rx = Arc::new(Mutex::new(path_rx));
 
-        let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj2", 1);
+        let in_flight = Arc::new(AtomicU64::new(0));
+        let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj2", 1, &in_flight);
 
         path_tx.send(PathBuf::from("/tmp/bad.pdf")).await?;
         drop(path_tx);
@@ -337,7 +350,8 @@ mod tests {
         let (result_tx, mut result_rx) = mpsc::channel(10);
         let path_rx = Arc::new(Mutex::new(path_rx));
 
-        let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj3", 1);
+        let in_flight = Arc::new(AtomicU64::new(0));
+        let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj3", 1, &in_flight);
 
         path_tx.send(PathBuf::from("/tmp/empty.txt")).await?;
         drop(path_tx);

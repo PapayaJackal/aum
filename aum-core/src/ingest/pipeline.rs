@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use tokio::sync::{Mutex, mpsc};
@@ -21,6 +21,8 @@ use crate::db::JobTracker;
 use crate::extraction::Extractor;
 use crate::models::{IngestJob, JobProgress, JobStatus, JobType};
 use crate::pool::InstancePool;
+
+use super::progress::{IngestSnapshot, ProgressTx};
 
 use super::display_path::set_display_path;
 use super::doc_id::file_doc_id;
@@ -45,6 +47,10 @@ pub struct IngestPipeline<E: Extractor + 'static, S: BatchSink> {
     index_name: String,
     batch_size: u32,
     max_workers: u32,
+    /// Optional progress channel.  When set, the pipeline emits an
+    /// [`IngestSnapshot`] after every processed file so callers can render a
+    /// live display.
+    progress_tx: Option<ProgressTx>,
 }
 
 impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
@@ -65,7 +71,19 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
             index_name,
             batch_size,
             max_workers,
+            progress_tx: None,
         }
+    }
+
+    /// Attach a progress channel.
+    ///
+    /// After every processed file the pipeline will send an [`IngestSnapshot`]
+    /// via `tx`.  Use [`tokio::sync::watch::channel`] to create the pair;
+    /// hold the receiver in a background render task.
+    #[must_use]
+    pub fn with_progress(mut self, tx: ProgressTx) -> Self {
+        self.progress_tx = Some(tx);
+        self
     }
 
     /// Run a full ingest on `source_dir`.
@@ -128,7 +146,7 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
 }
 
 // ---------------------------------------------------------------------------
-// Internal pipeline mode
+// Internal pipeline mode and shared counters
 // ---------------------------------------------------------------------------
 
 enum PipelineMode {
@@ -138,6 +156,29 @@ enum PipelineMode {
     Resume(Arc<dyn ExistenceChecker>),
     /// Process explicit file paths.
     Retry(Vec<PathBuf>),
+}
+
+/// Atomic counters shared across the source task, workers, and batcher.
+struct PipelineCounters {
+    /// Total files discovered by the walker.
+    discovered: Arc<AtomicU64>,
+    /// Files skipped in resume mode (already indexed).
+    skip_count: Arc<AtomicU64>,
+    /// Set to `true` (with `Release` ordering) once the walker finishes.
+    scan_done: Arc<AtomicBool>,
+    /// Number of workers currently executing an extraction.
+    in_flight: Arc<AtomicU64>,
+}
+
+impl PipelineCounters {
+    fn new() -> Self {
+        Self {
+            discovered: Arc::new(AtomicU64::new(0)),
+            skip_count: Arc::new(AtomicU64::new(0)),
+            scan_done: Arc::new(AtomicBool::new(false)),
+            in_flight: Arc::new(AtomicU64::new(0)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -194,16 +235,14 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
         source_dir: &Path,
         mode: PipelineMode,
     ) -> Result<JobProgress, IngestPipelineError> {
-        let discovered = Arc::new(AtomicU64::new(0));
-        let skip_count = Arc::new(AtomicU64::new(0));
+        let counters = PipelineCounters::new();
 
         let (path_tx, path_rx) = mpsc::channel(PATH_CHANNEL_CAPACITY);
 
         let result_channel_cap = (self.batch_size as usize).saturating_mul(2).max(16);
         let (result_tx, result_rx) = mpsc::channel(result_channel_cap);
 
-        let source_handle =
-            Self::spawn_source_task(mode, source_dir, path_tx, &discovered, &skip_count);
+        let source_handle = Self::spawn_source_task(mode, source_dir, path_tx, &counters);
 
         let path_rx = Arc::new(Mutex::new(path_rx));
         let worker_handles = worker::spawn_workers(
@@ -213,13 +252,14 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
             &self.tracker,
             job_id,
             self.max_workers,
+            &counters.in_flight,
         );
 
         // Drop our copy so `result_rx` closes when all workers finish.
         drop(result_tx);
 
         let progress = self
-            .batcher_loop(job_id, source_dir, result_rx, &discovered, &skip_count)
+            .batcher_loop(job_id, source_dir, result_rx, &counters)
             .await?;
 
         for handle in worker_handles {
@@ -235,40 +275,48 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
     }
 
     /// Spawn the file-source task based on the pipeline mode.
+    ///
+    /// Sets `counters.scan_done` to `true` (with `Release` ordering) after all
+    /// paths have been produced.
     fn spawn_source_task(
         mode: PipelineMode,
         source_dir: &Path,
         path_tx: mpsc::Sender<PathBuf>,
-        discovered: &Arc<AtomicU64>,
-        skip_count: &Arc<AtomicU64>,
+        counters: &PipelineCounters,
     ) -> tokio::task::JoinHandle<()> {
         let source_dir = source_dir.to_owned();
-        let discovered = discovered.clone();
-        let skip_count = skip_count.clone();
+        let discovered = counters.discovered.clone();
+        let skip_count = counters.skip_count.clone();
+        let scan_done = counters.scan_done.clone();
 
-        match mode {
-            PipelineMode::Walk => tokio::spawn(async move {
-                if let Err(e) = walker::walk_directory(&source_dir, &path_tx, &discovered).await {
-                    warn!(error = %e, "directory walk failed");
+        tokio::spawn(async move {
+            match mode {
+                PipelineMode::Walk => {
+                    if let Err(e) = walker::walk_directory(&source_dir, &path_tx, &discovered).await
+                    {
+                        warn!(error = %e, "directory walk failed");
+                    }
                 }
-            }),
-            PipelineMode::Resume(checker) => tokio::spawn(async move {
-                let (walk_tx, walk_rx) = mpsc::channel(PATH_CHANNEL_CAPACITY);
+                PipelineMode::Resume(checker) => {
+                    let (walk_tx, walk_rx) = mpsc::channel(PATH_CHANNEL_CAPACITY);
 
-                let filter_handle = tokio::spawn(async move {
-                    walker::filter_existing(walk_rx, path_tx, checker, skip_count).await;
-                });
+                    let filter_handle = tokio::spawn(async move {
+                        walker::filter_existing(walk_rx, path_tx, checker, skip_count).await;
+                    });
 
-                if let Err(e) = walker::walk_directory(&source_dir, &walk_tx, &discovered).await {
-                    warn!(error = %e, "directory walk failed");
+                    if let Err(e) = walker::walk_directory(&source_dir, &walk_tx, &discovered).await
+                    {
+                        warn!(error = %e, "directory walk failed");
+                    }
+                    drop(walk_tx);
+                    let _ = filter_handle.await;
                 }
-                drop(walk_tx);
-                let _ = filter_handle.await;
-            }),
-            PipelineMode::Retry(paths) => tokio::spawn(async move {
-                walker::feed_paths(paths, &path_tx, &discovered).await;
-            }),
-        }
+                PipelineMode::Retry(paths) => {
+                    walker::feed_paths(paths, &path_tx, &discovered).await;
+                }
+            }
+            scan_done.store(true, Ordering::Release);
+        })
     }
 }
 
@@ -283,19 +331,20 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
         job_id: &str,
         source_dir: &Path,
         mut result_rx: mpsc::Receiver<WorkerResult>,
-        discovered: &Arc<AtomicU64>,
-        skip_count: &Arc<AtomicU64>,
+        counters: &PipelineCounters,
     ) -> Result<JobProgress, IngestPipelineError> {
         let mut progress = JobProgress::default();
         let mut batch: Vec<(String, crate::models::Document)> =
             Vec::with_capacity(self.batch_size as usize);
         let mut last_total_update: u64 = 0;
+        let mut extraction_secs_total: f64 = 0.0;
 
         let record_error = super::make_record_error_fn(self.tracker.clone(), job_id.to_owned());
 
         while let Some(result) = result_rx.recv().await {
             match result {
                 WorkerResult::Success(ef) => {
+                    extraction_secs_total += ef.extraction_secs;
                     Self::handle_extracted_file(ef, source_dir, &mut batch, &mut progress);
                 }
                 WorkerResult::Failure {
@@ -321,15 +370,22 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
             }
 
             // Periodically sync the walker's discovered count to the tracker.
-            let current_discovered = discovered.load(Ordering::Relaxed);
+            let current_discovered = counters.discovered.load(Ordering::Relaxed);
             if current_discovered != last_total_update {
                 last_total_update = current_discovered;
-                progress.skipped = saturating_i64(skip_count.load(Ordering::Relaxed));
+                progress.skipped = saturating_i64(counters.skip_count.load(Ordering::Relaxed));
                 let _ = self
                     .tracker
                     .update_total_files(job_id, saturating_i64(current_discovered))
                     .await;
             }
+
+            emit_snapshot(
+                self.progress_tx.as_ref(),
+                &progress,
+                counters,
+                extraction_secs_total,
+            );
         }
 
         if !batch.is_empty() {
@@ -337,12 +393,23 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
                 .await?;
         }
 
-        progress.skipped = saturating_i64(skip_count.load(Ordering::Relaxed));
+        progress.skipped = saturating_i64(counters.skip_count.load(Ordering::Relaxed));
         let _ = self.tracker.update_progress(job_id, &progress).await;
         let _ = self
             .tracker
-            .update_total_files(job_id, saturating_i64(discovered.load(Ordering::Relaxed)))
+            .update_total_files(
+                job_id,
+                saturating_i64(counters.discovered.load(Ordering::Relaxed)),
+            )
             .await;
+
+        // Final snapshot so the renderer always sees the completed state.
+        emit_snapshot(
+            self.progress_tx.as_ref(),
+            &progress,
+            counters,
+            extraction_secs_total,
+        );
 
         Ok(progress)
     }
@@ -420,6 +487,30 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
 /// clamped — in practice ingest counters never reach this limit.
 fn saturating_i64(n: u64) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// Send a progress snapshot over the watch channel if one is attached.
+///
+/// `send_replace` never blocks and silently succeeds when there are no
+/// receivers, so this is always safe to call from the batcher loop.
+fn emit_snapshot(
+    tx: Option<&ProgressTx>,
+    progress: &JobProgress,
+    counters: &PipelineCounters,
+    total_extraction_secs: f64,
+) {
+    let Some(tx) = tx else { return };
+    tx.send_replace(IngestSnapshot {
+        discovered: counters.discovered.load(Ordering::Relaxed),
+        scan_complete: counters.scan_done.load(Ordering::Acquire),
+        in_flight: counters.in_flight.load(Ordering::Relaxed),
+        extracted: progress.extracted.cast_unsigned(),
+        indexed: progress.processed.cast_unsigned(),
+        skipped: progress.skipped.cast_unsigned(),
+        empty: progress.empty.cast_unsigned(),
+        failed: progress.failed.cast_unsigned(),
+        total_extraction_secs,
+    });
 }
 
 /// Canonicalise the source directory, returning an error if it does not exist.
