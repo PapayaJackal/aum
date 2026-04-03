@@ -92,20 +92,10 @@ pub(super) fn build_doc_body(doc_id: &str, document: &Document) -> (String, Valu
         .unwrap_or_default();
 
     // Serialize the full raw metadata blob (stored but not indexed).
-    let raw_metadata: Value = document
-        .metadata
-        .iter()
-        .map(|(k, v)| {
-            let val = match v {
-                crate::models::MetadataValue::Single(s) => Value::String(s.clone()),
-                crate::models::MetadataValue::List(l) => {
-                    Value::Array(l.iter().cloned().map(Value::String).collect())
-                }
-            };
-            (k.clone(), val)
-        })
-        .collect::<serde_json::Map<_, _>>()
-        .into();
+    // MetadataValue derives Serialize with #[serde(untagged)] so this
+    // produces the same JSON as the manual conversion.
+    let raw_metadata =
+        serde_json::to_value(&document.metadata).unwrap_or(Value::Object(Map::new()));
 
     let body = json!({
         "source_path":    document.source_path.to_string_lossy(),
