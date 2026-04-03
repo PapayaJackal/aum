@@ -229,6 +229,7 @@ impl<T: Send + Sync> InstancePool<T> {
 
         if eligible_count > 0 {
             let target = idx % eligible_count;
+            #[allow(clippy::expect_used)] // guarded by eligible_count > 0
             self.instances
                 .iter()
                 .filter(|i| is_eligible(i))

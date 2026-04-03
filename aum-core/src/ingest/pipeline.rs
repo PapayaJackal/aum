@@ -442,7 +442,7 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
         }
 
         for (i, mut doc) in ef.documents.into_iter().enumerate() {
-            let doc_id = file_doc_id(&canonical, i as u64);
+            let doc_id = file_doc_id(canonical, i as u64);
             set_display_path(&mut doc, source_dir);
             batch.push((doc_id, doc));
         }
