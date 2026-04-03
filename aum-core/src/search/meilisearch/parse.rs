@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::search::types::{FacetMap, SearchResult};
+use crate::search::utils::string_field;
 
 // ---------------------------------------------------------------------------
 // Hit parsing
@@ -61,14 +62,6 @@ fn extract_metadata(obj: &serde_json::Map<String, Value>) -> HashMap<String, Val
             (stripped.to_owned(), v.clone())
         })
         .collect()
-}
-
-/// Read a string field from a hit object, defaulting to an empty string.
-fn string_field(obj: &serde_json::Map<String, Value>, key: &str) -> String {
-    obj.get(key)
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned()
 }
 
 // ---------------------------------------------------------------------------

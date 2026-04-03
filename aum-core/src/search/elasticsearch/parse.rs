@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::search::constants::{DATE_FACETS, MIMETYPE_ALIASES};
 use crate::search::types::SearchResult;
+use crate::search::utils::string_field;
 
 use super::query::ES_FACET_META_KEYS;
 
@@ -115,15 +116,6 @@ pub(super) fn parse_hits(resp: &Value) -> (Vec<SearchResult>, u64) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Read a string field from an ES `_source` object.
-fn string_field(source: &serde_json::Map<String, Value>, key: &str) -> String {
-    source
-        .get(key)
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned()
-}
 
 /// Inject facet display values from the `meta` nested object into `metadata`.
 ///

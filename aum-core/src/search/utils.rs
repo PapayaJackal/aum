@@ -55,6 +55,18 @@ pub fn alias_mimetype(raw: &str) -> &str {
 }
 
 // ---------------------------------------------------------------------------
+// JSON helpers
+// ---------------------------------------------------------------------------
+
+/// Read a string field from a JSON object, defaulting to an empty string.
+pub(super) fn string_field(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> String {
+    obj.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned()
+}
+
+// ---------------------------------------------------------------------------
 // Search metrics
 // ---------------------------------------------------------------------------
 
