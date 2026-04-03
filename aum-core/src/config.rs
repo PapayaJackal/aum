@@ -403,7 +403,7 @@ pub struct DatabaseConfig {
 #[config_section = "ingest"]
 pub struct IngestConfig {
     /// Number of documents to process per database transaction during ingest.
-    #[config_default = "50"]
+    #[config_default = "1000"]
     pub batch_size: u32,
     /// Maximum number of concurrent ingest worker tasks.
     #[config_default = "<number of logical CPUs>"]
