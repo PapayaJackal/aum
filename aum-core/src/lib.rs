@@ -134,13 +134,14 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_sqlite_url_creates_parent_dir() {
-        let tmp = TempDir::new().unwrap();
+    fn test_prepare_sqlite_url_creates_parent_dir() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
         let db_path = tmp.path().join("subdir").join("aum.db");
         let url = format!("sqlite:{}", db_path.display());
 
         prepare_sqlite_url(&url);
 
         assert!(tmp.path().join("subdir").is_dir());
+        Ok(())
     }
 }
