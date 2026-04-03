@@ -881,7 +881,7 @@ impl Extractor for TikaExtractor {
             // Yield container document before unpacking starts.
             let container_doc = self.build_one_document(
                 file_path, &first_part, 0, &HashMap::new(), record_error,
-            );
+            ).await;
             if Self::check_empty_extraction(&container_doc).await {
                 empty_extractions += 1;
             }
@@ -904,7 +904,7 @@ impl Extractor for TikaExtractor {
                     for (i, part) in embedded_parts.drain(..).enumerate() {
                         let doc = self.build_one_document(
                             file_path, &part, i + 1, &attachment_map, record_error,
-                        );
+                        ).await;
                         let display_path = doc
                             .metadata
                             .get(AUM_DISPLAY_PATH_KEY)
@@ -955,7 +955,7 @@ impl Extractor for TikaExtractor {
 }
 
 impl TikaExtractor {
-    fn build_one_document(
+    async fn build_one_document(
         &self,
         file_path: &Path,
         part: &Map<String, Value>,
@@ -982,6 +982,14 @@ impl TikaExtractor {
 
         if truncated {
             self.report_truncation(&source, original_chars, record_error);
+        }
+
+        // Inject file size from the filesystem so it's available as metadata regardless
+        // of whether Tika includes a Content-Length field in its rmeta output.
+        if let Ok(fs_meta) = tokio::fs::metadata(&source).await {
+            metadata
+                .entry("Content-Length".to_owned())
+                .or_insert_with(|| MetadataValue::Single(fs_meta.len().to_string()));
         }
 
         Document {

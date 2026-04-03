@@ -109,6 +109,60 @@ pub fn strip_highlights(s: &str) -> String {
     result
 }
 
+/// Format a byte count (from Tika's `Content-Length` string) as a human-readable size.
+///
+/// Returns `None` if the string cannot be parsed as a number.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn format_file_size(raw: &str) -> Option<String> {
+    let bytes: u64 = raw.trim().parse().ok()?;
+    let s = if bytes < 1_024 {
+        format!("{bytes} B")
+    } else if bytes < 1_024 * 1_024 {
+        format!("{:.1} KB", bytes as f64 / 1_024.0)
+    } else if bytes < 1_024 * 1_024 * 1_024 {
+        format!("{:.1} MB", bytes as f64 / (1_024.0 * 1_024.0))
+    } else {
+        format!("{:.1} GB", bytes as f64 / (1_024.0 * 1_024.0 * 1_024.0))
+    };
+    Some(s)
+}
+
+/// Return a short human-readable label for a MIME content type.
+///
+/// Falls back to the raw MIME string when there is no known mapping.
+#[must_use]
+pub fn format_content_type(mime: &str) -> &str {
+    match mime {
+        "application/pdf" => "PDF",
+        "application/msword"
+        | "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "Word",
+        "application/vnd.ms-excel"
+        | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "Excel",
+        "application/vnd.ms-powerpoint"
+        | "application/vnd.openxmlformats-officedocument.presentationml.presentation" => {
+            "PowerPoint"
+        }
+        "text/plain" => "Text",
+        "text/html" => "HTML",
+        "text/csv" => "CSV",
+        "text/markdown" => "Markdown",
+        "application/rtf" => "RTF",
+        "application/zip" => "ZIP",
+        "application/json" => "JSON",
+        "application/xml" | "text/xml" => "XML",
+        "image/jpeg" => "JPEG",
+        "image/png" => "PNG",
+        "image/gif" => "GIF",
+        "image/tiff" => "TIFF",
+        "audio/mpeg" | "audio/mp3" => "MP3",
+        "video/mp4" => "MP4",
+        "message/rfc822" => "Email",
+        "application/mbox" => "Mbox",
+        other => other,
+    }
+}
+
 /// Truncate a snippet to at most `max` chars, appending `…` if truncated.
 pub fn truncate_snippet(s: &str, max: usize) -> String {
     let stripped = strip_highlights(s);

@@ -62,8 +62,12 @@ pub(super) static META_SOURCE_KEYS: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Email header keys whose values are collected into `email_addresses`.
-pub(super) static EMAIL_HEADER_KEYS: &[&str] = &["Message-From", "Message-To", "Message-CC"];
+/// Email header keys whose values are collected into the deduplicated `email_addresses` facet.
+pub(super) static EMAIL_HEADER_KEYS: &[&str] =
+    &["Message-From", "Message-To", "Message-CC", "Message-BCC"];
+
+/// Candidate Tika keys for the email subject line.
+pub(super) static EMAIL_SUBJECT_KEYS: &[&str] = &["Message-Subject", "dc:subject", "subject"];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -120,8 +124,18 @@ pub struct IndexedMeta {
     pub in_reply_to: Option<String>,
     /// Normalised RFC 2822 `References` header values.
     pub references: Vec<String>,
-    /// Deduplicated email addresses from From/To/CC headers.
+    /// Deduplicated email addresses from From/To/CC/BCC headers (for faceting).
     pub email_addresses: Vec<String>,
+    /// Raw display values from the `Message-From` header.
+    pub email_from: Vec<String>,
+    /// Raw display values from the `Message-To` header.
+    pub email_to: Vec<String>,
+    /// Raw display values from the `Message-CC` header.
+    pub email_cc: Vec<String>,
+    /// Raw display values from the `Message-BCC` header.
+    pub email_bcc: Vec<String>,
+    /// Email subject line.
+    pub email_subject: Option<String>,
 }
 
 /// Extract curated metadata fields from raw Tika metadata.
@@ -166,6 +180,7 @@ pub fn extract_indexed_meta<S: std::hash::BuildHasher>(
         }
     }
 
+    // Deduplicated email addresses (for faceting).
     let mut seen = HashSet::new();
     for key in EMAIL_HEADER_KEYS {
         let Some(val) = metadata.get(*key) else {
@@ -177,6 +192,26 @@ pub fn extract_indexed_meta<S: std::hash::BuildHasher>(
             {
                 out.email_addresses.push(addr);
             }
+        }
+    }
+
+    // Per-header display values for rendering.
+    for (key, dest) in [
+        ("Message-From", &mut out.email_from),
+        ("Message-To", &mut out.email_to),
+        ("Message-CC", &mut out.email_cc),
+        ("Message-BCC", &mut out.email_bcc),
+    ] {
+        if let Some(val) = metadata.get(key) {
+            *dest = as_string_list(val).into_owned();
+        }
+    }
+
+    // Subject line.
+    for key in EMAIL_SUBJECT_KEYS {
+        if let Some(val) = metadata.get(*key) {
+            out.email_subject = as_single_string(val);
+            break;
         }
     }
 

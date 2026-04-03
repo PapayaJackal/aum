@@ -8,9 +8,9 @@ use aum_core::search::SearchBackend;
 use aum_core::search::constants::{
     FACET_CREATED, FACET_CREATOR, FACET_EMAIL_ADDRESSES, FACET_FILE_TYPE,
 };
-use aum_core::search::types::{FilterMap, SearchRequest, SortSpec};
+use aum_core::search::types::{FilterMap, SearchRequest, SearchResult, SortSpec};
 
-use crate::output::truncate_snippet;
+use crate::output::{format_content_type, format_file_size, truncate_snippet};
 
 #[derive(Args)]
 pub struct SearchArgs {
@@ -122,21 +122,82 @@ pub async fn run(args: &SearchArgs, backend: &dyn SearchBackend) -> anyhow::Resu
     }
 
     for (i, r) in results.iter().enumerate() {
-        let n = args.offset + i + 1;
-        let snippet = truncate_snippet(&r.snippet, 200);
-        println!(
-            "{}  {}  {}",
-            format!("{n}.").bold(),
-            format!("[{:.3}]", r.score).cyan(),
-            r.display_path.bold(),
-        );
-        if !snippet.is_empty() {
-            println!("   {}", snippet.dimmed());
-        }
-        println!();
+        print_result(args.offset + i + 1, r);
     }
 
     Ok(())
+}
+
+fn print_result(n: usize, r: &SearchResult) {
+    let snippet = truncate_snippet(&r.snippet, 200);
+
+    println!(
+        "{}  {}  {}",
+        format!("{n}.").bold(),
+        format!("[{:.3}]", r.score).cyan(),
+        r.display_path.bold(),
+    );
+
+    let type_label = r
+        .metadata
+        .get("content_type")
+        .and_then(|v| v.as_str())
+        .map(format_content_type);
+    let size_label = r
+        .metadata
+        .get("file_size")
+        .and_then(|v| v.as_str())
+        .and_then(format_file_size);
+    let date_label = r
+        .metadata
+        .get("created")
+        .and_then(|v| v.as_str())
+        .map(|s| s.get(..10).unwrap_or(s));
+    let meta_parts: Vec<String> = [
+        type_label.map(str::to_owned),
+        size_label,
+        date_label.map(str::to_owned),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !meta_parts.is_empty() {
+        println!("   {}", meta_parts.join("  ").dimmed());
+    }
+
+    let subject = r
+        .metadata
+        .get("email_subject")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !subject.is_empty() {
+        println!("   {} {}", "Subject:".dimmed(), subject);
+    }
+    for (label, key) in [
+        ("From:   ", "email_from"),
+        ("To:     ", "email_to"),
+        ("CC:     ", "email_cc"),
+        ("BCC:    ", "email_bcc"),
+    ] {
+        let vals = json_str_array(r.metadata.get(key));
+        if !vals.is_empty() {
+            println!("   {} {}", label.dimmed(), vals.join(", "));
+        }
+    }
+
+    if !snippet.is_empty() {
+        println!("   {}", snippet.dimmed());
+    }
+    println!();
+}
+
+/// Extract a list of strings from a JSON value (array or single string).
+fn json_str_array(val: Option<&serde_json::Value>) -> Vec<&str> {
+    match val {
+        Some(serde_json::Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str()).collect(),
+        Some(serde_json::Value::String(s)) => vec![s.as_str()],
+        _ => vec![],
+    }
 }
 
 /// Parse a sort string like "date:asc" into a `SortSpec`.

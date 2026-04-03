@@ -63,6 +63,33 @@ pub(super) fn build_flat_meta(meta: &IndexedMeta) -> Map<String, Value> {
             ),
         );
     }
+    if !meta.email_from.is_empty() {
+        m.insert(
+            "meta_email_from".into(),
+            Value::Array(meta.email_from.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    if !meta.email_to.is_empty() {
+        m.insert(
+            "meta_email_to".into(),
+            Value::Array(meta.email_to.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    if !meta.email_cc.is_empty() {
+        m.insert(
+            "meta_email_cc".into(),
+            Value::Array(meta.email_cc.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    if !meta.email_bcc.is_empty() {
+        m.insert(
+            "meta_email_bcc".into(),
+            Value::Array(meta.email_bcc.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    if let Some(v) = &meta.email_subject {
+        m.insert("meta_email_subject".into(), Value::String(v.clone()));
+    }
     m
 }
 
