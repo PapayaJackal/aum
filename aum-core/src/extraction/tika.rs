@@ -482,7 +482,7 @@ impl TikaExtractor {
                 self.write_zip_entry(&reader, i, zip_path, &att_path).await?;
 
                 let child_erp = format!("{current_erp}/{filename}");
-                tracing::debug!(
+                tracing::info!(
                     attachment = %att_path.display(),
                     erp = %child_erp,
                     "saved attachment"
