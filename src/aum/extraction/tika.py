@@ -434,7 +434,7 @@ class TikaExtractor:
             resolved_dest = dest_dir.resolve()
             with zipfile.ZipFile(zip_path) as zf:
                 for name in zf.namelist():
-                    if name.endswith(".metadata.json"):
+                    if name.endswith(".metadata.json") or name in ("__TEXT__", "__METADATA__"):
                         continue
                     safe_rel = _safe_archive_path(name)
                     if safe_rel is None:

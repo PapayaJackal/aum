@@ -461,7 +461,10 @@ impl TikaExtractor {
 
             for i in 0..num_entries {
                 let Some(filename) = read_entry_filename(&reader, i) else { continue };
-                if filename.ends_with(".metadata.json") {
+                if filename.ends_with(".metadata.json")
+                    || filename == "__TEXT__"
+                    || filename == "__METADATA__"
+                {
                     continue;
                 }
                 let Some(safe_rel) = safe_archive_path(&filename) else {
