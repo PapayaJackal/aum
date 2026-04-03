@@ -902,9 +902,27 @@ impl Extractor for TikaExtractor {
                         let doc = self.build_one_document(
                             file_path, &part, i + 1, &attachment_map, record_error,
                         );
-                        if Self::check_empty_extraction(&doc).await {
+                        let display_path = doc
+                            .metadata
+                            .get(AUM_DISPLAY_PATH_KEY)
+                            .and_then(|v| {
+                                if let MetadataValue::Single(s) = v {
+                                    Some(s.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or("");
+                        let empty = Self::check_empty_extraction(&doc).await;
+                        if empty {
                             empty_extractions += 1;
                         }
+                        tracing::info!(
+                            attachment = display_path,
+                            content_chars = doc.content.len(),
+                            empty,
+                            "indexing attachment"
+                        );
                         yield doc;
                     }
                 }
