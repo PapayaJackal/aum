@@ -370,6 +370,14 @@ impl BatchSink for MeilisearchBackend {
                         truncated_chars = trunc.truncated_chars,
                         "document content truncated for indexing"
                     );
+                    record_error(
+                        std::path::Path::new(&trunc.doc_id),
+                        "ContentTruncated",
+                        &format!(
+                            "content truncated from {} to {} chars to fit payload limit",
+                            trunc.original_chars, trunc.truncated_chars,
+                        ),
+                    );
                 }
                 metrics::histogram!("aum_meili_flush_batch_seconds")
                     .record(timer.elapsed().as_secs_f64());
@@ -447,7 +455,15 @@ async fn index_sub_batches(
     let mut failed = 0u64;
 
     let idx = client.index(index);
-    for batch in &sub_batches {
+    let num_sub_batches = sub_batches.len();
+    for (i, batch) in sub_batches.iter().enumerate() {
+        tracing::info!(
+            index,
+            sub_batch = i + 1,
+            total_sub_batches = num_sub_batches,
+            docs = batch.len(),
+            "indexing batch"
+        );
         let task = idx
             .add_or_replace(batch, Some("id"))
             .await
