@@ -96,7 +96,7 @@ async fn run() -> anyhow::Result<()> {
         Commands::Reset(args) => {
             let tracker = create_tracker(&config).await;
             let backend = create_backend(&config)?;
-            commands::reset::run(&args, &backend, &tracker).await?;
+            commands::reset::run(&args, &backend, &tracker, &config.extract_dir()).await?;
         }
 
         Commands::Ingest(args) => {
