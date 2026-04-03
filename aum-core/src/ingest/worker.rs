@@ -26,6 +26,9 @@ use crate::pool::InstancePool;
 pub struct ExtractedFile {
     /// The file that was extracted.
     pub file_path: PathBuf,
+    /// Canonicalised version of `file_path`, computed once per extraction to
+    /// avoid repeated `canonicalize()` syscalls downstream.
+    pub canonical_path: PathBuf,
     /// Documents produced (container + embedded parts).
     pub documents: Vec<Document>,
     /// Wall-clock time spent extracting, in seconds.
@@ -139,12 +142,18 @@ async fn extract_one<E: Extractor + 'static>(
     metrics::histogram!("aum_ingest_extraction_seconds").record(elapsed);
 
     match result {
-        Ok((documents, empty_count)) => WorkerResult::Success(ExtractedFile {
-            file_path: file_path.to_owned(),
-            documents,
-            extraction_secs: elapsed,
-            empty_count,
-        }),
+        Ok((documents, empty_count)) => {
+            let canonical = file_path
+                .canonicalize()
+                .unwrap_or_else(|_| file_path.to_owned());
+            WorkerResult::Success(ExtractedFile {
+                file_path: file_path.to_owned(),
+                canonical_path: canonical,
+                documents,
+                extraction_secs: elapsed,
+                empty_count,
+            })
+        }
         Err((error_type, message)) => {
             warn!(path = %file_path.display(), error_type, elapsed_secs = elapsed, "extraction failed");
             WorkerResult::Failure {

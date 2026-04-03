@@ -431,10 +431,7 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
         batch: &mut Vec<(String, crate::models::Document)>,
         progress: &mut JobProgress,
     ) {
-        let canonical = ef
-            .file_path
-            .canonicalize()
-            .unwrap_or_else(|_| ef.file_path.clone());
+        let canonical = &ef.canonical_path;
 
         progress.extracted += 1;
         progress.empty += saturating_i64(ef.empty_count);
