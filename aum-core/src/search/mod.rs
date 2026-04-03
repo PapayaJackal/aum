@@ -1,17 +1,27 @@
 //! Search backend abstraction: types, constants, utilities, and backend
 //! implementations.
-//!
-//! The primary entry point for most code is [`MeilisearchBackend`], which
-//! implements [`SearchBackend`], [`BatchSink`], and [`ExistenceChecker`].
 
 pub mod backend;
 pub mod constants;
+pub mod meta;
+
+#[cfg(feature = "meilisearch")]
 pub mod meilisearch;
+
+#[cfg(feature = "elasticsearch")]
+pub mod elasticsearch;
+
 pub mod types;
 pub mod utils;
 
 pub use backend::SearchBackend;
+
+#[cfg(feature = "meilisearch")]
 pub use meilisearch::MeilisearchBackend;
+
+#[cfg(feature = "elasticsearch")]
+pub use elasticsearch::ElasticsearchBackend;
+
 pub use types::{
     BatchIndexResult, FacetMap, FilterMap, SearchError, SearchResult, SortSpec, TruncationRecord,
 };

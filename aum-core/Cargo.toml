@@ -8,6 +8,11 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["meilisearch"]
+meilisearch = ["dep:meilisearch-sdk"]
+elasticsearch = ["dep:elasticsearch"]
+
 [dependencies]
 aum-macros = { path = "../aum-macros" }
 serde = { workspace = true }
@@ -32,7 +37,8 @@ async-stream = { workspace = true }
 async-walkdir = { workspace = true }
 rand = { workspace = true }
 phf = { workspace = true }
-meilisearch-sdk = { workspace = true }
+meilisearch-sdk = { workspace = true, optional = true }
+elasticsearch = { workspace = true, optional = true }
 tempfile = "3"
 
 [dev-dependencies]

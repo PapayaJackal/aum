@@ -197,6 +197,23 @@ pub struct MeilisearchConfig {
     pub crop_length: u32,
 }
 
+/// Configuration for the Elasticsearch search backend.
+#[cfg(feature = "elasticsearch")]
+#[derive(Debug, Clone, Serialize, Deserialize, ConfigDocs, ConfigDefault, ConfigValues)]
+#[serde(default)]
+#[config_section = "elasticsearch"]
+pub struct ElasticsearchConfig {
+    /// URL of the Elasticsearch instance.
+    #[config_default = "http://localhost:9200"]
+    pub url: String,
+    /// Use Reciprocal Rank Fusion (RRF) for hybrid search instead of combined scoring.
+    #[config_default = "false"]
+    pub rrf: bool,
+    /// Maximum analyzed offset for highlighting, in bytes.
+    #[config_default = "10000000"]
+    pub max_highlight_offset: u64,
+}
+
 /// Configuration for Apache Tika document extraction.
 #[derive(Debug, Clone, Serialize, Deserialize, ConfigDocs, ConfigDefault, ConfigValues)]
 #[serde(default)]
@@ -383,7 +400,11 @@ pub struct AumConfig {
     /// Prometheus metrics endpoint settings.
     pub prometheus: PrometheusConfig,
     /// Meilisearch connection settings.
+    #[cfg(feature = "meilisearch")]
     pub meilisearch: MeilisearchConfig,
+    /// Elasticsearch connection settings.
+    #[cfg(feature = "elasticsearch")]
+    pub elasticsearch: ElasticsearchConfig,
     /// Database connection settings.
     pub database: DatabaseConfig,
     /// Document ingest pipeline settings.
@@ -405,20 +426,24 @@ pub struct AumConfig {
 impl AumConfig {
     /// Returns an iterator over all config documentation entries across all sections, in order.
     pub fn config_docs() -> impl Iterator<Item = &'static ConfigDoc> {
-        [
+        let mut sections: Vec<&[ConfigDoc]> = vec![
             DataConfig::config_docs(),
             DatabaseConfig::config_docs(),
             LoggingConfig::config_docs(),
             PrometheusConfig::config_docs(),
-            MeilisearchConfig::config_docs(),
+        ];
+        #[cfg(feature = "meilisearch")]
+        sections.push(MeilisearchConfig::config_docs());
+        #[cfg(feature = "elasticsearch")]
+        sections.push(ElasticsearchConfig::config_docs());
+        sections.extend([
             IngestConfig::config_docs(),
             TikaConfig::config_docs(),
             EmbeddingsConfig::config_docs(),
             ServerConfig::config_docs(),
             AuthConfig::config_docs(),
-        ]
-        .into_iter()
-        .flat_map(|s| s.iter())
+        ]);
+        sections.into_iter().flat_map(|s| s.iter())
     }
 
     /// Returns the database connection URL to use.
@@ -541,10 +566,17 @@ pub fn format_config(config: &AumConfig) -> String {
         PrometheusConfig::config_docs(),
         config.prometheus.config_values(),
     );
+    #[cfg(feature = "meilisearch")]
     write_section(
         &mut out,
         MeilisearchConfig::config_docs(),
         config.meilisearch.config_values(),
+    );
+    #[cfg(feature = "elasticsearch")]
+    write_section(
+        &mut out,
+        ElasticsearchConfig::config_docs(),
+        config.elasticsearch.config_values(),
     );
     write_section(
         &mut out,
@@ -616,15 +648,18 @@ mod tests {
             .merge(Serialized::defaults(AumConfig::default()))
             .extract()?;
 
-        assert_eq!(actual.meilisearch.url, expected.meilisearch.url);
-        assert!(
-            (actual.meilisearch.semantic_ratio - expected.meilisearch.semantic_ratio).abs()
-                < f32::EPSILON
-        );
-        assert_eq!(
-            actual.meilisearch.crop_length,
-            expected.meilisearch.crop_length
-        );
+        #[cfg(feature = "meilisearch")]
+        {
+            assert_eq!(actual.meilisearch.url, expected.meilisearch.url);
+            assert!(
+                (actual.meilisearch.semantic_ratio - expected.meilisearch.semantic_ratio).abs()
+                    < f32::EPSILON
+            );
+            assert_eq!(
+                actual.meilisearch.crop_length,
+                expected.meilisearch.crop_length
+            );
+        }
         assert_eq!(actual.tika.server_url, expected.tika.server_url);
         assert_eq!(actual.tika.request_timeout, expected.tika.request_timeout);
         assert_eq!(actual.embeddings.model, expected.embeddings.model);
@@ -654,6 +689,7 @@ mod tests {
     // --- Env var overlay ---
 
     #[test]
+    #[cfg(feature = "meilisearch")]
     fn test_env_overlay_string() -> anyhow::Result<()> {
         let cfg = config_from_env(&[("AUM_MEILISEARCH__URL", "http://env-meili:7700")])?;
         assert_eq!(cfg.meilisearch.url, "http://env-meili:7700");
@@ -699,6 +735,7 @@ mod tests {
             .merge(Serialized::defaults(AumConfig::default()))
             .merge(FigmentToml::file("__nonexistent_aum_config__.toml"))
             .extract()?;
+        #[cfg(feature = "meilisearch")]
         assert_eq!(cfg.meilisearch.url, "http://localhost:7700");
         assert_eq!(cfg.server.port, 8000);
         assert_eq!(cfg.data.dir, PathBuf::from("data"));
@@ -832,6 +869,7 @@ mod tests {
     fn test_load_config_from_missing_file_returns_defaults() -> anyhow::Result<()> {
         let _guard = ENV_MUTEX.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         let cfg = load_config_from("__nonexistent__.toml")?;
+        #[cfg(feature = "meilisearch")]
         assert_eq!(cfg.meilisearch.url, "http://localhost:7700");
         assert_eq!(cfg.server.port, 8000);
         Ok(())
@@ -851,6 +889,7 @@ mod tests {
     fn test_format_config_contains_env_vars() {
         let cfg = AumConfig::default();
         let out = format_config(&cfg);
+        #[cfg(feature = "meilisearch")]
         assert!(out.contains("AUM_MEILISEARCH__URL=http://localhost:7700"));
         assert!(out.contains("AUM_SERVER__PORT=8000"));
         assert!(out.contains("AUM_DATA__DIR=data"));
@@ -901,18 +940,21 @@ mod tests {
 
     #[test]
     fn test_config_docs_section_names_match_toml_keys() {
-        let expected_sections = [
+        let mut expected_sections: Vec<&str> = vec![
             "data",
             "database",
             "log",
             "prometheus",
-            "meilisearch",
             "ingest",
             "tika",
             "embeddings",
             "server",
             "auth",
         ];
+        #[cfg(feature = "meilisearch")]
+        expected_sections.push("meilisearch");
+        #[cfg(feature = "elasticsearch")]
+        expected_sections.push("elasticsearch");
         for doc in AumConfig::config_docs() {
             assert!(
                 expected_sections.contains(&doc.section),

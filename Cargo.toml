@@ -49,3 +49,4 @@ async-walkdir = "2.1.0"
 rand = "0.10.0"
 phf = { version = "0.13.1", features = ["macros"] }
 meilisearch-sdk = "0.32"
+elasticsearch = "9.1.0-alpha.1"

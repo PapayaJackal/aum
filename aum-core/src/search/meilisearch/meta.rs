@@ -1,175 +1,23 @@
-//! Metadata extraction and document body construction for Meilisearch.
-
-use std::collections::HashMap;
+//! Meilisearch-specific document body construction.
+//!
+//! Metadata extraction is handled by [`crate::search::meta`]; this module
+//! converts the resulting [`IndexedMeta`] into the flat field layout that
+//! Meilisearch expects (all fields at the top level with a `meta_` prefix).
 
 use serde_json::{Map, Value};
 
 use crate::extraction::{AUM_DISPLAY_PATH_KEY, AUM_EXTRACTED_FROM_KEY};
-use crate::models::{Document, MetadataValue};
-use crate::search::utils::{extract_email, normalize_message_id};
-
-// ---------------------------------------------------------------------------
-// Metadata source key mappings (Meilisearch-specific)
-// ---------------------------------------------------------------------------
-
-/// Maps Meilisearch indexed field names to lists of candidate Tika metadata
-/// keys, tried in priority order (first match wins).
-static META_SOURCE_KEYS: &[(&str, &[&str])] = &[
-    ("content_type", &["Content-Type"]),
-    (
-        "creator",
-        &[
-            "dc:creator",
-            "xmp:dc:creator",
-            "Author",
-            "meta:author",
-            "creator",
-        ],
-    ),
-    (
-        "created",
-        &[
-            "dcterms:created",
-            "Creation-Date",
-            "meta:creation-date",
-            "created",
-            "date",
-        ],
-    ),
-    (
-        "modified",
-        &[
-            "dcterms:modified",
-            "Last-Modified",
-            "meta:save-date",
-            "modified",
-        ],
-    ),
-    ("file_size", &["Content-Length"]),
-    (
-        "message_id",
-        &["Message:Raw-Header:Message-ID", "Message-ID"],
-    ),
-    (
-        "in_reply_to",
-        &["Message:Raw-Header:In-Reply-To", "In-Reply-To"],
-    ),
-    (
-        "references",
-        &["Message:Raw-Header:References", "References"],
-    ),
-];
-
-/// Email header keys whose values are collected into `email_addresses`.
-static EMAIL_HEADER_KEYS: &[&str] = &["Message-From", "Message-To", "Message-CC"];
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Retrieve the first matching value for a list of candidate keys.
-fn first_match<'a>(
-    metadata: &'a HashMap<String, MetadataValue>,
-    keys: &[&str],
-) -> Option<&'a MetadataValue> {
-    keys.iter().find_map(|k| metadata.get(*k))
-}
-
-/// Convert a `MetadataValue` to a single string (takes first element of lists).
-fn as_single_string(val: &MetadataValue) -> Option<String> {
-    match val {
-        MetadataValue::Single(s) => Some(s.clone()),
-        MetadataValue::List(v) => v.first().cloned(),
-    }
-}
-
-/// Convert a `MetadataValue` to a list of strings.
-fn as_string_list(val: &MetadataValue) -> Vec<String> {
-    match val {
-        MetadataValue::Single(s) => vec![s.clone()],
-        MetadataValue::List(v) => v.clone(),
-    }
-}
+use crate::models::Document;
+use crate::search::meta::{IndexedMeta, as_single_string, extract_indexed_meta};
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Curated intermediate metadata extracted from raw Tika metadata.
-#[derive(Debug, Default)]
-pub(super) struct IndexedMeta {
-    pub content_type: Option<String>,
-    pub creator: Option<String>,
-    pub created: Option<String>,
-    pub created_year: Option<i64>,
-    pub modified: Option<String>,
-    pub file_size: Option<String>,
-    pub message_id: Option<String>,
-    pub in_reply_to: Option<String>,
-    pub references: Vec<String>,
-    pub email_addresses: Vec<String>,
-}
-
-/// Extract curated metadata fields from raw Tika metadata.
-pub(super) fn extract_indexed_meta(metadata: &HashMap<String, MetadataValue>) -> IndexedMeta {
-    let mut out = IndexedMeta::default();
-
-    // Resolve each field from candidate keys in priority order.
-    for (field, keys) in META_SOURCE_KEYS {
-        let Some(val) = first_match(metadata, keys) else {
-            continue;
-        };
-        match *field {
-            "content_type" => out.content_type = as_single_string(val),
-            "creator" => out.creator = as_single_string(val),
-            "created" => {
-                let s = as_single_string(val);
-                out.created_year = parse_year(s.as_deref());
-                out.created = s;
-            }
-            "modified" => out.modified = as_single_string(val),
-            "file_size" => out.file_size = as_single_string(val),
-            "message_id" => {
-                out.message_id = as_single_string(val).map(|s| normalize_message_id(&s));
-            }
-            "in_reply_to" => {
-                out.in_reply_to = as_single_string(val).map(|s| normalize_message_id(&s));
-            }
-            "references" => {
-                out.references = as_string_list(val)
-                    .iter()
-                    .flat_map(|s| s.split_whitespace().map(normalize_message_id))
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
-            _ => {}
-        }
-    }
-
-    let mut seen = std::collections::HashSet::new();
-    for key in EMAIL_HEADER_KEYS {
-        let Some(val) = metadata.get(*key) else {
-            continue;
-        };
-        for raw in as_string_list(val) {
-            if let Some(addr) = extract_email(&raw)
-                && seen.insert(addr.clone())
-            {
-                out.email_addresses.push(addr);
-            }
-        }
-    }
-
-    out
-}
-
-/// Parse the four-digit year from a date string (ISO 8601 or similar).
-fn parse_year(s: Option<&str>) -> Option<i64> {
-    let s = s?;
-    s.get(..4)?.parse::<i64>().ok()
-}
-
 /// Build the flat Meilisearch document field map from curated metadata.
+///
+/// All indexed meta fields use a `meta_` prefix and live at the top level of
+/// the document object (Meilisearch does not support nested faceting).
 pub(super) fn build_flat_meta(meta: &IndexedMeta) -> Map<String, Value> {
     let mut m = Map::new();
 
@@ -250,60 +98,18 @@ pub(super) fn build_doc_body(doc_id: &str, document: &Document) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use anyhow::Context as _;
 
     use super::*;
     use crate::models::MetadataValue;
 
-    fn meta(pairs: &[(&str, &str)]) -> HashMap<String, MetadataValue> {
+    fn meta_map(pairs: &[(&str, &str)]) -> HashMap<String, MetadataValue> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), MetadataValue::Single(v.to_string())))
             .collect()
-    }
-
-    #[test]
-    fn extract_creator_from_author_key() {
-        let m = meta(&[("Author", "Alice")]);
-        let out = extract_indexed_meta(&m);
-        assert_eq!(out.creator.as_deref(), Some("Alice"));
-    }
-
-    #[test]
-    fn extract_created_year() {
-        let m = meta(&[("dcterms:created", "2023-06-15T10:00:00Z")]);
-        let out = extract_indexed_meta(&m);
-        assert_eq!(out.created_year, Some(2023));
-    }
-
-    #[test]
-    fn extract_message_id_normalised() {
-        let m = meta(&[("Message:Raw-Header:Message-ID", " <abc@example.com> ")]);
-        let out = extract_indexed_meta(&m);
-        assert_eq!(out.message_id.as_deref(), Some("abc@example.com"));
-    }
-
-    #[test]
-    fn extract_email_addresses_deduped() {
-        let mut md: HashMap<String, MetadataValue> = HashMap::new();
-        md.insert(
-            "Message-From".into(),
-            MetadataValue::Single("Alice <alice@example.com>".into()),
-        );
-        md.insert(
-            "Message-To".into(),
-            MetadataValue::List(vec![
-                "bob@example.com".into(),
-                "Alice <alice@example.com>".into(),
-            ]),
-        );
-        let out = extract_indexed_meta(&md);
-        assert_eq!(out.email_addresses.len(), 2);
-        assert!(
-            out.email_addresses
-                .contains(&"alice@example.com".to_owned())
-        );
-        assert!(out.email_addresses.contains(&"bob@example.com".to_owned()));
     }
 
     #[test]
@@ -332,5 +138,17 @@ mod tests {
         assert_eq!(obj["content"], Value::String("hello world".into()));
         assert_eq!(obj["has_embeddings"], Value::Bool(false));
         Ok(())
+    }
+
+    #[test]
+    fn content_type_from_extraction() {
+        let md = meta_map(&[("Content-Type", "text/html; charset=UTF-8")]);
+        let meta = extract_indexed_meta(&md);
+        let flat = build_flat_meta(&meta);
+        // The shared extractor already strips params
+        assert_eq!(
+            flat.get("meta_content_type").and_then(|v| v.as_str()),
+            Some("text/html")
+        );
     }
 }

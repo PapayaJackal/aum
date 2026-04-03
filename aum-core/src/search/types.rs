@@ -111,15 +111,22 @@ pub type FacetMap = HashMap<String, HashMap<String, u64>>;
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError {
     /// The Meilisearch SDK returned an error.
+    #[cfg(feature = "meilisearch")]
     #[error("meilisearch error: {0}")]
-    Sdk(#[from] meilisearch_sdk::errors::Error),
+    Meilisearch(#[from] meilisearch_sdk::errors::Error),
+    /// The Elasticsearch client returned an error.
+    #[cfg(feature = "elasticsearch")]
+    #[error("elasticsearch error: {0}")]
+    Elasticsearch(elasticsearch::Error),
     /// JSON serialisation or deserialisation failed.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
     /// A Meilisearch task did not complete within the allowed timeout.
+    #[cfg(feature = "meilisearch")]
     #[error("task timed out")]
     TaskTimeout,
     /// A Meilisearch task completed with a failure status.
+    #[cfg(feature = "meilisearch")]
     #[error("task failed: {error}")]
     TaskFailed {
         /// Error message from the failed task.

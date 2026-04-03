@@ -26,6 +26,8 @@ use crate::search::types::{
     BatchIndexResult, FacetMap, FilterMap, SearchError, SearchRequest, SearchResult, SortSpec,
 };
 
+use crate::search::utils::record_search_metrics;
+
 use batching::{MAX_PAYLOAD_BYTES, split_by_payload_size};
 use filter::build_filter_string;
 use meta::build_doc_body;
@@ -61,7 +63,8 @@ impl MeilisearchBackend {
     /// # Errors
     /// Returns an error if the Meilisearch client cannot be built.
     pub fn new(config: &MeilisearchConfig) -> Result<Self, SearchError> {
-        let client = Client::new(&config.url, Some(&config.api_key)).map_err(SearchError::Sdk)?;
+        let client =
+            Client::new(&config.url, Some(&config.api_key)).map_err(SearchError::Meilisearch)?;
         Ok(Self {
             client,
             semantic_ratio: config.semantic_ratio,
@@ -186,7 +189,7 @@ impl SearchBackend for MeilisearchBackend {
             if let Some(ref f) = filter {
                 q.with_filter(f);
             }
-            let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Sdk)?;
+            let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Meilisearch)?;
             total += resp.estimated_total_hits.unwrap_or(0) as u64;
             if let Some(dist) = resp.facet_distribution {
                 facets = merge_facets(facets, convert_facet_distribution(&dist));
@@ -209,7 +212,7 @@ impl SearchBackend for MeilisearchBackend {
             {
                 Ok(None)
             }
-            Err(e) => Err(SearchError::Sdk(e)),
+            Err(e) => Err(SearchError::Meilisearch(e)),
         }
     }
 
@@ -220,7 +223,7 @@ impl SearchBackend for MeilisearchBackend {
             .index(index)
             .delete()
             .await
-            .map_err(SearchError::Sdk)?;
+            .map_err(SearchError::Meilisearch)?;
         wait_for_task(task, &self.client, TASK_TIMEOUT).await
     }
 
@@ -231,7 +234,7 @@ impl SearchBackend for MeilisearchBackend {
             .index(index)
             .get_stats()
             .await
-            .map_err(SearchError::Sdk)?;
+            .map_err(SearchError::Meilisearch)?;
         Ok(stats.number_of_documents as u64)
     }
 
@@ -266,7 +269,7 @@ impl SearchBackend for MeilisearchBackend {
             .client
             .list_all_indexes()
             .await
-            .map_err(SearchError::Sdk)?;
+            .map_err(SearchError::Meilisearch)?;
         Ok(result.results.into_iter().map(|idx| idx.uid).collect())
     }
 
@@ -313,7 +316,7 @@ impl SearchBackend for MeilisearchBackend {
             .index(index)
             .add_or_update(&docs, Some("id"))
             .await
-            .map_err(SearchError::Sdk)?;
+            .map_err(SearchError::Meilisearch)?;
         wait_for_task(task, &self.client, EMBED_TASK_TIMEOUT).await?;
 
         metrics::histogram!("aum_meili_task_wait_seconds").record(timer.elapsed().as_secs_f64());
@@ -333,7 +336,7 @@ impl SearchBackend for MeilisearchBackend {
         let idx = self.client.index(index);
         let mut q = SearchQuery::new(&idx);
         q.with_filter(&filter).with_limit(doc_ids.len());
-        let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Sdk)?;
+        let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Meilisearch)?;
         let ids = resp
             .hits
             .iter()
@@ -418,14 +421,14 @@ async fn initialize_index(
     let task = idx
         .set_settings(&base_settings())
         .await
-        .map_err(SearchError::Sdk)?;
+        .map_err(SearchError::Meilisearch)?;
     wait_for_task(task, client, TASK_TIMEOUT).await?;
 
     if let Some(dim) = vector_dimension {
         let task = idx
             .set_settings(&Settings::new().with_embedders(embedder_settings(dim)))
             .await
-            .map_err(SearchError::Sdk)?;
+            .map_err(SearchError::Meilisearch)?;
         wait_for_task(task, client, TASK_TIMEOUT).await?;
     }
     Ok(())
@@ -448,7 +451,7 @@ async fn index_sub_batches(
         let task = idx
             .add_or_replace(batch, Some("id"))
             .await
-            .map_err(SearchError::Sdk)?;
+            .map_err(SearchError::Meilisearch)?;
         match wait_for_task(task, client, TASK_TIMEOUT).await {
             Ok(()) => indexed += batch.len() as u64,
             Err(SearchError::TaskFailed { .. }) => failed += batch.len() as u64,
@@ -562,7 +565,7 @@ async fn search_one_index(
             .with_hybrid(EMBEDDER_NAME, params.semantic_ratio);
     }
 
-    let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Sdk)?;
+    let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Meilisearch)?;
     let hits: Vec<SearchResult> = resp
         .hits
         .iter()
@@ -659,7 +662,7 @@ async fn count_with_filter(
     if let Some(f) = filter {
         q.with_filter(f);
     }
-    let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Sdk)?;
+    let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Meilisearch)?;
     Ok(resp.estimated_total_hits.unwrap_or(0) as u64)
 }
 
@@ -739,20 +742,10 @@ async fn fetch_filter_page(
         .with_filter(filter)
         .with_limit(limit)
         .with_offset(offset);
-    let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Sdk)?;
+    let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Meilisearch)?;
     Ok(resp
         .hits
         .iter()
         .filter_map(|h| parse_hit(&h.result, index))
         .collect())
-}
-
-// ---------------------------------------------------------------------------
-// Metrics
-// ---------------------------------------------------------------------------
-
-fn record_search_metrics(elapsed: std::time::Duration, success: bool) {
-    let status = if success { "ok" } else { "error" };
-    metrics::counter!("aum_search_requests_total", "status" => status).increment(1);
-    metrics::histogram!("aum_search_latency_seconds").record(elapsed.as_secs_f64());
 }

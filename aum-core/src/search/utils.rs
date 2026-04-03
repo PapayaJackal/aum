@@ -1,4 +1,4 @@
-//! Shared utility functions for search metadata handling.
+//! Shared utility functions for search metadata handling and metrics.
 
 use crate::search::constants::MIMETYPE_ALIASES;
 
@@ -52,6 +52,20 @@ pub fn extract_email(raw: &str) -> Option<String> {
 #[must_use]
 pub fn alias_mimetype(raw: &str) -> &str {
     MIMETYPE_ALIASES.get(raw).copied().unwrap_or(raw)
+}
+
+// ---------------------------------------------------------------------------
+// Search metrics
+// ---------------------------------------------------------------------------
+
+/// Record standard search request metrics (counter + latency histogram).
+///
+/// Both backends emit identical counters/histograms; this shared function
+/// ensures the metric names stay in sync.
+pub(super) fn record_search_metrics(elapsed: std::time::Duration, success: bool) {
+    let status = if success { "ok" } else { "error" };
+    metrics::counter!("aum_search_requests_total", "status" => status).increment(1);
+    metrics::histogram!("aum_search_latency_seconds").record(elapsed.as_secs_f64());
 }
 
 // ---------------------------------------------------------------------------
