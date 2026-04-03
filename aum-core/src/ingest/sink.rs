@@ -25,6 +25,7 @@ pub trait BatchSink: Send + Sync {
     /// batch.
     async fn flush_batch(
         &self,
+        index: &str,
         job_id: &str,
         batch: &[(String, Document)],
         record_error: &RecordErrorFn,
@@ -41,6 +42,7 @@ pub struct NullSink;
 impl BatchSink for NullSink {
     async fn flush_batch(
         &self,
+        _index: &str,
         _job_id: &str,
         batch: &[(String, Document)],
         _record_error: &RecordErrorFn,
@@ -56,7 +58,7 @@ impl BatchSink for NullSink {
 #[async_trait::async_trait]
 pub trait ExistenceChecker: Send + Sync {
     /// Return the subset of `doc_ids` that already exist.
-    async fn get_existing(&self, doc_ids: &[String]) -> HashSet<String>;
+    async fn get_existing(&self, index: &str, doc_ids: &[String]) -> HashSet<String>;
 }
 
 /// A no-op checker that reports nothing as existing.
@@ -64,7 +66,7 @@ pub struct NoOpChecker;
 
 #[async_trait::async_trait]
 impl ExistenceChecker for NoOpChecker {
-    async fn get_existing(&self, _doc_ids: &[String]) -> HashSet<String> {
+    async fn get_existing(&self, _index: &str, _doc_ids: &[String]) -> HashSet<String> {
         HashSet::new()
     }
 }
@@ -100,7 +102,9 @@ mod tests {
     async fn null_sink_returns_batch_length() {
         let batch = dummy_batch(5);
         let record_error: RecordErrorFn = Arc::new(|_, _, _| {});
-        let (indexed, failed) = NullSink.flush_batch("j1", &batch, &record_error).await;
+        let (indexed, failed) = NullSink
+            .flush_batch("test", "j1", &batch, &record_error)
+            .await;
         assert_eq!(indexed, 5);
         assert_eq!(failed, 0);
     }
@@ -108,7 +112,7 @@ mod tests {
     #[tokio::test]
     async fn no_op_checker_returns_empty() {
         let ids = vec!["a".to_owned(), "b".to_owned()];
-        let existing = NoOpChecker.get_existing(&ids).await;
+        let existing = NoOpChecker.get_existing("test", &ids).await;
         assert!(existing.is_empty());
     }
 }

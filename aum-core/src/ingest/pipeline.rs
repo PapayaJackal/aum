@@ -117,8 +117,12 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
         let job_id = generate_name();
         info!(job_id, source_dir = %source_dir.display(), "resuming ingest");
 
-        self.run_pipeline(&job_id, &source_dir, PipelineMode::Resume(checker))
-            .await
+        self.run_pipeline(
+            &job_id,
+            &source_dir,
+            PipelineMode::Resume(checker, self.index_name.clone()),
+        )
+        .await
     }
 
     /// Retry specific file paths that failed in a previous ingest.
@@ -153,7 +157,7 @@ enum PipelineMode {
     /// Walk the source directory for all files.
     Walk,
     /// Walk but filter out already-indexed files.
-    Resume(Arc<dyn ExistenceChecker>),
+    Resume(Arc<dyn ExistenceChecker>, String),
     /// Process explicit file paths.
     Retry(Vec<PathBuf>),
 }
@@ -297,11 +301,11 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
                         warn!(error = %e, "directory walk failed");
                     }
                 }
-                PipelineMode::Resume(checker) => {
+                PipelineMode::Resume(checker, index) => {
                     let (walk_tx, walk_rx) = mpsc::channel(PATH_CHANNEL_CAPACITY);
 
                     let filter_handle = tokio::spawn(async move {
-                        walker::filter_existing(walk_rx, path_tx, checker, skip_count).await;
+                        walker::filter_existing(walk_rx, path_tx, checker, index, skip_count).await;
                     });
 
                     if let Err(e) = walker::walk_directory(&source_dir, &walk_tx, &discovered).await
@@ -452,7 +456,10 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
     ) -> Result<(), IngestPipelineError> {
         let start = Instant::now();
 
-        let (indexed, failed) = self.sink.flush_batch(job_id, batch, record_error).await;
+        let (indexed, failed) = self
+            .sink
+            .flush_batch(&self.index_name, job_id, batch, record_error)
+            .await;
 
         let elapsed = start.elapsed().as_secs_f64();
         metrics::histogram!("aum_ingest_batch_flush_seconds").record(elapsed);
@@ -637,6 +644,7 @@ mod tests {
     impl BatchSink for CountingSink {
         async fn flush_batch(
             &self,
+            _index: &str,
             _job_id: &str,
             batch: &[(String, Document)],
             _record_error: &RecordErrorFn,
@@ -657,6 +665,7 @@ mod tests {
     impl BatchSink for FlushCounter {
         async fn flush_batch(
             &self,
+            _index: &str,
             _job_id: &str,
             batch: &[(String, Document)],
             _record_error: &RecordErrorFn,
@@ -676,6 +685,7 @@ mod tests {
     impl BatchSink for CaptureContentSink {
         async fn flush_batch(
             &self,
+            _index: &str,
             _job_id: &str,
             batch: &[(String, Document)],
             _record_error: &RecordErrorFn,
@@ -698,6 +708,7 @@ mod tests {
     impl BatchSink for CaptureMetadataSink {
         async fn flush_batch(
             &self,
+            _index: &str,
             _job_id: &str,
             batch: &[(String, Document)],
             _record_error: &RecordErrorFn,

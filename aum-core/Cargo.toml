@@ -31,6 +31,8 @@ serde_json = { workspace = true }
 async-stream = { workspace = true }
 async-walkdir = { workspace = true }
 rand = { workspace = true }
+phf = { workspace = true }
+meilisearch-sdk = { workspace = true }
 tempfile = "3"
 
 [dev-dependencies]

@@ -1,0 +1,122 @@
+//! Shared utility functions for search metadata handling.
+
+use crate::search::constants::MIMETYPE_ALIASES;
+
+// ---------------------------------------------------------------------------
+// Message-ID normalisation
+// ---------------------------------------------------------------------------
+
+/// Strip leading/trailing whitespace and angle brackets from an RFC 2822
+/// Message-ID value.
+///
+/// `" <abc@example.com> "` → `"abc@example.com"`
+#[must_use]
+pub fn normalize_message_id(raw: &str) -> String {
+    raw.trim().trim_matches(|c| c == '<' || c == '>').to_owned()
+}
+
+// ---------------------------------------------------------------------------
+// Email address extraction
+// ---------------------------------------------------------------------------
+
+/// Extract the bare email address from an RFC 2822 address string.
+///
+/// Handles both `"Name <user@example.com>"` and plain `"user@example.com"` forms.
+/// Returns `None` if the result would be empty.
+#[must_use]
+pub fn extract_email(raw: &str) -> Option<String> {
+    if let (Some(start), Some(end)) = (raw.find('<'), raw.find('>'))
+        && start < end
+    {
+        // Angle-bracket form: return the inner address or None.
+        let addr = raw[start + 1..end].trim();
+        return if addr.is_empty() {
+            None
+        } else {
+            Some(addr.to_owned())
+        };
+    }
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MIME type alias
+// ---------------------------------------------------------------------------
+
+/// Return the human-readable alias for a MIME type, or the raw type unchanged.
+#[must_use]
+pub fn alias_mimetype(raw: &str) -> &str {
+    MIMETYPE_ALIASES.get(raw).copied().unwrap_or(raw)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_strips_brackets_and_whitespace() {
+        assert_eq!(
+            normalize_message_id(" <abc@example.com> "),
+            "abc@example.com"
+        );
+        assert_eq!(normalize_message_id("abc@example.com"), "abc@example.com");
+        assert_eq!(normalize_message_id("<id>"), "id");
+    }
+
+    #[test]
+    fn normalize_empty_stays_empty() {
+        assert_eq!(normalize_message_id(""), "");
+        assert_eq!(normalize_message_id("   "), "");
+    }
+
+    #[test]
+    fn extract_email_angle_bracket_form() {
+        assert_eq!(
+            extract_email("Alice <alice@example.com>"),
+            Some("alice@example.com".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_email_bare_form() {
+        assert_eq!(
+            extract_email("bob@example.com"),
+            Some("bob@example.com".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_email_empty_returns_none() {
+        assert_eq!(extract_email(""), None);
+        assert_eq!(extract_email("   "), None);
+    }
+
+    #[test]
+    fn extract_email_empty_brackets_returns_none() {
+        assert_eq!(extract_email("<>"), None);
+        assert_eq!(extract_email("Name <>"), None);
+    }
+
+    #[test]
+    fn alias_mimetype_known() {
+        assert_eq!(alias_mimetype("application/pdf"), "PDF");
+        assert_eq!(alias_mimetype("message/rfc822"), "Email");
+    }
+
+    #[test]
+    fn alias_mimetype_unknown_passthrough() {
+        assert_eq!(
+            alias_mimetype("application/x-custom"),
+            "application/x-custom"
+        );
+    }
+}

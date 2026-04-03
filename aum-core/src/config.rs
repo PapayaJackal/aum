@@ -191,7 +191,7 @@ pub struct MeilisearchConfig {
     pub api_key: String,
     /// Ratio of semantic to keyword score in hybrid search (0.0–1.0).
     #[config_default = "0.5"]
-    pub semantic_ratio: f64,
+    pub semantic_ratio: f32,
     /// Number of words to include in highlighted excerpt snippets.
     #[config_default = "50"]
     pub crop_length: u32,
@@ -382,7 +382,7 @@ pub struct AumConfig {
     pub log: LoggingConfig,
     /// Prometheus metrics endpoint settings.
     pub prometheus: PrometheusConfig,
-    /// Meilisearch connection and index settings.
+    /// Meilisearch connection settings.
     pub meilisearch: MeilisearchConfig,
     /// Database connection settings.
     pub database: DatabaseConfig,
@@ -619,7 +619,7 @@ mod tests {
         assert_eq!(actual.meilisearch.url, expected.meilisearch.url);
         assert!(
             (actual.meilisearch.semantic_ratio - expected.meilisearch.semantic_ratio).abs()
-                < f64::EPSILON
+                < f32::EPSILON
         );
         assert_eq!(
             actual.meilisearch.crop_length,
@@ -657,7 +657,7 @@ mod tests {
     fn test_env_overlay_string() -> anyhow::Result<()> {
         let cfg = config_from_env(&[("AUM_MEILISEARCH__URL", "http://env-meili:7700")])?;
         assert_eq!(cfg.meilisearch.url, "http://env-meili:7700");
-        assert!((cfg.meilisearch.semantic_ratio - 0.5).abs() < f64::EPSILON); // untouched default
+        assert!((cfg.meilisearch.semantic_ratio - 0.5_f32).abs() < f32::EPSILON); // untouched default
         Ok(())
     }
 

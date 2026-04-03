@@ -47,3 +47,5 @@ serde_json = "1"
 async-stream = "0.3.6"
 async-walkdir = "2.1.0"
 rand = "0.10.0"
+phf = { version = "0.13.1", features = ["macros"] }
+meilisearch-sdk = "0.32"

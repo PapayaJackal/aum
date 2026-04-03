@@ -103,7 +103,7 @@ pub(crate) mod test_helpers {
 
     #[async_trait::async_trait]
     impl ExistenceChecker for TestChecker {
-        async fn get_existing(&self, doc_ids: &[String]) -> HashSet<String> {
+        async fn get_existing(&self, _index: &str, doc_ids: &[String]) -> HashSet<String> {
             doc_ids
                 .iter()
                 .filter(|id| self.0.contains(id.as_str()))
