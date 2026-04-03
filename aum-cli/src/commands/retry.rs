@@ -14,7 +14,7 @@ use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
     CommonIngestArgs, acquire_ingest_lock, build_tika_pool, effective_ocr_settings,
-    render_progress, resolve_ocr_override,
+    initialize_backend, render_progress, resolve_ocr_override,
 };
 use crate::output::print_job_summary;
 
@@ -103,6 +103,8 @@ pub async fn run(
         job.job_id,
         job.index_name,
     );
+
+    initialize_backend(&backend, config, &job.index_name).await?;
 
     let batch_size = args.common.batch_size.unwrap_or(config.ingest.batch_size);
     let max_workers = args.common.workers.unwrap_or(config.ingest.max_workers);

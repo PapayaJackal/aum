@@ -13,7 +13,7 @@ use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
     CommonIngestArgs, acquire_ingest_lock, build_tika_pool, effective_ocr_settings,
-    render_progress, resolve_ocr_override,
+    initialize_backend, render_progress, resolve_ocr_override,
 };
 use crate::output::print_job_summary;
 
@@ -48,6 +48,8 @@ pub async fn run(
 
     let ocr_override = resolve_ocr_override(args.common.ocr, args.common.no_ocr);
     let ocr = effective_ocr_settings(config, ocr_override, args.common.ocr_language.clone());
+
+    initialize_backend(&backend, config, &args.index).await?;
 
     let pool = build_tika_pool(config, &args.index, &ocr).context("failed to build Tika pool")?;
 

@@ -10,6 +10,7 @@ use aum_core::extraction::tika::TikaExtractorConfig;
 use aum_core::ingest::IngestLock;
 use aum_core::models::OcrSettings;
 use aum_core::pool::{InstanceDesc, InstancePool, InstancePoolConfig};
+use aum_core::search::{AumBackend, SearchBackend as _};
 use clap::Args;
 
 /// Common CLI arguments shared by all three ingest commands (ingest / resume / retry).
@@ -113,6 +114,27 @@ pub fn build_tika_pool(
     let pool =
         InstancePool::new(descs, InstancePoolConfig::new("tika")).context("Tika pool is empty")?;
     Ok(Arc::new(pool))
+}
+
+/// Initialise the search index, applying the configured vector dimension when
+/// embeddings are enabled.
+///
+/// # Errors
+///
+/// Returns an error if the backend rejects the initialisation request.
+pub async fn initialize_backend(
+    backend: &AumBackend,
+    config: &AumConfig,
+    index_name: &str,
+) -> anyhow::Result<()> {
+    let vector_dimension = config
+        .embeddings
+        .enabled
+        .then_some(config.embeddings.dimension);
+    backend
+        .initialize(index_name, vector_dimension)
+        .await
+        .with_context(|| format!("failed to initialise index '{index_name}'"))
 }
 
 // ---------------------------------------------------------------------------
