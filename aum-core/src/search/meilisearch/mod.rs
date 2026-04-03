@@ -63,8 +63,8 @@ impl MeilisearchBackend {
     /// # Errors
     /// Returns an error if the Meilisearch client cannot be built.
     pub fn new(config: &MeilisearchConfig) -> Result<Self, SearchError> {
-        let client =
-            Client::new(&config.url, Some(&config.api_key)).map_err(SearchError::Meilisearch)?;
+        let api_key = (!config.api_key.is_empty()).then_some(config.api_key.as_str());
+        let client = Client::new(&config.url, api_key).map_err(SearchError::Meilisearch)?;
         Ok(Self {
             client,
             semantic_ratio: config.semantic_ratio,
