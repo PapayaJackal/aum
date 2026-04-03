@@ -2,6 +2,7 @@
 
 use clap::Args;
 use futures::TryStreamExt as _;
+use owo_colors::OwoColorize as _;
 
 use aum_core::search::SearchBackend;
 use aum_core::search::constants::{
@@ -79,10 +80,10 @@ pub async fn run(args: &SearchArgs, backend: &dyn SearchBackend) -> anyhow::Resu
             .count(&indices, Some(&args.query), &filters)
             .await
             .map_err(|e| anyhow::anyhow!("count query failed: {e}"))?;
-        println!("Total: {count}");
+        println!("{} {count}", "Total:".bold());
         if !facets.is_empty() {
             println!();
-            println!("Facets:");
+            println!("{}", "Facets:".bold());
             let mut sorted_facets: Vec<_> = facets.iter().collect();
             sorted_facets.sort_by_key(|(k, _)| k.as_str());
             for (facet, values) in sorted_facets {
@@ -91,9 +92,9 @@ pub async fn run(args: &SearchArgs, backend: &dyn SearchBackend) -> anyhow::Resu
                 let parts: Vec<String> = sorted_values
                     .iter()
                     .take(10)
-                    .map(|(v, c)| format!("{v} ({c})"))
+                    .map(|(v, c)| format!("{v} ({})", c.to_string().cyan()))
                     .collect();
-                println!("  {facet}: {}", parts.join(", "));
+                println!("  {}: {}", facet.bold(), parts.join(", "));
             }
             println!();
         }
@@ -123,9 +124,14 @@ pub async fn run(args: &SearchArgs, backend: &dyn SearchBackend) -> anyhow::Resu
     for (i, r) in results.iter().enumerate() {
         let n = args.offset + i + 1;
         let snippet = truncate_snippet(&r.snippet, 200);
-        println!("{n}. [{:.3}] {}", r.score, r.display_path);
+        println!(
+            "{}  {}  {}",
+            format!("{n}.").bold(),
+            format!("[{:.3}]", r.score).cyan(),
+            r.display_path.bold(),
+        );
         if !snippet.is_empty() {
-            println!("   {snippet}");
+            println!("   {}", snippet.dimmed());
         }
         println!();
     }

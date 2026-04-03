@@ -12,15 +12,25 @@ use crate::search::utils::string_field;
 // ---------------------------------------------------------------------------
 
 /// Convert a raw Meilisearch search hit (JSON object) into a [`SearchResult`].
-pub(super) fn parse_hit(hit: &Value, index_name: &str) -> Option<SearchResult> {
+///
+/// `score_override` takes precedence over any `_rankingScore` field embedded in
+/// the JSON — the SDK surfaces the score on the typed hit wrapper rather than
+/// inside the document body, so callers that have access to it should pass it
+/// here.
+pub(super) fn parse_hit(
+    hit: &Value,
+    index_name: &str,
+    score_override: Option<f64>,
+) -> Option<SearchResult> {
     let obj = hit.as_object()?;
     let doc_id = obj.get("id")?.as_str()?.to_owned();
     let display_path = string_field(obj, "display_path");
     let extracted_from = string_field(obj, "extracted_from");
-    let score = obj
-        .get("_rankingScore")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
+    let score = score_override.unwrap_or_else(|| {
+        obj.get("_rankingScore")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+    });
 
     let (snippet, display_path_highlighted) = extract_formatted(obj, &display_path);
     let metadata = extract_metadata(obj);
@@ -133,7 +143,7 @@ mod tests {
             "has_embeddings": false,
             "_rankingScore": 0.9,
         });
-        let result = parse_hit(&hit, "aum").context("should parse hit")?;
+        let result = parse_hit(&hit, "aum", None).context("should parse hit")?;
         assert_eq!(result.doc_id, "doc1");
         assert_eq!(result.display_path, "docs/foo.pdf");
         assert!((result.score - 0.9).abs() < f64::EPSILON);
@@ -154,7 +164,7 @@ mod tests {
             },
             "_rankingScore": 0.5,
         });
-        let result = parse_hit(&hit, "idx").context("should parse hit")?;
+        let result = parse_hit(&hit, "idx", None).context("should parse hit")?;
         assert_eq!(result.snippet, "<em>highlighted</em> content");
         assert_eq!(result.display_path_highlighted, "<em>a</em>.txt");
         Ok(())
@@ -171,7 +181,7 @@ mod tests {
             "meta_creator": "Alice",
             "_rankingScore": 1.0,
         });
-        let result = parse_hit(&hit, "aum").context("should parse hit")?;
+        let result = parse_hit(&hit, "aum", None).context("should parse hit")?;
         assert_eq!(
             result.metadata.get("content_type").and_then(|v| v.as_str()),
             Some("application/pdf")

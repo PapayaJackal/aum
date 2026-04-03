@@ -206,7 +206,7 @@ impl SearchBackend for MeilisearchBackend {
     ) -> Result<Option<SearchResult>, SearchError> {
         let idx = self.client.index(index);
         match idx.get_document::<Value>(doc_id).await {
-            Ok(doc) => Ok(parse_hit(&doc, index)),
+            Ok(doc) => Ok(parse_hit(&doc, index, None)),
             Err(meilisearch_sdk::errors::Error::Meilisearch(ref e))
                 if e.error_code == meilisearch_sdk::errors::ErrorCode::DocumentNotFound =>
             {
@@ -569,7 +569,7 @@ async fn search_one_index(
     let hits: Vec<SearchResult> = resp
         .hits
         .iter()
-        .filter_map(|h| parse_hit(&h.result, name))
+        .filter_map(|h| parse_hit(&h.result, name, h.ranking_score))
         .collect();
     Ok(hits)
 }
@@ -746,6 +746,6 @@ async fn fetch_filter_page(
     Ok(resp
         .hits
         .iter()
-        .filter_map(|h| parse_hit(&h.result, index))
+        .filter_map(|h| parse_hit(&h.result, index, None))
         .collect())
 }
