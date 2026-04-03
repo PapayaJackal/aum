@@ -121,6 +121,9 @@ pub enum SearchError {
     /// JSON serialisation or deserialisation failed.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    /// The requested backend was not compiled into this binary.
+    #[error("backend '{0}' is not compiled into this binary; rebuild with --features {0}")]
+    BackendNotCompiled(&'static str),
     /// A Meilisearch task did not complete within the allowed timeout.
     #[cfg(feature = "meilisearch")]
     #[error("task timed out")]

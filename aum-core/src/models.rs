@@ -122,6 +122,23 @@ pub enum JobStatus {
     Interrupted,
 }
 
+impl std::str::FromStr for JobStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "interrupted" => Ok(Self::Interrupted),
+            other => Err(format!(
+                "unknown status '{other}'; valid values: pending, running, completed, failed, interrupted"
+            )),
+        }
+    }
+}
+
 /// The type of work performed by an ingest job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, sqlx::Type)]
 #[serde(rename_all = "lowercase")]

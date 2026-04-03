@@ -51,6 +51,40 @@ impl fmt::Display for EmbeddingsBackend {
     }
 }
 
+/// The search backend to use for indexing and querying documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchBackendType {
+    /// Use Meilisearch as the search backend.
+    #[default]
+    Meilisearch,
+    /// Use Elasticsearch as the search backend.
+    Elasticsearch,
+}
+
+impl fmt::Display for SearchBackendType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SearchBackendType::Meilisearch => write!(f, "meilisearch"),
+            SearchBackendType::Elasticsearch => write!(f, "elasticsearch"),
+        }
+    }
+}
+
+impl std::str::FromStr for SearchBackendType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "meilisearch" => Ok(Self::Meilisearch),
+            "elasticsearch" => Ok(Self::Elasticsearch),
+            other => Err(format!(
+                "unknown backend '{other}'; valid values: meilisearch, elasticsearch"
+            )),
+        }
+    }
+}
+
 /// Minimum severity level for emitted log messages.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum LogLevel {
@@ -399,6 +433,8 @@ pub struct AumConfig {
     pub log: LoggingConfig,
     /// Prometheus metrics endpoint settings.
     pub prometheus: PrometheusConfig,
+    /// Which search backend to use: "meilisearch" or "elasticsearch".
+    pub search_backend: SearchBackendType,
     /// Meilisearch connection settings.
     #[cfg(feature = "meilisearch")]
     pub meilisearch: MeilisearchConfig,

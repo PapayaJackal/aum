@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod constants;
+pub mod dispatch;
 pub mod meta;
 
 #[cfg(feature = "meilisearch")]
@@ -15,6 +16,7 @@ pub mod types;
 pub mod utils;
 
 pub use backend::SearchBackend;
+pub use dispatch::AumBackend;
 
 #[cfg(feature = "meilisearch")]
 pub use meilisearch::MeilisearchBackend;

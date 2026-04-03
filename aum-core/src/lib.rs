@@ -58,20 +58,89 @@ pub fn bootstrap() -> config::AumConfig {
 /// is resolved relative to the `aum-core` crate at compile time, so no runtime path
 /// configuration is required.
 ///
+/// For `SQLite` URLs, the parent directory is created automatically if it does not exist, and
+/// `?mode=rwc` is appended so `SQLite` will create the database file on first use.
+///
 /// # Panics / Exits
 ///
 /// Calls [`std::process::exit`] with status 1 if the pool cannot be initialised or migrations
 /// fail.
 pub async fn bootstrap_db(config: &config::AumConfig) -> sqlx::AnyPool {
     let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
-    db::init_pool(
-        &config.database_url(),
-        config.database.max_connections,
-        &migrations_dir,
-    )
-    .await
-    .unwrap_or_else(|e| {
-        eprintln!("error: failed to open database: {e}");
+
+    let url = prepare_sqlite_url(&config.database_url());
+
+    db::init_pool(&url, config.database.max_connections, &migrations_dir)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("error: failed to open database: {e}");
+            std::process::exit(1);
+        })
+}
+
+/// For `sqlite:` URLs, creates the parent directory of the database file if needed and ensures
+/// `?mode=rwc` is present so `SQLite` creates the file on first connection. Non-`SQLite` URLs are
+/// returned unchanged. Exits the process on I/O failure.
+fn prepare_sqlite_url(url: &str) -> String {
+    let Some(rest) = url.strip_prefix("sqlite:") else {
+        return url.to_owned();
+    };
+    let (file_part, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let path = std::path::Path::new(file_part);
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "error: failed to create data directory '{}': {e}",
+            parent.display()
+        );
         std::process::exit(1);
-    })
+    }
+    let mut params: Vec<&str> = query.split('&').filter(|s| !s.is_empty()).collect();
+    if !params.iter().any(|p| p.starts_with("mode=")) {
+        params.push("mode=rwc");
+    }
+    format!("sqlite:{}?{}", file_part, params.join("&"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_prepare_sqlite_url_adds_mode_rwc() {
+        let url = prepare_sqlite_url("sqlite:aum.db");
+        assert_eq!(url, "sqlite:aum.db?mode=rwc");
+    }
+
+    #[test]
+    fn test_prepare_sqlite_url_preserves_existing_mode() {
+        let url = prepare_sqlite_url("sqlite:aum.db?mode=ro");
+        assert_eq!(url, "sqlite:aum.db?mode=ro");
+    }
+
+    #[test]
+    fn test_prepare_sqlite_url_preserves_other_params() {
+        let url = prepare_sqlite_url("sqlite:aum.db?cache=shared");
+        assert_eq!(url, "sqlite:aum.db?cache=shared&mode=rwc");
+    }
+
+    #[test]
+    fn test_prepare_sqlite_url_non_sqlite_passthrough() {
+        let url = prepare_sqlite_url("postgres://user:pass@localhost/aum");
+        assert_eq!(url, "postgres://user:pass@localhost/aum");
+    }
+
+    #[test]
+    fn test_prepare_sqlite_url_creates_parent_dir() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("subdir").join("aum.db");
+        let url = format!("sqlite:{}", db_path.display());
+
+        prepare_sqlite_url(&url);
+
+        assert!(tmp.path().join("subdir").is_dir());
+    }
 }

@@ -135,6 +135,19 @@ pub static HIDDEN_METADATA_KEYS: phf::Set<&'static str> = phf::phf_set! {
 // Facet field definitions
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Facet label string constants
+// ---------------------------------------------------------------------------
+
+/// Facet label for document file type (maps to `meta_content_type`).
+pub const FACET_FILE_TYPE: &str = "File Type";
+/// Facet label for document creator/author (maps to `meta_creator`).
+pub const FACET_CREATOR: &str = "Creator";
+/// Facet label for email address participants (maps to `meta_email_addresses`).
+pub const FACET_EMAIL_ADDRESSES: &str = "Email Addresses";
+/// Facet label for document creation year (maps to `meta_created_year`).
+pub const FACET_CREATED: &str = "Created";
+
 /// Maps facet display labels to their indexed Meilisearch field names.
 pub static FACET_FIELDS: phf::Map<&'static str, &'static str> = phf::phf_map! {
     "Created" => "meta_created_year",
