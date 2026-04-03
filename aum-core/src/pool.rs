@@ -213,29 +213,31 @@ impl<T: Send + Sync> InstancePool<T> {
         let now = Instant::now();
         let retry_interval = self.config.health_retry_interval;
 
-        let candidates: Vec<&InstanceState<T>> = self
-            .instances
-            .iter()
-            .filter(|inst| {
-                let health = inst
-                    .health
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                health.healthy
-                    || health
-                        .last_failure_time
-                        .is_some_and(|t| now.duration_since(t) >= retry_interval)
-            })
-            .collect();
-
-        let pool = if candidates.is_empty() {
-            self.instances.iter().collect::<Vec<_>>()
-        } else {
-            candidates
+        let is_eligible = |inst: &InstanceState<T>| {
+            let health = inst
+                .health
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            health.healthy
+                || health
+                    .last_failure_time
+                    .is_some_and(|t| now.duration_since(t) >= retry_interval)
         };
 
+        let eligible_count = self.instances.iter().filter(|i| is_eligible(i)).count();
         let idx = self.index.fetch_add(1, Ordering::Relaxed);
-        pool[idx % pool.len()]
+
+        if eligible_count > 0 {
+            let target = idx % eligible_count;
+            self.instances
+                .iter()
+                .filter(|i| is_eligible(i))
+                .nth(target)
+                .expect("eligible_count > 0 guarantees nth succeeds")
+        } else {
+            // All instances unhealthy — fall back to round-robin over all.
+            &self.instances[idx % self.instances.len()]
+        }
     }
 }
 
