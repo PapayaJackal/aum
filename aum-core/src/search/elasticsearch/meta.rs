@@ -150,10 +150,7 @@ mod tests {
             ..Default::default()
         };
         let nested = build_nested_meta(&m);
-        assert_eq!(
-            nested.get("file_size").and_then(|v| v.as_i64()),
-            Some(12345)
-        );
+        assert_eq!(nested.get("file_size").and_then(Value::as_i64), Some(12345));
     }
 
     #[test]
@@ -185,7 +182,7 @@ mod tests {
 
     #[test]
     fn build_doc_body_nested_meta_content_type() -> anyhow::Result<()> {
-        let mut md = meta(&[("Content-Type", "application/pdf")]);
+        let md = meta(&[("Content-Type", "application/pdf")]);
         let doc = Document {
             source_path: PathBuf::from("/tmp/test.pdf"),
             content: String::new(),

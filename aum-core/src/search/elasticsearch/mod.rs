@@ -123,6 +123,7 @@ impl SearchBackend for ElasticsearchBackend {
         }
 
         let doc_count = docs.len() as u64;
+        #[allow(clippy::cast_precision_loss)] // doc counts won't exceed f64 mantissa range
         metrics::histogram!("aum_es_batch_docs").record(doc_count as f64);
 
         // Build NDJSON bulk body: alternating action + source lines.
@@ -234,7 +235,7 @@ impl SearchBackend for ElasticsearchBackend {
             .get("hits")
             .and_then(|h| h.get("total"))
             .and_then(|t| t.get("value"))
-            .and_then(|v| v.as_u64())
+            .and_then(Value::as_u64)
             .unwrap_or(0);
 
         let facets = parse_facets(&resp_body);
@@ -303,7 +304,7 @@ impl SearchBackend for ElasticsearchBackend {
 
         let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
 
-        Ok(body.get("count").and_then(|v| v.as_u64()).unwrap_or(0))
+        Ok(body.get("count").and_then(Value::as_u64).unwrap_or(0))
     }
 
     fn find_attachments<'a>(
@@ -390,7 +391,7 @@ impl SearchBackend for ElasticsearchBackend {
 
         let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
 
-        Ok(body.get("count").and_then(|v| v.as_u64()).unwrap_or(0))
+        Ok(body.get("count").and_then(Value::as_u64).unwrap_or(0))
     }
 
     fn scroll_unembedded(
@@ -491,7 +492,7 @@ impl SearchBackend for ElasticsearchBackend {
             .and_then(|v| v.as_array())
             .map(|docs| {
                 docs.iter()
-                    .filter(|doc| doc.get("found").and_then(|v| v.as_bool()).unwrap_or(false))
+                    .filter(|doc| doc.get("found").and_then(Value::as_bool).unwrap_or(false))
                     .filter_map(|doc| doc.get("_id")?.as_str().map(str::to_owned))
                     .collect()
             })
@@ -810,11 +811,7 @@ async fn fetch_unembedded_page(
 ///
 /// Returns `(indexed, failed)`.
 fn parse_bulk_response(resp: &Value, total: u64) -> (u64, u64) {
-    if !resp
-        .get("errors")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
+    if !resp.get("errors").and_then(Value::as_bool).unwrap_or(false) {
         return (total, 0);
     }
 
@@ -826,7 +823,7 @@ fn parse_bulk_response(resp: &Value, total: u64) -> (u64, u64) {
 fn count_bulk_failures(resp: &Value) -> u64 {
     resp.get("items")
         .and_then(|v| v.as_array())
-        .map(|items| {
+        .map_or(0, |items| {
             items
                 .iter()
                 .filter(|item| {
@@ -838,5 +835,4 @@ fn count_bulk_failures(resp: &Value) -> u64 {
                 })
                 .count() as u64
         })
-        .unwrap_or(0)
 }

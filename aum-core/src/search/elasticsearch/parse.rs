@@ -33,16 +33,18 @@ pub(super) fn parse_hit(hit: &Value, index_name: &str) -> Option<SearchResult> {
         .and_then(|v| v.as_array())
         .and_then(|a| a.first())
         .and_then(|v| v.as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            source
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .chars()
-                .take(200)
-                .collect()
-        });
+        .map_or_else(
+            || {
+                source
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .chars()
+                    .take(200)
+                    .collect()
+            },
+            str::to_owned,
+        );
 
     let display_path_highlighted = highlight
         .and_then(|h| h.get("display_path"))
@@ -86,7 +88,7 @@ pub(super) fn parse_hits(resp: &Value) -> (Vec<SearchResult>, u64) {
         .and_then(|t| {
             // ES returns `{ "value": N, "relation": "eq" }` for total.
             if let Some(obj) = t.as_object() {
-                obj.get("value").and_then(|v| v.as_u64())
+                obj.get("value").and_then(Value::as_u64)
             } else {
                 t.as_u64()
             }
@@ -242,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_hits_total_and_results() -> anyhow::Result<()> {
+    fn parse_hits_total_and_results() {
         let resp = json!({
             "hits": {
                 "total": { "value": 2, "relation": "eq" },
@@ -263,6 +265,5 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].doc_id, "a");
         assert_eq!(results[1].doc_id, "b");
-        Ok(())
     }
 }

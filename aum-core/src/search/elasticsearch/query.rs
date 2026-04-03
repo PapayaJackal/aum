@@ -62,7 +62,7 @@ pub(super) fn build_filter_clauses(filters: &FilterMap) -> Vec<Value> {
             continue;
         };
 
-        if DATE_FACETS.contains(&label.as_str()) {
+        if DATE_FACETS.contains(label.as_str()) {
             // values = ["2020", "from:2020", "to:2023"] etc.
             let mut range: serde_json::Map<String, Value> =
                 serde_json::Map::from_iter([("format".to_owned(), Value::String("yyyy".into()))]);
@@ -228,10 +228,7 @@ pub(super) fn parse_facets(resp: &Value) -> FacetMap {
         let mut dist: HashMap<String, u64> = HashMap::new();
 
         for bucket in buckets {
-            let count = bucket
-                .get("doc_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let count = bucket.get("doc_count").and_then(Value::as_u64).unwrap_or(0);
             if count == 0 {
                 continue;
             }
@@ -266,6 +263,7 @@ pub(super) fn parse_facets(resp: &Value) -> FacetMap {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Context as _;
     use serde_json::json;
 
     use super::*;
@@ -278,26 +276,32 @@ mod tests {
     }
 
     #[test]
-    fn filter_clauses_file_type_maps_alias_to_mime() {
+    fn filter_clauses_file_type_maps_alias_to_mime() -> anyhow::Result<()> {
         let mut f = FilterMap::new();
         f.insert("File Type".into(), vec!["PDF".into()]);
         let clauses = build_filter_clauses(&f);
         assert_eq!(clauses.len(), 1);
-        let terms = clauses[0].get("terms").unwrap();
-        let types = terms.get("meta.content_type").unwrap().as_array().unwrap();
+        let terms = clauses[0].get("terms").context("missing terms")?;
+        let types = terms
+            .get("meta.content_type")
+            .context("missing meta.content_type")?
+            .as_array()
+            .context("not an array")?;
         assert!(types.iter().any(|v| v.as_str() == Some("application/pdf")));
+        Ok(())
     }
 
     #[test]
-    fn filter_clauses_date_range() {
+    fn filter_clauses_date_range() -> anyhow::Result<()> {
         let mut f = FilterMap::new();
         f.insert("Created".into(), vec!["from:2020".into(), "to:2023".into()]);
         let clauses = build_filter_clauses(&f);
         assert_eq!(clauses.len(), 1);
-        let range = clauses[0].get("range").unwrap();
-        let created = range.get("meta.created").unwrap();
+        let range = clauses[0].get("range").context("missing range")?;
+        let created = range.get("meta.created").context("missing meta.created")?;
         assert_eq!(created.get("gte").and_then(|v| v.as_str()), Some("2020"));
         assert_eq!(created.get("lte").and_then(|v| v.as_str()), Some("2023"));
+        Ok(())
     }
 
     #[test]
@@ -309,15 +313,16 @@ mod tests {
     }
 
     #[test]
-    fn sort_clause_date_desc() {
+    fn sort_clause_date_desc() -> anyhow::Result<()> {
         let sort = SortSpec {
             field: "meta_created_year".into(),
             descending: true,
         };
-        let clause = build_sort_clause(&sort).unwrap();
-        let arr = clause.as_array().unwrap();
-        let field = arr[0].get("meta.created").unwrap();
+        let clause = build_sort_clause(&sort).context("no sort clause")?;
+        let arr = clause.as_array().context("not an array")?;
+        let field = arr[0].get("meta.created").context("missing meta.created")?;
         assert_eq!(field.get("order").and_then(|v| v.as_str()), Some("desc"));
+        Ok(())
     }
 
     #[test]
@@ -330,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_facets_date_histogram() {
+    fn parse_facets_date_histogram() -> anyhow::Result<()> {
         let resp = json!({
             "aggregations": {
                 "Created": {
@@ -342,13 +347,14 @@ mod tests {
             }
         });
         let facets = parse_facets(&resp);
-        let created = facets.get("Created").unwrap();
+        let created = facets.get("Created").context("missing Created facet")?;
         assert_eq!(created.get("2023"), Some(&10u64));
         assert_eq!(created.get("2022"), Some(&5u64));
+        Ok(())
     }
 
     #[test]
-    fn parse_facets_term_aggregation() {
+    fn parse_facets_term_aggregation() -> anyhow::Result<()> {
         let resp = json!({
             "aggregations": {
                 "File Type": {
@@ -360,9 +366,10 @@ mod tests {
             }
         });
         let facets = parse_facets(&resp);
-        let file_type = facets.get("File Type").unwrap();
+        let file_type = facets.get("File Type").context("missing File Type facet")?;
         assert_eq!(file_type.get("application/pdf"), Some(&3u64));
         // Zero-count buckets are excluded.
         assert!(!file_type.contains_key("text/plain"));
+        Ok(())
     }
 }
