@@ -9,7 +9,7 @@ use crate::search::types::TruncationRecord;
 // ---------------------------------------------------------------------------
 
 /// Maximum JSON payload size for a single Meilisearch indexing request.
-pub(super) const MAX_PAYLOAD_BYTES: usize = 95 * 1024 * 1024;
+pub(super) const MAX_PAYLOAD_BYTES: usize = 80 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Size estimation
