@@ -85,6 +85,117 @@ pub fn build_tika_pool(
     Ok(Arc::new(pool))
 }
 
+// ---------------------------------------------------------------------------
+// Progress rendering helpers
+// ---------------------------------------------------------------------------
+
+use std::time::Instant;
+
+use indicatif::{ProgressBar, ProgressStyle};
+use owo_colors::OwoColorize as _;
+
+/// Build the progress message matching the Python output style:
+/// `[████████░░░░░░░░░░] done/discovered (pct%)  scan:status  tika:N  0.123s/file  idx:N  empty:N  fail:N  MM:SS`
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn format_progress_line(snap: &aum_core::ingest::IngestSnapshot, start: Instant) -> String {
+    let files_done = snap.extracted;
+    let discovered = snap.discovered;
+
+    let mut parts = Vec::new();
+
+    // Progress bar
+    if discovered > 0 {
+        let pct = (files_done as f64 / discovered as f64 * 100.0).min(100.0);
+        let filled = (20.0 * pct / 100.0) as usize;
+        let unfilled = 20 - filled;
+        parts.push(format!(
+            "{}{}{}{} {}",
+            "[".dimmed(),
+            "█".repeat(filled).blue(),
+            "░".repeat(unfilled).blue().dimmed(),
+            "]".dimmed(),
+            format_args!("{files_done}/{discovered} ({pct:.0}%)").white(),
+        ));
+    } else {
+        parts.push(format!("{}", format_args!("{files_done} files").white()));
+    }
+
+    // Directory scan status
+    if snap.scan_complete {
+        parts.push(format!("{}", "scan:done".dimmed().green()));
+    } else {
+        parts.push(format!(
+            "{}",
+            format!("scan:{discovered}").dimmed().yellow()
+        ));
+    }
+
+    // In-flight Tika requests
+    parts.push(format!("{}", format!("tika:{}", snap.in_flight).cyan()));
+
+    // Average extraction speed
+    let avg = if snap.extracted > 0 {
+        snap.total_extraction_secs / snap.extracted as f64
+    } else {
+        0.0
+    };
+    parts.push(format!("{}", format!("{avg:.3}s/file").yellow()));
+
+    // Indexed count
+    parts.push(format!("{}", format!("idx:{}", snap.indexed).green()));
+
+    // Skipped (only if > 0)
+    if snap.skipped > 0 {
+        parts.push(format!(
+            "{}",
+            format!("skip:{}", snap.skipped).dimmed().cyan()
+        ));
+    }
+
+    // Empty count (only if > 0)
+    if snap.empty > 0 {
+        parts.push(format!("{}", format!("empty:{}", snap.empty).yellow()));
+    }
+
+    // Failed count (only if > 0)
+    if snap.failed > 0 {
+        parts.push(format!("{}", format!("fail:{}", snap.failed).red().bold()));
+    }
+
+    // Elapsed wall-clock time
+    let elapsed = start.elapsed().as_secs();
+    let m = elapsed / 60;
+    let s = elapsed % 60;
+    parts.push(format!("{}", format!("{m:02}:{s:02}").dimmed()));
+
+    parts.join("  ")
+}
+
+fn apply_snap(pb: &ProgressBar, snap: &aum_core::ingest::IngestSnapshot, start: Instant) {
+    if snap.scan_complete {
+        pb.set_length(snap.discovered);
+    }
+    pb.set_position(snap.extracted);
+    pb.set_message(format_progress_line(snap, start));
+}
+
+fn apply_debug(db: &ProgressBar, snap: &aum_core::ingest::IngestSnapshot) {
+    let paths: Vec<String> = snap
+        .in_flight_paths
+        .iter()
+        .map(|p| format!("{}", p.dimmed().cyan()))
+        .collect();
+    db.set_message(if paths.is_empty() {
+        String::new()
+    } else {
+        paths.join("\n")
+    });
+}
+
 /// Render an ingest progress bar from a watch receiver until the channel closes.
 ///
 /// Returns immediately without displaying anything if stderr is not a TTY.
@@ -98,32 +209,6 @@ pub async fn render_progress(
     use std::io::IsTerminal as _;
     use std::time::Duration;
 
-    use indicatif::{ProgressBar, ProgressStyle};
-
-    fn apply_snap(pb: &ProgressBar, snap: &aum_core::ingest::IngestSnapshot) {
-        if snap.scan_complete {
-            pb.set_length(snap.discovered);
-        }
-        pb.set_position(snap.extracted);
-        pb.set_message(format!(
-            "indexed={} failed={} in_flight={}",
-            snap.indexed, snap.failed, snap.in_flight
-        ));
-    }
-
-    fn apply_debug(db: &ProgressBar, snap: &aum_core::ingest::IngestSnapshot) {
-        let names: Vec<&str> = snap
-            .in_flight_paths
-            .iter()
-            .filter_map(|p| std::path::Path::new(p).file_name()?.to_str())
-            .collect();
-        db.set_message(if names.is_empty() {
-            String::new()
-        } else {
-            format!("in-flight: {}", names.join(", "))
-        });
-    }
-
     // Only render when connected to a terminal; otherwise just drain the channel.
     if !std::io::stderr().is_terminal() {
         while rx.changed().await.is_ok() {}
@@ -131,6 +216,7 @@ pub async fn render_progress(
     }
 
     let mp = crate::progress::get();
+    let start = Instant::now();
 
     let debug_bar: Option<ProgressBar> = if debug {
         let b = mp.add(ProgressBar::new_spinner());
@@ -145,16 +231,13 @@ pub async fn render_progress(
 
     let pb = mp.add(ProgressBar::new(0));
     pb.set_style(
-        ProgressStyle::with_template(
-            "[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} extracted | {msg}",
-        )
-        .unwrap_or_else(|_| ProgressStyle::default_bar()),
+        ProgressStyle::with_template("{msg}").unwrap_or_else(|_| ProgressStyle::default_bar()),
     );
-    pb.enable_steady_tick(Duration::from_millis(100));
+    pb.enable_steady_tick(Duration::from_millis(250));
 
     loop {
         let snap = rx.borrow_and_update().clone();
-        apply_snap(&pb, &snap);
+        apply_snap(&pb, &snap, start);
         if let Some(ref db) = debug_bar {
             apply_debug(db, &snap);
         }
@@ -166,7 +249,7 @@ pub async fn render_progress(
     // Final update: always set length so the bar shows 100% even on early exit.
     let snap = rx.borrow().clone();
     pb.set_length(snap.discovered);
-    apply_snap(&pb, &snap);
+    apply_snap(&pb, &snap, start);
     if let Some(ref db) = debug_bar {
         apply_debug(db, &snap);
         db.finish_and_clear();
