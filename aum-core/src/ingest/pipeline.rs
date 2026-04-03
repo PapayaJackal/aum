@@ -29,6 +29,10 @@ use super::doc_id::file_doc_id;
 use super::error::IngestPipelineError;
 use crate::extraction::RecordErrorFn;
 
+/// Maximum number of batch flushes that can run concurrently. This bounds the
+/// number of completed batches held in memory while waiting for the sink.
+const MAX_PENDING_FLUSHES: usize = 2;
+
 use super::sink::{BatchSink, ExistenceChecker};
 use super::walker::{self, PATH_CHANNEL_CAPACITY};
 use super::worker::{self, InFlightState, WorkerResult};
@@ -44,7 +48,7 @@ pub struct IngestPipeline<E: Extractor + 'static, S: BatchSink> {
     pool: Arc<InstancePool<E>>,
     sink: Arc<S>,
     tracker: JobTracker,
-    index_name: String,
+    index_name: Arc<str>,
     batch_size: u32,
     max_workers: u32,
     /// Optional progress channel.  When set, the pipeline emits an
@@ -53,14 +57,14 @@ pub struct IngestPipeline<E: Extractor + 'static, S: BatchSink> {
     progress_tx: Option<ProgressTx>,
 }
 
-impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
+impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
     /// Create a new pipeline.
     #[must_use]
     pub fn new(
         pool: Arc<InstancePool<E>>,
         sink: Arc<S>,
         tracker: JobTracker,
-        index_name: String,
+        index_name: impl Into<Arc<str>>,
         batch_size: u32,
         max_workers: u32,
     ) -> Self {
@@ -68,7 +72,7 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
             pool,
             sink,
             tracker,
-            index_name,
+            index_name: index_name.into(),
             batch_size,
             max_workers,
             progress_tx: None,
@@ -157,7 +161,7 @@ enum PipelineMode {
     /// Walk the source directory for all files.
     Walk,
     /// Walk but filter out already-indexed files.
-    Resume(Arc<dyn ExistenceChecker>, String),
+    Resume(Arc<dyn ExistenceChecker>, Arc<str>),
     /// Process explicit file paths.
     Retry(Vec<PathBuf>),
 }
@@ -189,7 +193,7 @@ impl PipelineCounters {
 // Core pipeline implementation
 // ---------------------------------------------------------------------------
 
-impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
+impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
     /// The shared core of `run`, `run_resume`, and `run_retry`.
     async fn run_pipeline(
         &self,
@@ -310,7 +314,8 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
                     let (walk_tx, walk_rx) = mpsc::channel(PATH_CHANNEL_CAPACITY);
 
                     let filter_handle = tokio::spawn(async move {
-                        walker::filter_existing(walk_rx, path_tx, checker, index, skip_count).await;
+                        walker::filter_existing(walk_rx, path_tx, checker, &index, skip_count)
+                            .await;
                     });
 
                     if let Err(e) = walker::walk_directory(&source_dir, &walk_tx, &discovered).await
@@ -333,8 +338,11 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
 // Batcher loop
 // ---------------------------------------------------------------------------
 
-impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
+impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
     /// Receive extraction results, batch them, and flush to the sink.
+    ///
+    /// Flushes run in a background task so the batcher can keep pulling
+    /// extraction results while the previous batch is being indexed.
     async fn batcher_loop(
         &self,
         job_id: &str,
@@ -342,27 +350,47 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
         mut result_rx: mpsc::Receiver<WorkerResult>,
         counters: &PipelineCounters,
     ) -> Result<JobProgress, IngestPipelineError> {
-        let mut progress = JobProgress::default();
-        let mut batch: Vec<(String, crate::models::Document)> =
-            Vec::with_capacity(self.batch_size as usize);
-        let mut last_total_update: u64 = 0;
-        let mut last_total_sync = Instant::now();
-        let mut extraction_secs_total: f64 = 0.0;
-
         let record_error = super::make_record_error_fn(self.tracker.clone(), job_id.to_owned());
+        let flush_sem = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_FLUSHES));
+        let (flush_tx, flush_rx) = mpsc::channel::<FlushResult>(MAX_PENDING_FLUSHES);
+
+        let mut st = BatcherState {
+            progress: JobProgress::default(),
+            batch: Vec::with_capacity(self.batch_size as usize),
+            flush_rx,
+            in_flight: 0,
+            extraction_secs_total: 0.0,
+            last_total_update: 0,
+            last_total_sync: Instant::now(),
+        };
 
         while let Some(result) = result_rx.recv().await {
+            // Only emit snapshots on file-level boundaries, not every document.
+            let mut file_boundary = false;
+
             match result {
-                WorkerResult::Success(ef) => {
-                    extraction_secs_total += ef.extraction_secs;
-                    Self::handle_extracted_file(ef, source_dir, &mut batch, &mut progress);
+                WorkerResult::Document(ed) => {
+                    let doc_id = file_doc_id(&ed.canonical_path, ed.doc_index);
+                    let mut doc = ed.doc;
+                    set_display_path(&mut doc, source_dir);
+                    st.batch.push((doc_id, doc));
+                }
+                WorkerResult::FileComplete(fc) => {
+                    st.progress.extracted += 1;
+                    st.progress.empty += saturating_i64(fc.empty_count);
+                    st.extraction_secs_total += fc.extraction_secs;
+                    if fc.empty_count > 0 {
+                        metrics::counter!("aum_ingest_docs_total", "status" => "empty")
+                            .increment(fc.empty_count);
+                    }
+                    file_boundary = true;
                 }
                 WorkerResult::Failure {
                     file_path,
                     error_type,
                     message,
                 } => {
-                    progress.failed += 1;
+                    st.progress.failed += 1;
                     metrics::counter!("aum_ingest_docs_total", "status" => "failed").increment(1);
                     if let Err(e) = self
                         .tracker
@@ -371,44 +399,95 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
                     {
                         warn!(error = %e, "failed to record extraction error");
                     }
+                    file_boundary = true;
                 }
             }
 
-            if batch.len() >= self.batch_size as usize {
-                self.flush_batch(job_id, &mut batch, &mut progress, &record_error)
-                    .await?;
+            if st.batch.len() >= self.batch_size as usize {
+                Self::drain_completed(&mut st);
+
+                let Ok(permit) = Arc::clone(&flush_sem).acquire_owned().await else {
+                    unreachable!("flush semaphore closed unexpectedly");
+                };
+                let full_batch =
+                    std::mem::replace(&mut st.batch, Vec::with_capacity(self.batch_size as usize));
+                self.spawn_flush(job_id, full_batch, &record_error, flush_tx.clone(), permit);
+                st.in_flight += 1;
+                #[allow(clippy::cast_precision_loss)]
+                metrics::gauge!("aum_ingest_pending_flushes").set(st.in_flight as f64);
             }
 
-            // Periodically sync the walker's discovered count to the tracker.
-            // Rate-limited to avoid excessive DB writes during fast ingests.
-            let current_discovered = counters.discovered.load(Ordering::Relaxed);
-            if current_discovered != last_total_update
-                && last_total_sync.elapsed() >= std::time::Duration::from_secs(1)
-            {
-                last_total_update = current_discovered;
-                last_total_sync = Instant::now();
-                progress.skipped = saturating_i64(counters.skip_count.load(Ordering::Relaxed));
-                let _ = self
-                    .tracker
-                    .update_total_files(job_id, saturating_i64(current_discovered))
-                    .await;
+            if file_boundary {
+                self.sync_discovered(job_id, counters, &mut st).await;
+                emit_snapshot(
+                    self.progress_tx.as_ref(),
+                    &st.progress,
+                    counters,
+                    st.extraction_secs_total,
+                );
             }
-
-            emit_snapshot(
-                self.progress_tx.as_ref(),
-                &progress,
-                counters,
-                extraction_secs_total,
-            );
         }
 
-        if !batch.is_empty() {
-            self.flush_batch(job_id, &mut batch, &mut progress, &record_error)
-                .await?;
+        self.finalize_batches(job_id, &record_error, counters, &mut st)
+            .await;
+        Ok(st.progress)
+    }
+
+    /// Periodically sync the walker's discovered count to the tracker.
+    ///
+    /// Rate-limited to one write per second to avoid excessive DB writes
+    /// during fast ingests.
+    async fn sync_discovered(
+        &self,
+        job_id: &str,
+        counters: &PipelineCounters,
+        st: &mut BatcherState,
+    ) {
+        let current_discovered = counters.discovered.load(Ordering::Relaxed);
+        if current_discovered != st.last_total_update
+            && st.last_total_sync.elapsed() >= std::time::Duration::from_secs(1)
+        {
+            st.last_total_update = current_discovered;
+            st.last_total_sync = Instant::now();
+            st.progress.skipped = saturating_i64(counters.skip_count.load(Ordering::Relaxed));
+            let _ = self
+                .tracker
+                .update_total_files(job_id, saturating_i64(current_discovered))
+                .await;
+        }
+    }
+
+    /// Wait for in-flight background flushes, flush any remaining documents
+    /// inline, and persist final progress.
+    async fn finalize_batches(
+        &self,
+        job_id: &str,
+        record_error: &RecordErrorFn,
+        counters: &PipelineCounters,
+        st: &mut BatcherState,
+    ) {
+        for _ in 0..st.in_flight {
+            match st.flush_rx.recv().await {
+                Some(r) => Self::fold_flush_result(&r, &mut st.progress),
+                None => break,
+            }
+        }
+        metrics::gauge!("aum_ingest_pending_flushes").set(0.0);
+
+        if !st.batch.is_empty() {
+            let result = Self::flush_batch_inner(
+                &self.sink,
+                &self.index_name,
+                job_id,
+                &st.batch,
+                record_error,
+            )
+            .await;
+            Self::fold_flush_result(&result, &mut st.progress);
         }
 
-        progress.skipped = saturating_i64(counters.skip_count.load(Ordering::Relaxed));
-        let _ = self.tracker.update_progress(job_id, &progress).await;
+        st.progress.skipped = saturating_i64(counters.skip_count.load(Ordering::Relaxed));
+        let _ = self.tracker.update_progress(job_id, &st.progress).await;
         let _ = self
             .tracker
             .update_total_files(
@@ -417,55 +496,53 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
             )
             .await;
 
-        // Final snapshot so the renderer always sees the completed state.
         emit_snapshot(
             self.progress_tx.as_ref(),
-            &progress,
+            &st.progress,
             counters,
-            extraction_secs_total,
+            st.extraction_secs_total,
         );
-
-        Ok(progress)
     }
 
-    /// Process a successful extraction: generate doc IDs, set display paths,
-    /// and append to the batch buffer.
-    fn handle_extracted_file(
-        ef: worker::ExtractedFile,
-        source_dir: &Path,
-        batch: &mut Vec<(String, crate::models::Document)>,
-        progress: &mut JobProgress,
-    ) {
-        let canonical = &ef.canonical_path;
-
-        progress.extracted += 1;
-        progress.empty += saturating_i64(ef.empty_count);
-
-        if ef.empty_count > 0 {
-            metrics::counter!("aum_ingest_docs_total", "status" => "empty")
-                .increment(ef.empty_count);
-        }
-
-        for (i, mut doc) in ef.documents.into_iter().enumerate() {
-            let doc_id = file_doc_id(canonical, i as u64);
-            set_display_path(&mut doc, source_dir);
-            batch.push((doc_id, doc));
-        }
-    }
-
-    /// Flush the batch to the sink and update progress.
-    async fn flush_batch(
+    /// Spawn a background flush task.
+    ///
+    /// The task acquires ownership of the semaphore `permit`; when the flush
+    /// completes, the permit is dropped, unblocking the next flush.  The
+    /// result is sent through `result_tx` so the batcher can fold it into
+    /// progress.
+    fn spawn_flush(
         &self,
         job_id: &str,
-        batch: &mut Vec<(String, crate::models::Document)>,
-        progress: &mut JobProgress,
+        batch: Vec<(String, crate::models::Document)>,
         record_error: &RecordErrorFn,
-    ) -> Result<(), IngestPipelineError> {
+        result_tx: mpsc::Sender<FlushResult>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) {
+        let sink = Arc::clone(&self.sink);
+        let index_name = Arc::clone(&self.index_name);
+        let job_id = job_id.to_owned();
+        let record_error = Arc::clone(record_error);
+
+        tokio::spawn(async move {
+            let result =
+                Self::flush_batch_inner(&sink, &index_name, &job_id, &batch, &record_error).await;
+            let _ = result_tx.send(result).await;
+            drop(permit);
+        });
+    }
+
+    /// Flush a single batch and record metrics.
+    async fn flush_batch_inner(
+        sink: &S,
+        index_name: &str,
+        job_id: &str,
+        batch: &[(String, crate::models::Document)],
+        record_error: &RecordErrorFn,
+    ) -> FlushResult {
         let start = Instant::now();
 
-        let (indexed, failed) = self
-            .sink
-            .flush_batch(&self.index_name, job_id, batch, record_error)
+        let (indexed, failed) = sink
+            .flush_batch(index_name, job_id, batch, record_error)
             .await;
 
         let elapsed = start.elapsed().as_secs_f64();
@@ -475,10 +552,6 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
             metrics::counter!("aum_ingest_docs_total", "status" => "failed").increment(failed);
         }
 
-        progress.processed += saturating_i64(indexed);
-        progress.failed += saturating_i64(failed);
-        batch.clear();
-
         debug!(
             job_id,
             indexed,
@@ -487,10 +560,39 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
             "batch flushed"
         );
 
-        let _ = self.tracker.update_progress(job_id, progress).await;
-
-        Ok(())
+        FlushResult { indexed, failed }
     }
+
+    fn drain_completed(st: &mut BatcherState) {
+        while let Ok(result) = st.flush_rx.try_recv() {
+            Self::fold_flush_result(&result, &mut st.progress);
+            st.in_flight -= 1;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        metrics::gauge!("aum_ingest_pending_flushes").set(st.in_flight as f64);
+    }
+
+    fn fold_flush_result(result: &FlushResult, progress: &mut JobProgress) {
+        progress.processed += saturating_i64(result.indexed);
+        progress.failed += saturating_i64(result.failed);
+    }
+}
+
+/// Result of a single background flush.
+struct FlushResult {
+    indexed: u64,
+    failed: u64,
+}
+
+/// Mutable state for the batcher loop, grouped to reduce parameter counts.
+struct BatcherState {
+    progress: JobProgress,
+    batch: Vec<(String, crate::models::Document)>,
+    flush_rx: mpsc::Receiver<FlushResult>,
+    in_flight: usize,
+    extraction_secs_total: f64,
+    last_total_update: u64,
+    last_total_sync: Instant,
 }
 
 // ---------------------------------------------------------------------------

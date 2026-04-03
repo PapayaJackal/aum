@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use futures::TryStreamExt as _;
+use futures::StreamExt as _;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -62,26 +62,33 @@ impl InFlightState {
 // Worker result types
 // ---------------------------------------------------------------------------
 
-/// Successful extraction of a single file.
-pub struct ExtractedFile {
-    /// The file that was extracted.
-    pub file_path: PathBuf,
-    /// Canonicalised version of `file_path`, computed once per extraction to
-    /// avoid repeated `canonicalize()` syscalls downstream.
+/// A single document extracted from a file, sent individually through the
+/// result channel so that large archives don't buffer all documents in memory.
+pub struct ExtractedDocument {
+    /// Canonicalised source path, computed once per extraction to avoid
+    /// repeated `canonicalize()` syscalls downstream.
     pub canonical_path: PathBuf,
-    /// Documents produced (container + embedded parts).
-    pub documents: Vec<Document>,
+    /// Zero-based index of this document within the source file.
+    pub doc_index: u64,
+    /// The extracted document.
+    pub doc: Document,
+}
+
+/// Signals that all documents from a file have been streamed.
+pub struct FileComplete {
     /// Wall-clock time spent extracting, in seconds.
     pub extraction_secs: f64,
     /// Number of documents with empty content.
     pub empty_count: u64,
 }
 
-/// Result of processing a single file in a worker.
+/// Messages sent from worker tasks to the batcher.
 pub enum WorkerResult {
-    /// Extraction succeeded (possibly with sub-errors recorded separately).
-    Success(ExtractedFile),
-    /// Extraction failed fatally for this file.
+    /// A single extracted document.
+    Document(ExtractedDocument),
+    /// All documents for a file have been sent.
+    FileComplete(FileComplete),
+    /// Extraction failed fatally (no documents produced).
     Failure {
         /// The file that failed.
         file_path: PathBuf,
@@ -138,16 +145,12 @@ pub fn spawn_dispatcher<E: Extractor + 'static>(
                 let path_str = path.display().to_string();
                 in_flight.add_path(&path_str);
 
-                let result = extract_one(&pool, &path, &record_error).await;
+                stream_file(&pool, &path, &record_error, &result_tx).await;
 
                 in_flight.remove_path(&path_str);
 
                 // Release the permit so the dispatcher can spawn the next task.
                 drop(permit);
-
-                if result_tx.send(result).await.is_err() {
-                    debug!(path = %path_str, "result channel closed, dropping result");
-                }
             });
         }
 
@@ -160,75 +163,96 @@ pub fn spawn_dispatcher<E: Extractor + 'static>(
     })
 }
 
-/// Extract a single file via the pool, returning a [`WorkerResult`].
-async fn extract_one<E: Extractor + 'static>(
+/// Stream documents from a single file extraction through the result channel.
+///
+/// Each document is sent individually so that large archives (ZIP, PST, etc.)
+/// don't buffer all embedded documents in memory at once.  A [`FileComplete`]
+/// message is sent after all documents, or a [`Failure`](WorkerResult::Failure)
+/// if the very first stream item is an error.
+async fn stream_file<E: Extractor + 'static>(
     pool: &InstancePool<E>,
     file_path: &Path,
     record_error: &crate::extraction::RecordErrorFn,
-) -> WorkerResult {
+    result_tx: &mpsc::Sender<WorkerResult>,
+) {
     let start = Instant::now();
+    let canonical = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.to_owned());
 
     let stream = pool.run_stream(|extractor| extractor.extract(file_path, Some(record_error)));
+    tokio::pin!(stream);
 
-    let result = collect_extraction_stream(stream, file_path).await;
-    let elapsed = start.elapsed().as_secs_f64();
-    metrics::histogram!("aum_ingest_extraction_seconds").record(elapsed);
+    let mut doc_index: u64 = 0;
+    let mut empty_count: u64 = 0;
 
-    match result {
-        Ok((documents, empty_count)) => {
-            let canonical = file_path
-                .canonicalize()
-                .unwrap_or_else(|_| file_path.to_owned());
-            WorkerResult::Success(ExtractedFile {
-                file_path: file_path.to_owned(),
-                canonical_path: canonical,
-                documents,
-                extraction_secs: elapsed,
-                empty_count,
-            })
-        }
-        Err((error_type, message)) => {
-            warn!(path = %file_path.display(), error_type, elapsed_secs = elapsed, "extraction failed");
-            WorkerResult::Failure {
-                file_path: file_path.to_owned(),
-                error_type,
-                message,
+    let mut fatal_error: Option<crate::extraction::ExtractionError> = None;
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(doc) => {
+                if doc.content.is_empty() {
+                    empty_count += 1;
+                }
+                let msg = WorkerResult::Document(ExtractedDocument {
+                    canonical_path: canonical.clone(),
+                    doc_index,
+                    doc,
+                });
+                doc_index += 1;
+                if result_tx.send(msg).await.is_err() {
+                    debug!(path = %file_path.display(), "result channel closed");
+                    return;
+                }
+            }
+            Err(e) => {
+                fatal_error = Some(e);
+                break;
             }
         }
     }
-}
 
-/// Collect all documents from an extraction stream, counting empty ones.
-///
-/// Returns `Ok((docs, empty_count))` on success, or `Err((error_type, message))`
-/// if the stream yields a fatal error.
-async fn collect_extraction_stream(
-    stream: futures::stream::BoxStream<'_, Result<Document, crate::extraction::ExtractionError>>,
-    file_path: &Path,
-) -> Result<(Vec<Document>, u64), (String, String)> {
-    let mut documents = Vec::new();
-    let mut empty_count: u64 = 0;
+    let elapsed = start.elapsed().as_secs_f64();
+    metrics::histogram!("aum_ingest_extraction_seconds").record(elapsed);
 
-    let result: Result<(), _> = stream
-        .try_for_each(|doc| {
-            if doc.content.is_empty() {
-                empty_count += 1;
-            }
-            documents.push(doc);
-            async { Ok(()) }
-        })
-        .await;
-
-    match result {
-        Ok(()) => Ok((documents, empty_count)),
-        Err(e) => {
+    if let Some(e) = fatal_error {
+        if doc_index == 0 {
+            // No documents produced — report as a fatal failure.
+            warn!(
+                path = %file_path.display(),
+                error_type = e.error_type(),
+                elapsed_secs = elapsed,
+                "extraction failed"
+            );
+            let _ = result_tx
+                .send(WorkerResult::Failure {
+                    file_path: file_path.to_owned(),
+                    error_type: e.error_type().to_owned(),
+                    message: e.to_string(),
+                })
+                .await;
+        } else {
+            // Partial success — docs already sent, just log and stop.
             debug!(
                 path = %file_path.display(),
+                docs_sent = doc_index,
                 error = %e,
-                "extraction stream error"
+                "extraction stream error after partial success"
             );
-            Err((e.error_type().to_owned(), e.to_string()))
+            let _ = result_tx
+                .send(WorkerResult::FileComplete(FileComplete {
+                    extraction_secs: elapsed,
+                    empty_count,
+                }))
+                .await;
         }
+    } else {
+        let _ = result_tx
+            .send(WorkerResult::FileComplete(FileComplete {
+                extraction_secs: elapsed,
+                empty_count,
+            }))
+            .await;
     }
 }
 
@@ -250,6 +274,14 @@ mod tests {
     use crate::extraction::{ExtractionError, Extractor, RecordErrorFn};
     use crate::ingest::test_helpers::{make_pool, make_tracker};
     use crate::models::{Document, JobType};
+
+    fn variant_name(r: &WorkerResult) -> &'static str {
+        match r {
+            WorkerResult::Document(_) => "Document",
+            WorkerResult::FileComplete(_) => "FileComplete",
+            WorkerResult::Failure { .. } => "Failure",
+        }
+    }
 
     // -- Mock extractor that returns a fixed document -----------------------
 
@@ -357,17 +389,29 @@ mod tests {
         path_tx.send(PathBuf::from("/tmp/test.txt")).await?;
         drop(path_tx);
 
+        // First message: the document itself.
         let result = result_rx
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("no result"))?;
         match result {
-            WorkerResult::Success(ef) => {
-                assert_eq!(ef.documents.len(), 1);
-                assert_eq!(ef.documents[0].content, "hello");
-                assert_eq!(ef.empty_count, 0);
+            WorkerResult::Document(ed) => {
+                assert_eq!(ed.doc.content, "hello");
+                assert_eq!(ed.doc_index, 0);
             }
-            WorkerResult::Failure { .. } => panic!("expected success"),
+            other => panic!("expected Document, got {}", variant_name(&other)),
+        }
+
+        // Second message: file-complete stats.
+        let result = result_rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no file-complete"))?;
+        match result {
+            WorkerResult::FileComplete(fc) => {
+                assert_eq!(fc.empty_count, 0);
+            }
+            other => panic!("expected FileComplete, got {}", variant_name(&other)),
         }
 
         handle.await?;
@@ -404,7 +448,7 @@ mod tests {
                 assert!(!error_type.is_empty());
                 assert!(!message.is_empty());
             }
-            WorkerResult::Success(_) => panic!("expected failure"),
+            other => panic!("expected Failure, got {}", variant_name(&other)),
         }
 
         handle.await?;
@@ -430,15 +474,23 @@ mod tests {
         path_tx.send(PathBuf::from("/tmp/empty.txt")).await?;
         drop(path_tx);
 
+        // Document message (empty content).
         let result = result_rx
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("no result"))?;
+        assert!(matches!(result, WorkerResult::Document(_)));
+
+        // FileComplete with empty_count = 1.
+        let result = result_rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no file-complete"))?;
         match result {
-            WorkerResult::Success(ef) => {
-                assert_eq!(ef.empty_count, 1);
+            WorkerResult::FileComplete(fc) => {
+                assert_eq!(fc.empty_count, 1);
             }
-            WorkerResult::Failure { .. } => panic!("expected success"),
+            other => panic!("expected FileComplete, got {}", variant_name(&other)),
         }
 
         handle.await?;
@@ -482,14 +534,16 @@ mod tests {
         }
         drop(path_tx);
 
-        let mut results = 0;
-        while result_rx.recv().await.is_some() {
-            results += 1;
+        let mut file_completes = 0usize;
+        while let Some(msg) = result_rx.recv().await {
+            if matches!(msg, WorkerResult::FileComplete(_)) {
+                file_completes += 1;
+            }
         }
 
         handle.await?;
 
-        assert_eq!(results, num_files);
+        assert_eq!(file_completes, num_files);
         assert!(
             peak.load(Ordering::SeqCst) <= max_workers,
             "peak concurrency {} exceeded max_workers {}",

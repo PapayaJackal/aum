@@ -151,7 +151,7 @@ pub async fn filter_existing(
     mut rx: mpsc::Receiver<PathBuf>,
     tx: mpsc::Sender<PathBuf>,
     checker: Arc<dyn ExistenceChecker>,
-    index: String,
+    index: &str,
     skip_count: Arc<AtomicU64>,
 ) {
     let mut batch: Vec<PathBuf> = Vec::with_capacity(FILTER_BATCH_SIZE);
@@ -161,7 +161,7 @@ pub async fn filter_existing(
         let done = fill_filter_batch(&mut rx, &mut batch).await;
 
         if !batch.is_empty() {
-            flush_filter_batch(&batch, &tx, &checker, &index, &skip_count).await;
+            flush_filter_batch(&batch, &tx, &checker, index, &skip_count).await;
             batch.clear();
         }
 
@@ -339,14 +339,7 @@ mod tests {
         }
         drop(walk_tx);
 
-        filter_existing(
-            walk_rx,
-            filter_tx,
-            checker,
-            "test".to_owned(),
-            skip_count.clone(),
-        )
-        .await;
+        filter_existing(walk_rx, filter_tx, checker, "test", skip_count.clone()).await;
 
         let mut received = Vec::new();
         while let Some(p) = filter_rx.recv().await {
@@ -371,7 +364,7 @@ mod tests {
             walk_rx,
             filter_tx,
             Arc::new(NoOpChecker),
-            "test".to_owned(),
+            "test",
             skip_count.clone(),
         )
         .await;
