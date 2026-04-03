@@ -65,6 +65,11 @@ fn parse_dt(s: &str) -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
+/// Column list shared by all `jobs` SELECT queries.
+const JOB_COLUMNS: &str = "job_id, source_dir, index_name, status, total_files, \
+                           extracted, processed, failed, empty, skipped, \
+                           created_at, finished_at, job_type";
+
 // ---------------------------------------------------------------------------
 // Row struct (sqlx mapping)
 // ---------------------------------------------------------------------------
@@ -163,12 +168,9 @@ impl JobRepository for SqlxJobRepository {
         .await
         .map_err(DbError::from)?;
 
-        let job = sqlx::query_as::<sqlx::Any, JobRow>(
-            "SELECT job_id, source_dir, index_name, status, total_files, \
-             extracted, processed, failed, empty, skipped, \
-             created_at, finished_at, job_type \
-             FROM jobs WHERE job_id = $1",
-        )
+        let job = sqlx::query_as::<sqlx::Any, JobRow>(&format!(
+            "SELECT {JOB_COLUMNS} FROM jobs WHERE job_id = $1"
+        ))
         .bind(job_id)
         .fetch_one(&mut *tx)
         .await
@@ -231,12 +233,9 @@ impl JobRepository for SqlxJobRepository {
 
     async fn get_job(&self, job_id: &str) -> DbResult<Option<IngestJob>> {
         let start = Instant::now();
-        let result = sqlx::query_as::<sqlx::Any, JobRow>(
-            "SELECT job_id, source_dir, index_name, status, total_files, \
-             extracted, processed, failed, empty, skipped, \
-             created_at, finished_at, job_type \
-             FROM jobs WHERE job_id = $1",
-        )
+        let result = sqlx::query_as::<sqlx::Any, JobRow>(&format!(
+            "SELECT {JOB_COLUMNS} FROM jobs WHERE job_id = $1"
+        ))
         .bind(job_id)
         .fetch_optional(&self.pool)
         .await
@@ -247,6 +246,9 @@ impl JobRepository for SqlxJobRepository {
     }
 
     fn list_jobs(&self, status: Option<JobStatus>) -> BoxStream<'_, DbResult<IngestJob>> {
+        // NOTE: These queries inline the column list because `sqlx::query_as`
+        // borrows the query string and the returned stream outlives any local
+        // `format!` allocation.  Keep them in sync with `JOB_COLUMNS`.
         let span = info_span!("db.query", operation = "list_jobs", table = "jobs");
         match status {
             Some(s) => Box::pin(
@@ -283,27 +285,21 @@ impl JobRepository for SqlxJobRepository {
         let start = Instant::now();
         let result = if let Some(dir) = source_dir {
             let dir_str = dir.to_string_lossy();
-            sqlx::query_as::<sqlx::Any, JobRow>(
-                "SELECT job_id, source_dir, index_name, status, total_files, \
-                 extracted, processed, failed, empty, skipped, \
-                 created_at, finished_at, job_type \
-                 FROM jobs \
+            sqlx::query_as::<sqlx::Any, JobRow>(&format!(
+                "SELECT {JOB_COLUMNS} FROM jobs \
                  WHERE status = 'interrupted' AND job_type = $1 AND source_dir = $2 \
-                 ORDER BY created_at DESC LIMIT 1",
-            )
+                 ORDER BY created_at DESC LIMIT 1"
+            ))
             .bind(job_type_str(job_type))
             .bind(dir_str.as_ref())
             .fetch_optional(&self.pool)
             .await
         } else {
-            sqlx::query_as::<sqlx::Any, JobRow>(
-                "SELECT job_id, source_dir, index_name, status, total_files, \
-                 extracted, processed, failed, empty, skipped, \
-                 created_at, finished_at, job_type \
-                 FROM jobs \
+            sqlx::query_as::<sqlx::Any, JobRow>(&format!(
+                "SELECT {JOB_COLUMNS} FROM jobs \
                  WHERE status = 'interrupted' AND job_type = $1 \
-                 ORDER BY created_at DESC LIMIT 1",
-            )
+                 ORDER BY created_at DESC LIMIT 1"
+            ))
             .bind(job_type_str(job_type))
             .fetch_optional(&self.pool)
             .await
