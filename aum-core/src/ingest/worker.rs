@@ -1,15 +1,17 @@
 //! Extraction worker tasks for the ingest pipeline.
 //!
-//! Workers pull file paths from a shared channel, acquire a pool slot, and
-//! call [`Extractor::extract`] to produce documents.  Results are sent to the
-//! batcher via a separate channel.
+//! A single dispatcher task reads file paths from the shared channel and
+//! spawns an extraction task for each one.  A [`tokio::sync::Semaphore`]
+//! caps the number of concurrent extractions at `max_workers`, so a new
+//! extraction begins as soon as *any* in-flight extraction finishes — no
+//! batch boundaries, no head-of-line blocking.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use futures::TryStreamExt as _;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::db::JobTracker;
@@ -94,78 +96,68 @@ pub enum WorkerResult {
 // Worker spawning
 // ---------------------------------------------------------------------------
 
-/// Spawn `max_workers` extraction worker tasks.
+/// Spawn a dispatcher task that keeps up to `max_workers` extractions
+/// running concurrently.
 ///
-/// Each worker loops: receive a path from the shared `rx`, acquire a pool
-/// slot via [`InstancePool::run_stream`], collect documents, and send the
-/// result to `result_tx`.
+/// The dispatcher reads paths from `rx` and, for each one, acquires a
+/// semaphore permit before spawning a new extraction task.  Because the
+/// semaphore is acquired *before* spawning, at most `max_workers` tasks
+/// run at any time, and a new extraction begins as soon as any permit is
+/// released — no batch boundaries.
 ///
-/// Workers exit when `rx` is closed (all paths consumed) or `result_tx` is
-/// dropped (pipeline shutting down).  `in_flight` is incremented while a
-/// worker is actively extracting a file and decremented immediately after.
-pub fn spawn_workers<E: Extractor + 'static>(
-    pool: &Arc<InstancePool<E>>,
-    rx: &Arc<Mutex<mpsc::Receiver<PathBuf>>>,
-    result_tx: &mpsc::Sender<WorkerResult>,
-    tracker: &JobTracker,
+/// The returned [`JoinHandle`] resolves once every path has been consumed
+/// and every spawned extraction task has completed.
+pub fn spawn_dispatcher<E: Extractor + 'static>(
+    pool: Arc<InstancePool<E>>,
+    mut rx: mpsc::Receiver<PathBuf>,
+    result_tx: mpsc::Sender<WorkerResult>,
+    tracker: JobTracker,
     job_id: &str,
     max_workers: u32,
-    in_flight: &InFlightState,
-) -> Vec<tokio::task::JoinHandle<()>> {
-    (0..max_workers)
-        .map(|worker_id| {
-            let pool = pool.clone();
-            let rx = rx.clone();
+    in_flight: InFlightState,
+) -> tokio::task::JoinHandle<()> {
+    let job_id = job_id.to_owned();
+
+    tokio::spawn(async move {
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_workers as usize));
+        let record_error = super::make_record_error_fn(tracker.clone(), job_id.clone());
+
+        while let Some(path) = rx.recv().await {
+            // Wait until a slot is free — this is where backpressure happens.
+            // The semaphore is never closed, so `acquire_owned` always succeeds.
+            let Ok(permit) = Arc::clone(&semaphore).acquire_owned().await else {
+                break;
+            };
+
+            let pool = Arc::clone(&pool);
             let result_tx = result_tx.clone();
-            let tracker = tracker.clone();
-            let job_id = job_id.to_owned();
             let in_flight = in_flight.clone();
+            let record_error = Arc::clone(&record_error);
 
             tokio::spawn(async move {
-                worker_loop(
-                    worker_id, &pool, &rx, &result_tx, &tracker, &job_id, &in_flight,
-                )
-                .await;
-            })
-        })
-        .collect()
-}
+                let path_str = path.display().to_string();
+                in_flight.add_path(&path_str);
 
-/// Main loop for a single worker task.
-async fn worker_loop<E: Extractor + 'static>(
-    worker_id: u32,
-    pool: &InstancePool<E>,
-    rx: &Mutex<mpsc::Receiver<PathBuf>>,
-    result_tx: &mpsc::Sender<WorkerResult>,
-    tracker: &JobTracker,
-    job_id: &str,
-    in_flight: &InFlightState,
-) {
-    let record_error = super::make_record_error_fn(tracker.clone(), job_id.to_owned());
+                let result = extract_one(&pool, &path, &record_error).await;
 
-    loop {
-        let path = {
-            let mut guard = rx.lock().await;
-            match guard.recv().await {
-                Some(p) => p,
-                None => break, // channel closed — all paths consumed
-            }
-        };
+                in_flight.remove_path(&path_str);
 
-        let path_str = path.display().to_string();
-        in_flight.add_path(&path_str);
+                // Release the permit so the dispatcher can spawn the next task.
+                drop(permit);
 
-        let result = extract_one(pool, &path, &record_error).await;
-
-        in_flight.remove_path(&path_str);
-
-        if result_tx.send(result).await.is_err() {
-            debug!(worker_id, "result channel closed, worker exiting");
-            break;
+                if result_tx.send(result).await.is_err() {
+                    debug!(path = %path_str, "result channel closed, dropping result");
+                }
+            });
         }
-    }
 
-    debug!(worker_id, "worker exiting");
+        // All paths consumed — wait for remaining in-flight extractions.
+        // Acquiring all permits guarantees every spawned task has finished
+        // and released its permit.
+        let _ = semaphore.acquire_many(max_workers).await;
+
+        debug!("dispatcher exiting, all extractions complete");
+    })
 }
 
 /// Extract a single file via the pool, returning a [`WorkerResult`].
@@ -249,9 +241,10 @@ mod tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use futures::stream::BoxStream;
-    use tokio::sync::{Mutex, mpsc};
+    use tokio::sync::mpsc;
 
     use super::*;
     use crate::extraction::{ExtractionError, Extractor, RecordErrorFn};
@@ -305,8 +298,48 @@ mod tests {
         }
     }
 
+    // -- Slow extractor for concurrency testing ----------------------------
+
+    struct SlowExtractor {
+        /// Tracks the peak number of concurrent extractions.
+        peak_concurrent: Arc<AtomicU32>,
+        /// Current number of concurrent extractions.
+        current: Arc<AtomicU32>,
+    }
+
+    impl Extractor for SlowExtractor {
+        fn extract<'a>(
+            &'a self,
+            file_path: &'a Path,
+            _record_error: Option<&'a RecordErrorFn>,
+        ) -> BoxStream<'a, Result<Document, ExtractionError>> {
+            let peak = Arc::clone(&self.peak_concurrent);
+            let current = Arc::clone(&self.current);
+            let path = file_path.to_owned();
+
+            Box::pin(async_stream::try_stream! {
+                let val = current.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(val, Ordering::SeqCst);
+
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+                current.fetch_sub(1, Ordering::SeqCst);
+
+                yield Document {
+                    source_path: path,
+                    content: "slow".to_owned(),
+                    metadata: HashMap::new(),
+                };
+            })
+        }
+
+        fn supports(&self, _mime_type: &str) -> bool {
+            true
+        }
+    }
+
     #[tokio::test]
-    async fn worker_extracts_successfully() -> anyhow::Result<()> {
+    async fn dispatcher_extracts_successfully() -> anyhow::Result<()> {
         let pool = make_pool(MockExtractor {
             content: "hello".to_owned(),
         })?;
@@ -317,10 +350,9 @@ mod tests {
 
         let (path_tx, path_rx) = mpsc::channel(10);
         let (result_tx, mut result_rx) = mpsc::channel(10);
-        let path_rx = Arc::new(Mutex::new(path_rx));
 
         let in_flight = InFlightState::default();
-        let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj1", 2, &in_flight);
+        let handle = spawn_dispatcher(pool, path_rx, result_tx, tracker, "wj1", 2, in_flight);
 
         path_tx.send(PathBuf::from("/tmp/test.txt")).await?;
         drop(path_tx);
@@ -338,15 +370,12 @@ mod tests {
             WorkerResult::Failure { .. } => panic!("expected success"),
         }
 
-        // Workers should exit after channel closes.
-        for h in handles {
-            h.await?;
-        }
+        handle.await?;
         Ok(())
     }
 
     #[tokio::test]
-    async fn worker_reports_failure() -> anyhow::Result<()> {
+    async fn dispatcher_reports_failure() -> anyhow::Result<()> {
         let pool = make_pool(FailingExtractor)?;
         let tracker = make_tracker().await?;
         tracker
@@ -355,10 +384,9 @@ mod tests {
 
         let (path_tx, path_rx) = mpsc::channel(10);
         let (result_tx, mut result_rx) = mpsc::channel(10);
-        let path_rx = Arc::new(Mutex::new(path_rx));
 
         let in_flight = InFlightState::default();
-        let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj2", 1, &in_flight);
+        let handle = spawn_dispatcher(pool, path_rx, result_tx, tracker, "wj2", 1, in_flight);
 
         path_tx.send(PathBuf::from("/tmp/bad.pdf")).await?;
         drop(path_tx);
@@ -379,16 +407,14 @@ mod tests {
             WorkerResult::Success(_) => panic!("expected failure"),
         }
 
-        for h in handles {
-            h.await?;
-        }
+        handle.await?;
         Ok(())
     }
 
     #[tokio::test]
-    async fn worker_counts_empty_documents() -> anyhow::Result<()> {
+    async fn dispatcher_counts_empty_documents() -> anyhow::Result<()> {
         let pool = make_pool(MockExtractor {
-            content: String::new(), // empty content
+            content: String::new(),
         })?;
         let tracker = make_tracker().await?;
         tracker
@@ -397,10 +423,9 @@ mod tests {
 
         let (path_tx, path_rx) = mpsc::channel(10);
         let (result_tx, mut result_rx) = mpsc::channel(10);
-        let path_rx = Arc::new(Mutex::new(path_rx));
 
         let in_flight = InFlightState::default();
-        let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj3", 1, &in_flight);
+        let handle = spawn_dispatcher(pool, path_rx, result_tx, tracker, "wj3", 1, in_flight);
 
         path_tx.send(PathBuf::from("/tmp/empty.txt")).await?;
         drop(path_tx);
@@ -416,9 +441,66 @@ mod tests {
             WorkerResult::Failure { .. } => panic!("expected success"),
         }
 
-        for h in handles {
-            h.await?;
+        handle.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatcher_respects_concurrency_limit() -> anyhow::Result<()> {
+        let peak = Arc::new(AtomicU32::new(0));
+        let current = Arc::new(AtomicU32::new(0));
+        let pool = make_pool(SlowExtractor {
+            peak_concurrent: Arc::clone(&peak),
+            current: Arc::clone(&current),
+        })?;
+        let tracker = make_tracker().await?;
+        tracker
+            .create_job("wj4", Path::new("/src"), "aum", JobType::Ingest, 0)
+            .await?;
+
+        let max_workers = 3u32;
+        let num_files = 10;
+
+        let (path_tx, path_rx) = mpsc::channel(num_files);
+        let (result_tx, mut result_rx) = mpsc::channel(num_files);
+
+        let in_flight = InFlightState::default();
+        let handle = spawn_dispatcher(
+            pool,
+            path_rx,
+            result_tx,
+            tracker,
+            "wj4",
+            max_workers,
+            in_flight,
+        );
+
+        for i in 0..num_files {
+            path_tx
+                .send(PathBuf::from(format!("/tmp/file{i}.txt")))
+                .await?;
         }
+        drop(path_tx);
+
+        let mut results = 0;
+        while result_rx.recv().await.is_some() {
+            results += 1;
+        }
+
+        handle.await?;
+
+        assert_eq!(results, num_files);
+        assert!(
+            peak.load(Ordering::SeqCst) <= max_workers,
+            "peak concurrency {} exceeded max_workers {}",
+            peak.load(Ordering::SeqCst),
+            max_workers,
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) >= 2,
+            "expected at least 2 concurrent extractions, got {}",
+            peak.load(Ordering::SeqCst),
+        );
         Ok(())
     }
 }

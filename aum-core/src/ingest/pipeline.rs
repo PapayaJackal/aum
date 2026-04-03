@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::db::JobTracker;
@@ -259,28 +259,22 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
 
         let source_handle = Self::spawn_source_task(mode, source_dir, path_tx, &counters);
 
-        let path_rx = Arc::new(Mutex::new(path_rx));
-        let worker_handles = worker::spawn_workers(
-            &self.pool,
-            &path_rx,
-            &result_tx,
-            &self.tracker,
+        let dispatcher_handle = worker::spawn_dispatcher(
+            Arc::clone(&self.pool),
+            path_rx,
+            result_tx,
+            self.tracker.clone(),
             job_id,
             self.max_workers,
-            &counters.in_flight,
+            counters.in_flight.clone(),
         );
-
-        // Drop our copy so `result_rx` closes when all workers finish.
-        drop(result_tx);
 
         let progress = self
             .batcher_loop(job_id, source_dir, result_rx, &counters)
             .await?;
 
-        for handle in worker_handles {
-            if let Err(e) = handle.await {
-                warn!(error = %e, "worker task panicked");
-            }
+        if let Err(e) = dispatcher_handle.await {
+            warn!(error = %e, "dispatcher task panicked");
         }
         if let Err(e) = source_handle.await {
             warn!(error = %e, "source task panicked");
@@ -559,6 +553,7 @@ mod tests {
     use std::sync::Arc;
 
     use futures::stream::BoxStream;
+    use tokio::sync::Mutex;
 
     use super::*;
     use crate::extraction::{AUM_DISPLAY_PATH_KEY, ExtractionError, Extractor, RecordErrorFn};
