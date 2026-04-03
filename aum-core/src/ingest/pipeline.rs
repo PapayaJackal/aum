@@ -341,6 +341,7 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
         let mut batch: Vec<(String, crate::models::Document)> =
             Vec::with_capacity(self.batch_size as usize);
         let mut last_total_update: u64 = 0;
+        let mut last_total_sync = Instant::now();
         let mut extraction_secs_total: f64 = 0.0;
 
         let record_error = super::make_record_error_fn(self.tracker.clone(), job_id.to_owned());
@@ -374,9 +375,13 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
             }
 
             // Periodically sync the walker's discovered count to the tracker.
+            // Rate-limited to avoid excessive DB writes during fast ingests.
             let current_discovered = counters.discovered.load(Ordering::Relaxed);
-            if current_discovered != last_total_update {
+            if current_discovered != last_total_update
+                && last_total_sync.elapsed() >= std::time::Duration::from_secs(1)
+            {
                 last_total_update = current_discovered;
+                last_total_sync = Instant::now();
                 progress.skipped = saturating_i64(counters.skip_count.load(Ordering::Relaxed));
                 let _ = self
                     .tracker
