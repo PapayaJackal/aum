@@ -39,6 +39,7 @@ rand = { workspace = true }
 phf = { workspace = true }
 meilisearch-sdk = { workspace = true, optional = true }
 elasticsearch = { workspace = true, optional = true }
+fs2 = { workspace = true }
 tempfile = "3"
 
 [dev-dependencies]

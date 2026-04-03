@@ -12,7 +12,7 @@ use aum_core::ingest::{IngestPipeline, IngestSnapshot};
 use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
-    CommonIngestArgs, build_tika_pool, render_progress, resolve_ocr_override,
+    CommonIngestArgs, acquire_ingest_lock, build_tika_pool, render_progress, resolve_ocr_override,
 };
 use crate::output::print_job_summary;
 
@@ -36,6 +36,12 @@ pub async fn run(
     backend: Arc<AumBackend>,
     tracker: JobTracker,
 ) -> anyhow::Result<()> {
+    let source_dir = args
+        .directory
+        .canonicalize()
+        .with_context(|| format!("cannot resolve '{}'", args.directory.display()))?;
+    let _lock = acquire_ingest_lock(config, &source_dir)?;
+
     let batch_size = args.common.batch_size.unwrap_or(config.ingest.batch_size);
     let max_workers = args.common.workers.unwrap_or(config.ingest.max_workers);
 

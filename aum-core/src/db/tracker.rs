@@ -12,6 +12,7 @@ use futures::stream::BoxStream;
 use sqlx::AnyPool;
 use tracing::{info, instrument, warn};
 
+use crate::ingest::lock;
 use crate::models::{
     EmbeddingModelInfo, ErrorFilter, IngestError, IngestJob, JobProgress, JobStatus, JobType,
 };
@@ -92,6 +93,43 @@ impl JobTracker {
     pub async fn complete_job(&self, job_id: &str, status: JobStatus) -> DbResult<()> {
         info!(job_id, ?status, "job finished");
         self.jobs.complete_job(job_id, status).await
+    }
+
+    /// Check all non-terminal jobs and mark those whose flock is no longer
+    /// held as interrupted.
+    ///
+    /// Should be called once at startup so that jobs left in-progress by a
+    /// crashed process are correctly shown as interrupted, while jobs that are
+    /// genuinely still running (held by another process) are left alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError` if the database queries fail.
+    #[instrument(skip(self))]
+    pub async fn mark_stale_jobs_interrupted(&self, lock_dir: &Path) -> DbResult<u64> {
+        let mut count = 0u64;
+
+        for status in [JobStatus::Running, JobStatus::Pending] {
+            let active: Vec<IngestJob> = self.jobs.list_jobs(Some(status)).try_collect().await?;
+            for job in active {
+                if !lock::is_locked(lock_dir, &job.source_dir) {
+                    info!(
+                        job_id = %job.job_id,
+                        source_dir = %job.source_dir.display(),
+                        "marking stale job as interrupted (lock not held)"
+                    );
+                    self.jobs
+                        .complete_job(&job.job_id, JobStatus::Interrupted)
+                        .await?;
+                    count += 1;
+                }
+            }
+        }
+
+        if count > 0 {
+            info!(count, "marked stale jobs as interrupted");
+        }
+        Ok(count)
     }
 
     /// Fetch a single job by ID, optionally including its errors.

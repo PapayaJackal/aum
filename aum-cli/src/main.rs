@@ -54,7 +54,14 @@ async fn main() {
 
 async fn create_tracker(config: &aum_core::config::AumConfig) -> aum_core::db::JobTracker {
     let pool = aum_core::bootstrap_db(config).await;
-    aum_core::db::JobTracker::new(pool)
+    let tracker = aum_core::db::JobTracker::new(pool);
+    if let Err(e) = tracker
+        .mark_stale_jobs_interrupted(&config.lock_dir())
+        .await
+    {
+        tracing::warn!(error = %e, "failed to mark stale jobs as interrupted");
+    }
+    tracker
 }
 
 async fn run() -> anyhow::Result<()> {

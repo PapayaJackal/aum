@@ -1,11 +1,13 @@
 //! Shared helpers for ingest, resume, and retry commands.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use aum_core::config::AumConfig;
 use aum_core::extraction::TikaExtractor;
 use aum_core::extraction::tika::TikaExtractorConfig;
+use aum_core::ingest::IngestLock;
 use aum_core::pool::{InstanceDesc, InstancePool, InstancePoolConfig};
 use clap::Args;
 
@@ -41,6 +43,21 @@ pub fn resolve_ocr_override(ocr: bool, no_ocr: bool) -> Option<bool> {
     } else {
         None
     }
+}
+
+/// Acquire an exclusive ingest lock for `source_dir`, or return an error
+/// explaining that another process already holds it.
+pub fn acquire_ingest_lock(config: &AumConfig, source_dir: &Path) -> anyhow::Result<IngestLock> {
+    IngestLock::try_acquire(&config.lock_dir(), source_dir)
+        .context("failed to acquire ingest lock")?
+        .with_context(|| {
+            let pid = IngestLock::read_holder_pid(&config.lock_dir(), source_dir);
+            format!(
+                "another ingest job is already running on '{}' (holder pid: {})",
+                source_dir.display(),
+                pid.map_or("unknown".to_owned(), |p| p.to_string()),
+            )
+        })
 }
 
 /// Build a Tika extractor pool from config, with optional overrides.

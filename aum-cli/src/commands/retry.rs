@@ -13,7 +13,7 @@ use aum_core::models::ErrorFilter;
 use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
-    CommonIngestArgs, build_tika_pool, render_progress, resolve_ocr_override,
+    CommonIngestArgs, acquire_ingest_lock, build_tika_pool, render_progress, resolve_ocr_override,
 };
 use crate::output::print_job_summary;
 
@@ -39,6 +39,8 @@ pub async fn run(
         .await
         .context("failed to query job")?
         .with_context(|| format!("job '{}' not found", args.job_id))?;
+
+    let _lock = acquire_ingest_lock(config, &job.source_dir)?;
 
     // Collect all failed paths.
     let failed_paths: Vec<_> = tracker

@@ -501,6 +501,12 @@ impl AumConfig {
         self.data.dir.join("extracted")
     }
 
+    /// Returns the path to the directory where ingest lock files are stored.
+    #[must_use]
+    pub fn lock_dir(&self) -> PathBuf {
+        self.data.dir.join("locks")
+    }
+
     /// Returns the effective Tika instances to use.
     ///
     /// If `tika.instances` is empty, falls back to a single instance using

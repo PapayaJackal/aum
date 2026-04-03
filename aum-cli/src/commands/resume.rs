@@ -12,7 +12,7 @@ use aum_core::models::{JobStatus, JobType};
 use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
-    CommonIngestArgs, build_tika_pool, render_progress, resolve_ocr_override,
+    CommonIngestArgs, acquire_ingest_lock, build_tika_pool, render_progress, resolve_ocr_override,
 };
 use crate::output::print_job_summary;
 
@@ -60,6 +60,8 @@ pub async fn run(
             );
         }
     }
+
+    let _lock = acquire_ingest_lock(config, &job.source_dir)?;
 
     let index_name = args.index.as_deref().unwrap_or(&job.index_name);
     let batch_size = args.common.batch_size.unwrap_or(config.ingest.batch_size);

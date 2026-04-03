@@ -14,6 +14,7 @@
 pub mod display_path;
 pub mod doc_id;
 pub mod error;
+pub mod lock;
 pub mod pipeline;
 pub mod progress;
 pub mod sink;
@@ -22,6 +23,7 @@ pub mod worker;
 
 pub use doc_id::file_doc_id;
 pub use error::IngestPipelineError;
+pub use lock::IngestLock;
 pub use pipeline::IngestPipeline;
 pub use progress::{IngestSnapshot, ProgressTx};
 pub use sink::{BatchSink, ExistenceChecker, NoOpChecker, NullSink};
