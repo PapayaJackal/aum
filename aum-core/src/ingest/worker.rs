@@ -6,7 +6,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use futures::TryStreamExt as _;
@@ -17,6 +16,45 @@ use crate::db::JobTracker;
 use crate::extraction::Extractor;
 use crate::models::Document;
 use crate::pool::InstancePool;
+
+// ---------------------------------------------------------------------------
+// In-flight tracking
+// ---------------------------------------------------------------------------
+
+/// Shared state tracking which files are currently in extraction.
+///
+/// Cheap to clone: the inner `Arc` bumps a reference count.
+#[derive(Clone, Default)]
+pub struct InFlightState {
+    paths: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl InFlightState {
+    /// Register `path` as in-flight.
+    pub fn add_path(&self, path: &str) {
+        self.paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.to_owned());
+    }
+
+    /// Deregister `path` (removes the first matching entry).
+    pub fn remove_path(&self, path: &str) {
+        self.paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|p| p != path);
+    }
+
+    /// Returns `(count, paths_clone)` in a single lock acquisition.
+    pub fn snapshot(&self) -> (u64, Vec<String>) {
+        let guard = self
+            .paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (guard.len() as u64, guard.clone())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Worker result types
@@ -72,7 +110,7 @@ pub fn spawn_workers<E: Extractor + 'static>(
     tracker: &JobTracker,
     job_id: &str,
     max_workers: u32,
-    in_flight: &Arc<AtomicU64>,
+    in_flight: &InFlightState,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     (0..max_workers)
         .map(|worker_id| {
@@ -101,7 +139,7 @@ async fn worker_loop<E: Extractor + 'static>(
     result_tx: &mpsc::Sender<WorkerResult>,
     tracker: &JobTracker,
     job_id: &str,
-    in_flight: &AtomicU64,
+    in_flight: &InFlightState,
 ) {
     let record_error = super::make_record_error_fn(tracker.clone(), job_id.to_owned());
 
@@ -114,9 +152,12 @@ async fn worker_loop<E: Extractor + 'static>(
             }
         };
 
-        in_flight.fetch_add(1, Ordering::Relaxed);
+        let path_str = path.display().to_string();
+        in_flight.add_path(&path_str);
+
         let result = extract_one(pool, &path, &record_error).await;
-        in_flight.fetch_sub(1, Ordering::Relaxed);
+
+        in_flight.remove_path(&path_str);
 
         if result_tx.send(result).await.is_err() {
             debug!(worker_id, "result channel closed, worker exiting");
@@ -208,7 +249,6 @@ mod tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
 
     use futures::stream::BoxStream;
     use tokio::sync::{Mutex, mpsc};
@@ -279,7 +319,7 @@ mod tests {
         let (result_tx, mut result_rx) = mpsc::channel(10);
         let path_rx = Arc::new(Mutex::new(path_rx));
 
-        let in_flight = Arc::new(AtomicU64::new(0));
+        let in_flight = InFlightState::default();
         let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj1", 2, &in_flight);
 
         path_tx.send(PathBuf::from("/tmp/test.txt")).await?;
@@ -317,7 +357,7 @@ mod tests {
         let (result_tx, mut result_rx) = mpsc::channel(10);
         let path_rx = Arc::new(Mutex::new(path_rx));
 
-        let in_flight = Arc::new(AtomicU64::new(0));
+        let in_flight = InFlightState::default();
         let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj2", 1, &in_flight);
 
         path_tx.send(PathBuf::from("/tmp/bad.pdf")).await?;
@@ -359,7 +399,7 @@ mod tests {
         let (result_tx, mut result_rx) = mpsc::channel(10);
         let path_rx = Arc::new(Mutex::new(path_rx));
 
-        let in_flight = Arc::new(AtomicU64::new(0));
+        let in_flight = InFlightState::default();
         let handles = spawn_workers(&pool, &path_rx, &result_tx, &tracker, "wj3", 1, &in_flight);
 
         path_tx.send(PathBuf::from("/tmp/empty.txt")).await?;

@@ -4,7 +4,9 @@
 
 use std::fmt;
 
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
+use tracing_subscriber::{
+    EnvFilter, fmt::writer::BoxMakeWriter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
+};
 use tracing_timing::{Builder as TimingBuilder, Histogram, TimingLayer};
 
 use crate::config::{LogFormat, LogLevel, LoggingConfig};
@@ -39,6 +41,10 @@ fn build_filter(level: LogLevel) -> EnvFilter {
 
 /// Initialise the global tracing subscriber from `config`.
 ///
+/// `writer` controls where formatted log lines are sent.  Pass
+/// `BoxMakeWriter::new(std::io::stderr)` for the default behaviour, or wrap
+/// an indicatif `MultiProgress` writer to keep progress bars intact.
+///
 /// Must be called once, early in `main()`, before any `tracing` macros are used.
 /// The log level can be overridden at runtime with the `RUST_LOG` environment variable.
 ///
@@ -50,16 +56,21 @@ fn build_filter(level: LogLevel) -> EnvFilter {
 /// # Errors
 ///
 /// Returns [`LoggingInitError`] if a global subscriber has already been set.
-pub fn init(config: &LoggingConfig) -> Result<(), LoggingInitError> {
+pub fn init(config: &LoggingConfig, writer: BoxMakeWriter) -> Result<(), LoggingInitError> {
     let filter = build_filter(config.level);
 
     let fmt_layer: Box<dyn tracing_subscriber::Layer<_> + Send + Sync> = match config.format {
-        LogFormat::Console => Box::new(tracing_subscriber::fmt::layer().compact()),
+        LogFormat::Console => Box::new(
+            tracing_subscriber::fmt::layer()
+                .compact()
+                .with_writer(writer),
+        ),
         LogFormat::Json => Box::new(
             tracing_subscriber::fmt::layer()
                 .json()
                 .with_current_span(true)
-                .with_span_list(false),
+                .with_span_list(false)
+                .with_writer(writer),
         ),
     };
 
@@ -101,12 +112,16 @@ mod tests {
         );
     }
 
+    fn stderr_writer() -> tracing_subscriber::fmt::writer::BoxMakeWriter {
+        tracing_subscriber::fmt::writer::BoxMakeWriter::new(std::io::stderr)
+    }
+
     #[test]
     fn init_errors_on_second_call() {
         let config = LoggingConfig::default();
         // First call may succeed or fail (another test may have already set the global subscriber).
-        let _ = init(&config);
+        let _ = init(&config, stderr_writer());
         // Second call must always fail because the subscriber is now set.
-        assert!(init(&config).is_err());
+        assert!(init(&config, stderr_writer()).is_err());
     }
 }

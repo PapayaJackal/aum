@@ -9,6 +9,7 @@ mod backend;
 mod commands;
 mod ingest_common;
 mod output;
+mod progress;
 
 use backend::create_backend;
 
@@ -59,7 +60,22 @@ async fn create_tracker(config: &aum_core::config::AumConfig) -> aum_core::db::J
 async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let config = aum_core::bootstrap();
+    // Load config and initialise the global MultiProgress before starting the
+    // tracing subscriber, so all log output is routed through indicatif and
+    // never corrupts an active progress bar.
+    let config = aum_core::config::load_config().unwrap_or_else(|e| {
+        eprintln!("error: failed to load config: {e}");
+        std::process::exit(1);
+    });
+    progress::init();
+    if let Err(e) = aum_core::log::init(
+        &config.log,
+        tracing_subscriber::fmt::writer::BoxMakeWriter::new(progress::IndicatifWriter),
+    ) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+    aum_core::metrics::record_build_info();
     debug!("configuration loaded");
 
     match cli.command {

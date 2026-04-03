@@ -43,7 +43,10 @@ pub fn bootstrap() -> config::AumConfig {
         eprintln!("error: failed to load config: {e}");
         std::process::exit(1);
     });
-    if let Err(e) = log::init(&config.log) {
+    if let Err(e) = log::init(
+        &config.log,
+        tracing_subscriber::fmt::writer::BoxMakeWriter::new(std::io::stderr),
+    ) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }

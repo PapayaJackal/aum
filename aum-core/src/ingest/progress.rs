@@ -33,6 +33,8 @@ pub struct IngestSnapshot {
     pub scan_complete: bool,
     /// Number of extraction workers currently holding a file.
     pub in_flight: u64,
+    /// Display paths of files currently being extracted (one per active worker).
+    pub in_flight_paths: Vec<String>,
     /// Files whose extraction succeeded (including those with empty content).
     pub extracted: u64,
     /// Documents flushed to the sink (cumulative indexed count).

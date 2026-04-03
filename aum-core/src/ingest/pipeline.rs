@@ -31,7 +31,7 @@ use crate::extraction::RecordErrorFn;
 
 use super::sink::{BatchSink, ExistenceChecker};
 use super::walker::{self, PATH_CHANNEL_CAPACITY};
-use super::worker::{self, WorkerResult};
+use super::worker::{self, InFlightState, WorkerResult};
 
 use crate::names::generate_name;
 
@@ -170,8 +170,8 @@ struct PipelineCounters {
     skip_count: Arc<AtomicU64>,
     /// Set to `true` (with `Release` ordering) once the walker finishes.
     scan_done: Arc<AtomicBool>,
-    /// Number of workers currently executing an extraction.
-    in_flight: Arc<AtomicU64>,
+    /// Tracks the count and display paths of files currently being extracted.
+    in_flight: InFlightState,
 }
 
 impl PipelineCounters {
@@ -180,7 +180,7 @@ impl PipelineCounters {
             discovered: Arc::new(AtomicU64::new(0)),
             skip_count: Arc::new(AtomicU64::new(0)),
             scan_done: Arc::new(AtomicBool::new(false)),
-            in_flight: Arc::new(AtomicU64::new(0)),
+            in_flight: InFlightState::default(),
         }
     }
 }
@@ -509,10 +509,12 @@ fn emit_snapshot(
     total_extraction_secs: f64,
 ) {
     let Some(tx) = tx else { return };
+    let (in_flight, in_flight_paths) = counters.in_flight.snapshot();
     tx.send_replace(IngestSnapshot {
         discovered: counters.discovered.load(Ordering::Relaxed),
         scan_complete: counters.scan_done.load(Ordering::Acquire),
-        in_flight: counters.in_flight.load(Ordering::Relaxed),
+        in_flight,
+        in_flight_paths,
         extracted: progress.extracted.cast_unsigned(),
         indexed: progress.processed.cast_unsigned(),
         skipped: progress.skipped.cast_unsigned(),

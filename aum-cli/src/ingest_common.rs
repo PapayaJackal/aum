@@ -7,6 +7,30 @@ use aum_core::config::AumConfig;
 use aum_core::extraction::TikaExtractor;
 use aum_core::extraction::tika::TikaExtractorConfig;
 use aum_core::pool::{InstanceDesc, InstancePool, InstancePoolConfig};
+use clap::Args;
+
+/// Common CLI arguments shared by all three ingest commands (ingest / resume / retry).
+#[derive(Args)]
+pub struct CommonIngestArgs {
+    /// Number of documents per indexing batch (overrides config).
+    #[arg(long)]
+    pub batch_size: Option<u32>,
+    /// Number of extraction workers (overrides config).
+    #[arg(long)]
+    pub workers: Option<u32>,
+    /// Enable OCR for image-based documents.
+    #[arg(long = "ocr", overrides_with = "no_ocr")]
+    pub ocr: bool,
+    /// Disable OCR for image-based documents.
+    #[arg(long = "no-ocr", overrides_with = "ocr")]
+    pub no_ocr: bool,
+    /// Tesseract language code for OCR (e.g. "eng", "eng+fra").
+    #[arg(long)]
+    pub ocr_language: Option<String>,
+    /// Show in-flight file names above the progress bar.
+    #[arg(long)]
+    pub debug: bool,
+}
 
 /// Resolve OCR flag from a pair of mutually-exclusive `--ocr` / `--no-ocr` args.
 pub fn resolve_ocr_override(ocr: bool, no_ocr: bool) -> Option<bool> {
@@ -62,9 +86,18 @@ pub fn build_tika_pool(
 }
 
 /// Render an ingest progress bar from a watch receiver until the channel closes.
+///
+/// Returns immediately without displaying anything if stderr is not a TTY.
+///
+/// When `debug` is `true`, a second bar above the progress bar shows the file
+/// names currently being extracted by each worker.
 pub async fn render_progress(
     mut rx: tokio::sync::watch::Receiver<aum_core::ingest::IngestSnapshot>,
+    debug: bool,
 ) {
+    use std::io::IsTerminal as _;
+    use std::time::Duration;
+
     use indicatif::{ProgressBar, ProgressStyle};
 
     fn apply_snap(pb: &ProgressBar, snap: &aum_core::ingest::IngestSnapshot) {
@@ -78,15 +111,53 @@ pub async fn render_progress(
         ));
     }
 
-    let pb = ProgressBar::new(0);
-    let style = ProgressStyle::with_template(
-        "[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} extracted | {msg}",
-    )
-    .unwrap_or_else(|_| ProgressStyle::default_bar());
-    pb.set_style(style);
+    fn apply_debug(db: &ProgressBar, snap: &aum_core::ingest::IngestSnapshot) {
+        let names: Vec<&str> = snap
+            .in_flight_paths
+            .iter()
+            .filter_map(|p| std::path::Path::new(p).file_name()?.to_str())
+            .collect();
+        db.set_message(if names.is_empty() {
+            String::new()
+        } else {
+            format!("in-flight: {}", names.join(", "))
+        });
+    }
+
+    // Only render when connected to a terminal; otherwise just drain the channel.
+    if !std::io::stderr().is_terminal() {
+        while rx.changed().await.is_ok() {}
+        return;
+    }
+
+    let mp = crate::progress::get();
+
+    let debug_bar: Option<ProgressBar> = if debug {
+        let b = mp.add(ProgressBar::new_spinner());
+        b.set_style(
+            ProgressStyle::with_template("{msg}")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+        );
+        Some(b)
+    } else {
+        None
+    };
+
+    let pb = mp.add(ProgressBar::new(0));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} extracted | {msg}",
+        )
+        .unwrap_or_else(|_| ProgressStyle::default_bar()),
+    );
+    pb.enable_steady_tick(Duration::from_millis(100));
 
     loop {
-        apply_snap(&pb, &rx.borrow_and_update().clone());
+        let snap = rx.borrow_and_update().clone();
+        apply_snap(&pb, &snap);
+        if let Some(ref db) = debug_bar {
+            apply_debug(db, &snap);
+        }
         if rx.changed().await.is_err() {
             break;
         }
@@ -96,5 +167,10 @@ pub async fn render_progress(
     let snap = rx.borrow().clone();
     pb.set_length(snap.discovered);
     apply_snap(&pb, &snap);
+    if let Some(ref db) = debug_bar {
+        apply_debug(db, &snap);
+        db.finish_and_clear();
+    }
     pb.finish();
+    mp.remove(&pb);
 }
