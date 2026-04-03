@@ -503,13 +503,15 @@ impl AumConfig {
 
     /// Returns the effective Tika instances to use.
     ///
-    /// If `tika.instances` is empty, falls back to a single instance using `tika.server_url`.
+    /// If `tika.instances` is empty, falls back to a single instance using
+    /// `tika.server_url` with concurrency set to `ingest.max_workers` so that
+    /// one slow extraction cannot starve the entire worker pool.
     #[must_use]
     pub fn effective_tika_instances(&self) -> Vec<TikaInstance> {
         if self.tika.instances.is_empty() {
             vec![TikaInstance {
                 url: self.tika.server_url.clone(),
-                ..Default::default()
+                concurrency: self.ingest.max_workers,
             }]
         } else {
             self.tika.instances.clone()
@@ -807,7 +809,7 @@ mod tests {
         let instances = cfg.effective_tika_instances();
         assert_eq!(instances.len(), 1);
         assert_eq!(instances[0].url, "http://custom-tika:9998");
-        assert_eq!(instances[0].concurrency, 1);
+        assert_eq!(instances[0].concurrency, cfg.ingest.max_workers);
     }
 
     #[test]

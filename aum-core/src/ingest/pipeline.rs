@@ -239,6 +239,17 @@ impl<E: Extractor + 'static, S: BatchSink> IngestPipeline<E, S> {
         source_dir: &Path,
         mode: PipelineMode,
     ) -> Result<JobProgress, IngestPipelineError> {
+        let total_concurrency = self.pool.total_concurrency();
+        if total_concurrency < self.max_workers {
+            warn!(
+                max_workers = self.max_workers,
+                total_pool_concurrency = total_concurrency,
+                "total Tika pool concurrency is less than max_workers; \
+                 workers will be starved waiting for pool permits — \
+                 increase tika instance concurrency or reduce max_workers",
+            );
+        }
+
         let counters = PipelineCounters::new();
 
         let (path_tx, path_rx) = mpsc::channel(PATH_CHANNEL_CAPACITY);
