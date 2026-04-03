@@ -15,6 +15,7 @@ use tracing::{info, instrument, warn};
 use crate::ingest::lock;
 use crate::models::{
     EmbeddingModelInfo, ErrorFilter, IngestError, IngestJob, JobProgress, JobStatus, JobType,
+    OcrSettings,
 };
 
 use super::error::DbResult;
@@ -58,9 +59,17 @@ impl JobTracker {
         index_name: &str,
         job_type: JobType,
         total_files: i64,
+        ocr_settings: Option<OcrSettings>,
     ) -> DbResult<IngestJob> {
         self.jobs
-            .create_job(job_id, source_dir, index_name, job_type, total_files)
+            .create_job(
+                job_id,
+                source_dir,
+                index_name,
+                job_type,
+                total_files,
+                ocr_settings,
+            )
             .await
     }
 
@@ -301,7 +310,14 @@ mod tests {
     async fn test_create_and_get_job() -> anyhow::Result<()> {
         let t = tracker().await?;
         let job = t
-            .create_job("t_job_1", Path::new("/src"), "aum", JobType::Ingest, 42)
+            .create_job(
+                "t_job_1",
+                Path::new("/src"),
+                "aum",
+                JobType::Ingest,
+                42,
+                None,
+            )
             .await?;
         assert_eq!(job.job_id, "t_job_1");
         assert_eq!(job.total_files, 42);
@@ -317,7 +333,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_total_files() -> anyhow::Result<()> {
         let t = tracker().await?;
-        t.create_job("t_walk", Path::new("/w"), "aum", JobType::Ingest, 0)
+        t.create_job("t_walk", Path::new("/w"), "aum", JobType::Ingest, 0, None)
             .await?;
 
         t.update_total_files("t_walk", 500).await?;
@@ -333,7 +349,7 @@ mod tests {
     #[tokio::test]
     async fn test_progress_and_completion() -> anyhow::Result<()> {
         let t = tracker().await?;
-        t.create_job("t_prog", Path::new("/p"), "aum", JobType::Ingest, 10)
+        t.create_job("t_prog", Path::new("/p"), "aum", JobType::Ingest, 10, None)
             .await?;
 
         t.update_progress(
@@ -363,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn test_record_error_and_list() -> anyhow::Result<()> {
         let t = tracker().await?;
-        t.create_job("t_err", Path::new("/e"), "aum", JobType::Ingest, 0)
+        t.create_job("t_err", Path::new("/e"), "aum", JobType::Ingest, 0, None)
             .await?;
 
         t.record_error("t_err", Path::new("/e/bad.pdf"), "ParseError", "corrupt")
@@ -384,7 +400,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_failed_doc_ids() -> anyhow::Result<()> {
         let t = tracker().await?;
-        t.create_job("t_embed", Path::new("/em"), "aum", JobType::Embed, 0)
+        t.create_job("t_embed", Path::new("/em"), "aum", JobType::Embed, 0, None)
             .await?;
 
         t.record_error("t_embed", Path::new("doc_aaa"), "EmbeddingError", "fail")
@@ -403,9 +419,9 @@ mod tests {
     #[tokio::test]
     async fn test_list_jobs() -> anyhow::Result<()> {
         let t = tracker().await?;
-        t.create_job("t_list_a", Path::new("/a"), "aum", JobType::Ingest, 0)
+        t.create_job("t_list_a", Path::new("/a"), "aum", JobType::Ingest, 0, None)
             .await?;
-        t.create_job("t_list_b", Path::new("/b"), "aum", JobType::Ingest, 0)
+        t.create_job("t_list_b", Path::new("/b"), "aum", JobType::Ingest, 0, None)
             .await?;
         t.complete_job("t_list_a", JobStatus::Completed).await?;
 
@@ -421,8 +437,15 @@ mod tests {
     #[tokio::test]
     async fn test_find_resumable_job() -> anyhow::Result<()> {
         let t = tracker().await?;
-        t.create_job("t_resume", Path::new("/r"), "aum", JobType::Ingest, 10)
-            .await?;
+        t.create_job(
+            "t_resume",
+            Path::new("/r"),
+            "aum",
+            JobType::Ingest,
+            10,
+            None,
+        )
+        .await?;
         t.complete_job("t_resume", JobStatus::Interrupted).await?;
 
         let found = t
@@ -440,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_failed_paths() -> anyhow::Result<()> {
         let t = tracker().await?;
-        t.create_job("t_fp", Path::new("/fp"), "aum", JobType::Ingest, 0)
+        t.create_job("t_fp", Path::new("/fp"), "aum", JobType::Ingest, 0, None)
             .await?;
 
         t.record_error("t_fp", Path::new("/fp/a.pdf"), "ParseError", "bad")
@@ -471,11 +494,25 @@ mod tests {
     #[tokio::test]
     async fn test_clear_index() -> anyhow::Result<()> {
         let t = tracker().await?;
-        t.create_job("t_del_1", Path::new("/d"), "idx_a", JobType::Ingest, 0)
-            .await?;
-        t.create_job("t_del_2", Path::new("/d"), "idx_a", JobType::Ingest, 0)
-            .await?;
-        t.create_job("t_keep", Path::new("/d"), "idx_b", JobType::Ingest, 0)
+        t.create_job(
+            "t_del_1",
+            Path::new("/d"),
+            "idx_a",
+            JobType::Ingest,
+            0,
+            None,
+        )
+        .await?;
+        t.create_job(
+            "t_del_2",
+            Path::new("/d"),
+            "idx_a",
+            JobType::Ingest,
+            0,
+            None,
+        )
+        .await?;
+        t.create_job("t_keep", Path::new("/d"), "idx_b", JobType::Ingest, 0, None)
             .await?;
 
         t.record_error("t_del_1", Path::new("/d/x.pdf"), "ParseError", "err")
@@ -506,6 +543,81 @@ mod tests {
 
         t.clear_embedding_model("my_idx").await?;
         assert!(t.get_embedding_model("my_idx").await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ocr_settings_roundtrip() -> anyhow::Result<()> {
+        let t = tracker().await?;
+
+        // Job with OCR settings stored.
+        let job = t
+            .create_job(
+                "t_ocr",
+                Path::new("/ocr"),
+                "aum",
+                JobType::Ingest,
+                0,
+                Some(OcrSettings {
+                    enabled: true,
+                    language: "eng+fra".to_owned(),
+                }),
+            )
+            .await?;
+        let expected = OcrSettings {
+            enabled: true,
+            language: "eng+fra".to_owned(),
+        };
+        assert_eq!(job.ocr_settings, Some(expected.clone()));
+
+        // Verify round-trip through get_job.
+        let fetched = t
+            .get_job("t_ocr", false)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("expected job"))?;
+        assert_eq!(fetched.ocr_settings, Some(expected));
+
+        // Job with OCR disabled.
+        t.create_job(
+            "t_ocr_off",
+            Path::new("/ocr2"),
+            "aum",
+            JobType::Ingest,
+            0,
+            Some(OcrSettings {
+                enabled: false,
+                language: "eng".to_owned(),
+            }),
+        )
+        .await?;
+        let fetched2 = t
+            .get_job("t_ocr_off", false)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("expected job"))?;
+        assert_eq!(
+            fetched2.ocr_settings,
+            Some(OcrSettings {
+                enabled: false,
+                language: "eng".to_owned()
+            })
+        );
+
+        // Job with no OCR settings (legacy / None).
+        t.create_job(
+            "t_ocr_none",
+            Path::new("/ocr3"),
+            "aum",
+            JobType::Ingest,
+            0,
+            None,
+        )
+        .await?;
+        let fetched3 = t
+            .get_job("t_ocr_none", false)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("expected job"))?;
+        assert_eq!(fetched3.ocr_settings, None);
+
         Ok(())
     }
 }

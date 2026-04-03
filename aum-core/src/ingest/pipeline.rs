@@ -19,7 +19,9 @@ use tracing::{debug, info, warn};
 
 use crate::db::JobTracker;
 use crate::extraction::Extractor;
-use crate::models::{IngestJob, JobProgress, JobStatus, JobType};
+use crate::models::{
+    EMPTY_EXTRACTION_ERROR_TYPE, IngestJob, JobProgress, JobStatus, JobType, OcrSettings,
+};
 use crate::pool::InstancePool;
 
 use super::progress::{IngestSnapshot, ProgressTx};
@@ -55,6 +57,8 @@ pub struct IngestPipeline<E: Extractor + 'static, S: BatchSink> {
     /// [`IngestSnapshot`] after every processed file so callers can render a
     /// live display.
     progress_tx: Option<ProgressTx>,
+    /// OCR settings to persist with the job record for change detection on retry.
+    ocr_settings: Option<OcrSettings>,
 }
 
 impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
@@ -76,7 +80,16 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
             batch_size,
             max_workers,
             progress_tx: None,
+            ocr_settings: None,
         }
+    }
+
+    /// Record the effective OCR settings for this job so that `aum retry` can
+    /// detect when they change and automatically include empty extractions.
+    #[must_use]
+    pub fn with_ocr_settings(mut self, settings: OcrSettings) -> Self {
+        self.ocr_settings = Some(settings);
+        self
     }
 
     /// Attach a progress channel.
@@ -205,7 +218,14 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
 
         let job = self
             .tracker
-            .create_job(job_id, source_dir, &self.index_name, JobType::Ingest, 0)
+            .create_job(
+                job_id,
+                source_dir,
+                &self.index_name,
+                JobType::Ingest,
+                0,
+                self.ocr_settings.clone(),
+            )
             .await?;
 
         let result = self.execute_pipeline(job_id, source_dir, mode).await;
@@ -382,6 +402,21 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
                     if fc.empty_count > 0 {
                         metrics::counter!("aum_ingest_docs_total", "status" => "empty")
                             .increment(fc.empty_count);
+                        // Every document from this file was empty — record it so
+                        // retry can filter or include it based on OCR settings.
+                        if fc.empty_count == fc.total_doc_count
+                            && let Err(e) = self
+                                .tracker
+                                .record_error(
+                                    job_id,
+                                    &fc.file_path,
+                                    EMPTY_EXTRACTION_ERROR_TYPE,
+                                    "all extracted content was empty",
+                                )
+                                .await
+                        {
+                            warn!(error = %e, "failed to record empty extraction");
+                        }
                     }
                     file_boundary = true;
                 }
@@ -654,6 +689,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
+    use futures::TryStreamExt as _;
     use futures::stream::BoxStream;
     use tokio::sync::Mutex;
 
@@ -856,6 +892,35 @@ mod tests {
         }
     }
 
+    /// Produces one empty document followed by one non-empty document per file.
+    struct PartialEmptyExtractor;
+
+    impl Extractor for PartialEmptyExtractor {
+        fn extract<'a>(
+            &'a self,
+            file_path: &'a Path,
+            _record_error: Option<&'a RecordErrorFn>,
+        ) -> BoxStream<'a, Result<Document, ExtractionError>> {
+            let docs = vec![
+                Ok(Document {
+                    source_path: file_path.to_owned(),
+                    content: String::new(),
+                    metadata: HashMap::new(),
+                }),
+                Ok(Document {
+                    source_path: file_path.to_owned(),
+                    content: "non-empty".to_owned(),
+                    metadata: HashMap::new(),
+                }),
+            ];
+            Box::pin(futures::stream::iter(docs))
+        }
+
+        fn supports(&self, _mime_type: &str) -> bool {
+            true
+        }
+    }
+
     // -- Tests --------------------------------------------------------------
 
     #[tokio::test]
@@ -926,6 +991,47 @@ mod tests {
         assert_eq!(job.empty, 1);
         assert_eq!(job.processed, 1); // still indexed, just empty
         assert_eq!(sink.indexed(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_extraction_recorded_in_job_errors() -> anyhow::Result<()> {
+        // A file where ALL documents are empty should be recorded in job_errors
+        // with error_type "EmptyExtraction" so retry can filter it.
+        let dir = make_temp_tree(&["empty.txt"])?;
+        let pool = make_pool(EmptyExtractor)?;
+        let sink = Arc::new(NullSink);
+        let tracker = make_tracker().await?;
+
+        let pipeline = IngestPipeline::new(pool, sink, tracker.clone(), "test".to_owned(), 50, 1);
+
+        let job = pipeline.run(dir.path()).await?;
+
+        let errors: Vec<_> = tracker.list_errors(&job.job_id).try_collect().await?;
+        assert_eq!(errors.len(), 1, "expected one EmptyExtraction error");
+        assert_eq!(errors[0].error_type, "EmptyExtraction");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_empty_extraction_not_recorded_as_error() -> anyhow::Result<()> {
+        // A file where only SOME documents are empty should NOT be recorded as
+        // an EmptyExtraction error — the file produced useful content.
+        let dir = make_temp_tree(&["mixed.txt"])?;
+        let pool = make_pool(PartialEmptyExtractor)?;
+        let sink = Arc::new(NullSink);
+        let tracker = make_tracker().await?;
+
+        let pipeline = IngestPipeline::new(pool, sink, tracker.clone(), "test".to_owned(), 50, 1);
+
+        let job = pipeline.run(dir.path()).await?;
+
+        assert_eq!(job.empty, 1, "one empty document counted");
+        let errors: Vec<_> = tracker.list_errors(&job.job_id).try_collect().await?;
+        assert!(
+            errors.is_empty(),
+            "partial-empty file should not produce an EmptyExtraction error"
+        );
         Ok(())
     }
 

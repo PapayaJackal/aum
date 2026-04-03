@@ -12,6 +12,7 @@ use futures::stream::BoxStream;
 
 use crate::models::{
     EmbeddingModelInfo, ErrorFilter, IngestError, IngestJob, JobProgress, JobStatus, JobType,
+    OcrSettings,
 };
 
 use super::error::DbResult;
@@ -24,6 +25,9 @@ use super::error::DbResult;
 #[async_trait]
 pub trait JobRepository: Send + Sync {
     /// Insert a new job row and return the created record.
+    ///
+    /// `ocr_settings` records the effective OCR configuration used for
+    /// extraction so that `aum retry` can detect when it changes.
     async fn create_job(
         &self,
         job_id: &str,
@@ -31,6 +35,7 @@ pub trait JobRepository: Send + Sync {
         index_name: &str,
         job_type: JobType,
         total_files: i64,
+        ocr_settings: Option<OcrSettings>,
     ) -> DbResult<IngestJob>;
 
     /// Atomically overwrite all progress counters for a job.

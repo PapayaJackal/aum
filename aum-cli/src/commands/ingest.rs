@@ -12,7 +12,8 @@ use aum_core::ingest::{IngestPipeline, IngestSnapshot};
 use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
-    CommonIngestArgs, acquire_ingest_lock, build_tika_pool, render_progress, resolve_ocr_override,
+    CommonIngestArgs, acquire_ingest_lock, build_tika_pool, effective_ocr_settings,
+    render_progress, resolve_ocr_override,
 };
 use crate::output::print_job_summary;
 
@@ -45,13 +46,10 @@ pub async fn run(
     let batch_size = args.common.batch_size.unwrap_or(config.ingest.batch_size);
     let max_workers = args.common.workers.unwrap_or(config.ingest.max_workers);
 
-    let pool = build_tika_pool(
-        config,
-        &args.index,
-        resolve_ocr_override(args.common.ocr, args.common.no_ocr),
-        args.common.ocr_language.clone(),
-    )
-    .context("failed to build Tika pool")?;
+    let ocr_override = resolve_ocr_override(args.common.ocr, args.common.no_ocr);
+    let ocr = effective_ocr_settings(config, ocr_override, args.common.ocr_language.clone());
+
+    let pool = build_tika_pool(config, &args.index, &ocr).context("failed to build Tika pool")?;
 
     let (progress_tx, progress_rx) = tokio::sync::watch::channel(IngestSnapshot::default());
 
@@ -63,6 +61,7 @@ pub async fn run(
         batch_size,
         max_workers,
     )
+    .with_ocr_settings(ocr)
     .with_progress(progress_tx);
 
     let render_handle = tokio::spawn(render_progress(progress_rx, args.common.debug));

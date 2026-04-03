@@ -152,6 +152,28 @@ pub enum JobType {
 }
 
 // ---------------------------------------------------------------------------
+// OcrSettings
+// ---------------------------------------------------------------------------
+
+/// Error type recorded when all extracted content from a file is empty.
+///
+/// Used by `aum retry` to detect empty extractions and decide whether to
+/// include them in the retry set when OCR settings change.
+pub const EMPTY_EXTRACTION_ERROR_TYPE: &str = "EmptyExtraction";
+
+/// OCR configuration captured at job creation time.
+///
+/// Stored alongside each job so that `aum retry` can detect when OCR settings
+/// change and automatically include empty extractions in the retry set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OcrSettings {
+    /// Whether OCR is enabled.
+    pub enabled: bool,
+    /// Tesseract language code (e.g. `"eng"`, `"eng+fra"`).
+    pub language: String,
+}
+
+// ---------------------------------------------------------------------------
 // ErrorFilter
 // ---------------------------------------------------------------------------
 
@@ -310,6 +332,11 @@ pub struct IngestJob {
     /// UTC timestamp when this job finished, if it has finished.
     #[serde(with = "iso8601::option")]
     pub finished_at: Option<DateTime<Utc>>,
+    /// OCR settings recorded when this job was created.
+    ///
+    /// `None` for jobs created before OCR tracking was introduced.
+    #[serde(default)]
+    pub ocr_settings: Option<OcrSettings>,
 }
 
 impl IngestJob {

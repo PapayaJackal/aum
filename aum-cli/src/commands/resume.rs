@@ -12,7 +12,8 @@ use aum_core::models::{JobStatus, JobType};
 use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
-    CommonIngestArgs, acquire_ingest_lock, build_tika_pool, render_progress, resolve_ocr_override,
+    CommonIngestArgs, acquire_ingest_lock, build_tika_pool, effective_ocr_settings,
+    render_progress, resolve_ocr_override,
 };
 use crate::output::print_job_summary;
 
@@ -74,13 +75,10 @@ pub async fn run(
         job.source_dir.display()
     );
 
-    let pool = build_tika_pool(
-        config,
-        index_name,
-        resolve_ocr_override(args.common.ocr, args.common.no_ocr),
-        args.common.ocr_language.clone(),
-    )
-    .context("failed to build Tika pool")?;
+    let ocr_override = resolve_ocr_override(args.common.ocr, args.common.no_ocr);
+    let ocr = effective_ocr_settings(config, ocr_override, args.common.ocr_language.clone());
+
+    let pool = build_tika_pool(config, index_name, &ocr).context("failed to build Tika pool")?;
 
     let checker: Arc<dyn ExistenceChecker> = Arc::clone(&backend) as Arc<dyn ExistenceChecker>;
 
@@ -94,6 +92,7 @@ pub async fn run(
         batch_size,
         max_workers,
     )
+    .with_ocr_settings(ocr)
     .with_progress(progress_tx);
 
     let render_handle = tokio::spawn(render_progress(progress_rx, args.common.debug));

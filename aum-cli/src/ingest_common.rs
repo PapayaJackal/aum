@@ -8,6 +8,7 @@ use aum_core::config::AumConfig;
 use aum_core::extraction::TikaExtractor;
 use aum_core::extraction::tika::TikaExtractorConfig;
 use aum_core::ingest::IngestLock;
+use aum_core::models::OcrSettings;
 use aum_core::pool::{InstanceDesc, InstancePool, InstancePoolConfig};
 use clap::Args;
 
@@ -45,6 +46,21 @@ pub fn resolve_ocr_override(ocr: bool, no_ocr: bool) -> Option<bool> {
     }
 }
 
+/// Return the effective OCR settings after applying CLI overrides to config defaults.
+///
+/// Use this when you need both values (e.g. to store them in the job record or
+/// compare them against a previous job).
+pub fn effective_ocr_settings(
+    config: &AumConfig,
+    ocr_override: Option<bool>,
+    lang_override: Option<String>,
+) -> OcrSettings {
+    OcrSettings {
+        enabled: ocr_override.unwrap_or(config.tika.ocr_enabled),
+        language: lang_override.unwrap_or_else(|| config.tika.ocr_language.clone()),
+    }
+}
+
 /// Acquire an exclusive ingest lock for `source_dir`, or return an error
 /// explaining that another process already holds it.
 pub fn acquire_ingest_lock(config: &AumConfig, source_dir: &Path) -> anyhow::Result<IngestLock> {
@@ -60,7 +76,7 @@ pub fn acquire_ingest_lock(config: &AumConfig, source_dir: &Path) -> anyhow::Res
         })
 }
 
-/// Build a Tika extractor pool from config, with optional overrides.
+/// Build a Tika extractor pool from config.
 ///
 /// # Errors
 ///
@@ -68,11 +84,8 @@ pub fn acquire_ingest_lock(config: &AumConfig, source_dir: &Path) -> anyhow::Res
 pub fn build_tika_pool(
     config: &AumConfig,
     index_name: &str,
-    ocr_override: Option<bool>,
-    lang_override: Option<String>,
+    ocr: &OcrSettings,
 ) -> anyhow::Result<Arc<InstancePool<TikaExtractor>>> {
-    let ocr_enabled = ocr_override.unwrap_or(config.tika.ocr_enabled);
-    let ocr_language = lang_override.unwrap_or_else(|| config.tika.ocr_language.clone());
     let instances = config.effective_tika_instances();
 
     let descs = instances
@@ -80,8 +93,8 @@ pub fn build_tika_pool(
         .map(|inst| -> anyhow::Result<InstanceDesc<TikaExtractor>> {
             let client = TikaExtractor::new(TikaExtractorConfig {
                 server_url: inst.url.clone(),
-                ocr_enabled,
-                ocr_language: ocr_language.clone(),
+                ocr_enabled: ocr.enabled,
+                ocr_language: ocr.language.clone(),
                 extract_dir: config.extract_dir(),
                 index_name: index_name.to_owned(),
                 max_depth: config.ingest.max_extract_depth,

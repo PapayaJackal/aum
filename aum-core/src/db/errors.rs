@@ -151,7 +151,7 @@ mod tests {
 
     async fn setup_job(pool: &AnyPool, job_id: &str) -> anyhow::Result<()> {
         SqlxJobRepository::new(pool.clone())
-            .create_job(job_id, Path::new("/data"), "aum", JobType::Ingest, 0)
+            .create_job(job_id, Path::new("/data"), "aum", JobType::Ingest, 0, None)
             .await?;
         Ok(())
     }

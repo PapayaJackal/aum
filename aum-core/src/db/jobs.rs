@@ -11,7 +11,7 @@ use sqlx::AnyPool;
 use tracing::info_span;
 use tracing_futures::Instrument as _;
 
-use crate::models::{IngestError, IngestJob, JobProgress, JobStatus, JobType};
+use crate::models::{IngestError, IngestJob, JobProgress, JobStatus, JobType, OcrSettings};
 
 use super::error::{DbError, DbResult};
 use super::repository::JobRepository;
@@ -68,7 +68,7 @@ fn parse_dt(s: &str) -> DateTime<Utc> {
 /// Column list shared by all `jobs` SELECT queries.
 const JOB_COLUMNS: &str = "job_id, source_dir, index_name, status, total_files, \
                            extracted, processed, failed, empty, skipped, \
-                           created_at, finished_at, job_type";
+                           created_at, finished_at, job_type, ocr_enabled, ocr_language";
 
 // ---------------------------------------------------------------------------
 // Row struct (sqlx mapping)
@@ -93,6 +93,8 @@ struct JobRow {
     created_at: String,
     finished_at: Option<String>,
     job_type: String,
+    ocr_enabled: Option<i64>,
+    ocr_language: Option<String>,
 }
 
 impl From<JobRow> for IngestJob {
@@ -112,6 +114,13 @@ impl From<JobRow> for IngestJob {
             finished_at: r.finished_at.as_deref().map(parse_dt),
             job_type: parse_job_type(&r.job_type),
             errors: vec![],
+            ocr_settings: match (r.ocr_enabled, r.ocr_language) {
+                (Some(enabled), Some(language)) => Some(OcrSettings {
+                    enabled: enabled != 0,
+                    language,
+                }),
+                _ => None,
+            },
         }
     }
 }
@@ -145,17 +154,23 @@ impl JobRepository for SqlxJobRepository {
         index_name: &str,
         job_type: JobType,
         total_files: i64,
+        ocr_settings: Option<OcrSettings>,
     ) -> DbResult<IngestJob> {
         let now = Utc::now().to_rfc3339();
         let source_dir_str = source_dir.to_string_lossy();
         let start = Instant::now();
+        let (ocr_enabled, ocr_language): (Option<i64>, Option<String>) = ocr_settings
+            .map_or((None, None), |s| {
+                (Some(i64::from(s.enabled)), Some(s.language))
+            });
 
         let mut tx = self.pool.begin().await.map_err(DbError::from)?;
 
         sqlx::query(
             "INSERT INTO jobs \
-             (job_id, source_dir, index_name, status, job_type, total_files, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             (job_id, source_dir, index_name, status, job_type, total_files, created_at, \
+              ocr_enabled, ocr_language) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(job_id)
         .bind(source_dir_str.as_ref())
@@ -164,6 +179,8 @@ impl JobRepository for SqlxJobRepository {
         .bind(job_type_str(job_type))
         .bind(total_files)
         .bind(&now)
+        .bind(ocr_enabled)
+        .bind(ocr_language)
         .execute(&mut *tx)
         .await
         .map_err(DbError::from)?;
@@ -255,7 +272,7 @@ impl JobRepository for SqlxJobRepository {
                 sqlx::query_as::<sqlx::Any, JobRow>(
                     "SELECT job_id, source_dir, index_name, status, total_files, \
                      extracted, processed, failed, empty, skipped, \
-                     created_at, finished_at, job_type \
+                     created_at, finished_at, job_type, ocr_enabled, ocr_language \
                      FROM jobs WHERE status = $1 ORDER BY created_at DESC",
                 )
                 .bind(job_status_str(s))
@@ -267,7 +284,7 @@ impl JobRepository for SqlxJobRepository {
                 sqlx::query_as::<sqlx::Any, JobRow>(
                     "SELECT job_id, source_dir, index_name, status, total_files, \
                      extracted, processed, failed, empty, skipped, \
-                     created_at, finished_at, job_type \
+                     created_at, finished_at, job_type, ocr_enabled, ocr_language \
                      FROM jobs ORDER BY created_at DESC",
                 )
                 .fetch(&self.pool)
@@ -386,6 +403,7 @@ mod tests {
                 "aum",
                 JobType::Ingest,
                 100,
+                None,
             )
             .await?;
 
@@ -425,6 +443,7 @@ mod tests {
             "aum",
             JobType::Ingest,
             50,
+            None,
         )
         .await?;
 
@@ -456,8 +475,15 @@ mod tests {
     async fn test_update_total_files() -> anyhow::Result<()> {
         let pool = test_pool().await?;
         let repo = SqlxJobRepository::new(pool);
-        repo.create_job("walk_job", Path::new("/walk"), "aum", JobType::Ingest, 0)
-            .await?;
+        repo.create_job(
+            "walk_job",
+            Path::new("/walk"),
+            "aum",
+            JobType::Ingest,
+            0,
+            None,
+        )
+        .await?;
 
         repo.update_total_files("walk_job", 500).await?;
 
@@ -480,8 +506,15 @@ mod tests {
     async fn test_complete_job_sets_status_and_finished_at() -> anyhow::Result<()> {
         let pool = test_pool().await?;
         let repo = SqlxJobRepository::new(pool);
-        repo.create_job("calm_deer_ghi", Path::new("/x"), "aum", JobType::Embed, 0)
-            .await?;
+        repo.create_job(
+            "calm_deer_ghi",
+            Path::new("/x"),
+            "aum",
+            JobType::Embed,
+            0,
+            None,
+        )
+        .await?;
 
         repo.complete_job("calm_deer_ghi", JobStatus::Completed)
             .await?;
@@ -500,9 +533,9 @@ mod tests {
         let pool = test_pool().await?;
         let repo = SqlxJobRepository::new(pool);
 
-        repo.create_job("job_a", Path::new("/a"), "aum", JobType::Ingest, 0)
+        repo.create_job("job_a", Path::new("/a"), "aum", JobType::Ingest, 0, None)
             .await?;
-        repo.create_job("job_b", Path::new("/b"), "aum", JobType::Ingest, 0)
+        repo.create_job("job_b", Path::new("/b"), "aum", JobType::Ingest, 0, None)
             .await?;
         repo.complete_job("job_a", JobStatus::Completed).await?;
 
@@ -523,8 +556,15 @@ mod tests {
         let pool = test_pool().await?;
         let repo = SqlxJobRepository::new(pool);
 
-        repo.create_job("int_job", Path::new("/resume"), "aum", JobType::Ingest, 10)
-            .await?;
+        repo.create_job(
+            "int_job",
+            Path::new("/resume"),
+            "aum",
+            JobType::Ingest,
+            10,
+            None,
+        )
+        .await?;
         repo.complete_job("int_job", JobStatus::Interrupted).await?;
 
         let found = repo
@@ -545,12 +585,33 @@ mod tests {
         let pool = test_pool().await?;
         let repo = SqlxJobRepository::new(pool);
 
-        repo.create_job("to_del_1", Path::new("/d"), "my_index", JobType::Ingest, 0)
-            .await?;
-        repo.create_job("to_del_2", Path::new("/d"), "my_index", JobType::Ingest, 0)
-            .await?;
-        repo.create_job("keep_me", Path::new("/d"), "other", JobType::Ingest, 0)
-            .await?;
+        repo.create_job(
+            "to_del_1",
+            Path::new("/d"),
+            "my_index",
+            JobType::Ingest,
+            0,
+            None,
+        )
+        .await?;
+        repo.create_job(
+            "to_del_2",
+            Path::new("/d"),
+            "my_index",
+            JobType::Ingest,
+            0,
+            None,
+        )
+        .await?;
+        repo.create_job(
+            "keep_me",
+            Path::new("/d"),
+            "other",
+            JobType::Ingest,
+            0,
+            None,
+        )
+        .await?;
 
         let deleted = repo.clear_index("my_index").await?;
         assert_eq!(deleted, 2);

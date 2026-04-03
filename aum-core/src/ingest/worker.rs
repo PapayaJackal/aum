@@ -76,6 +76,10 @@ pub struct ExtractedDocument {
 
 /// Signals that all documents from a file have been streamed.
 pub struct FileComplete {
+    /// The source file path.
+    pub file_path: PathBuf,
+    /// Total number of documents produced by this file.
+    pub total_doc_count: u64,
     /// Wall-clock time spent extracting, in seconds.
     pub extraction_secs: f64,
     /// Number of documents with empty content.
@@ -241,6 +245,8 @@ async fn stream_file<E: Extractor + 'static>(
             );
             let _ = result_tx
                 .send(WorkerResult::FileComplete(FileComplete {
+                    file_path: file_path.to_owned(),
+                    total_doc_count: doc_index,
                     extraction_secs: elapsed,
                     empty_count,
                 }))
@@ -249,6 +255,8 @@ async fn stream_file<E: Extractor + 'static>(
     } else {
         let _ = result_tx
             .send(WorkerResult::FileComplete(FileComplete {
+                file_path: file_path.to_owned(),
+                total_doc_count: doc_index,
                 extraction_secs: elapsed,
                 empty_count,
             }))
@@ -377,7 +385,7 @@ mod tests {
         })?;
         let tracker = make_tracker().await?;
         tracker
-            .create_job("wj1", Path::new("/src"), "aum", JobType::Ingest, 0)
+            .create_job("wj1", Path::new("/src"), "aum", JobType::Ingest, 0, None)
             .await?;
 
         let (path_tx, path_rx) = mpsc::channel(10);
@@ -423,7 +431,7 @@ mod tests {
         let pool = make_pool(FailingExtractor)?;
         let tracker = make_tracker().await?;
         tracker
-            .create_job("wj2", Path::new("/src"), "aum", JobType::Ingest, 0)
+            .create_job("wj2", Path::new("/src"), "aum", JobType::Ingest, 0, None)
             .await?;
 
         let (path_tx, path_rx) = mpsc::channel(10);
@@ -462,7 +470,7 @@ mod tests {
         })?;
         let tracker = make_tracker().await?;
         tracker
-            .create_job("wj3", Path::new("/src"), "aum", JobType::Ingest, 0)
+            .create_job("wj3", Path::new("/src"), "aum", JobType::Ingest, 0, None)
             .await?;
 
         let (path_tx, path_rx) = mpsc::channel(10);
@@ -507,7 +515,7 @@ mod tests {
         })?;
         let tracker = make_tracker().await?;
         tracker
-            .create_job("wj4", Path::new("/src"), "aum", JobType::Ingest, 0)
+            .create_job("wj4", Path::new("/src"), "aum", JobType::Ingest, 0, None)
             .await?;
 
         let max_workers = 3u32;
