@@ -1,0 +1,2 @@
+ALTER TABLE jobs ADD COLUMN ocr_enabled INTEGER;
+ALTER TABLE jobs ADD COLUMN ocr_language TEXT;
