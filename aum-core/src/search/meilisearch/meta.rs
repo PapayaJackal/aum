@@ -5,6 +5,7 @@
 //! Meilisearch expects (all fields at the top level with a `meta_` prefix).
 
 use serde_json::{Map, Value};
+use tracing::warn;
 
 use crate::extraction::{AUM_DISPLAY_PATH_KEY, AUM_EXTRACTED_FROM_KEY};
 use crate::models::Document;
@@ -37,7 +38,14 @@ pub(super) fn build_flat_meta(meta: &IndexedMeta) -> Map<String, Value> {
         m.insert("meta_modified".into(), Value::String(v.clone()));
     }
     if let Some(v) = &meta.file_size {
-        m.insert("meta_file_size".into(), Value::String(v.clone()));
+        if let Ok(n) = v.parse::<i64>() {
+            m.insert(
+                "meta_file_size".into(),
+                Value::Number(serde_json::Number::from(n)),
+            );
+        } else {
+            warn!(value = %v, "could not parse meta_file_size as integer; field omitted");
+        }
     }
     if let Some(v) = &meta.message_id {
         m.insert("meta_message_id".into(), Value::String(v.clone()));
@@ -173,6 +181,30 @@ mod tests {
         assert_eq!(obj["has_embeddings"], Value::Bool(false));
         assert_eq!(obj["_vectors"], serde_json::json!({ "default": null }));
         Ok(())
+    }
+
+    #[test]
+    fn build_flat_meta_parses_file_size_as_number() {
+        let m = IndexedMeta {
+            file_size: Some("98765".into()),
+            ..Default::default()
+        };
+        let flat = build_flat_meta(&m);
+        assert_eq!(
+            flat.get("meta_file_size")
+                .and_then(serde_json::Value::as_i64),
+            Some(98765)
+        );
+    }
+
+    #[test]
+    fn build_flat_meta_drops_unparseable_file_size() {
+        let m = IndexedMeta {
+            file_size: Some("not-a-number".into()),
+            ..Default::default()
+        };
+        let flat = build_flat_meta(&m);
+        assert!(!flat.contains_key("meta_file_size"));
     }
 
     #[test]

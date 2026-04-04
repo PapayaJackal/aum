@@ -33,6 +33,19 @@ pub(super) static FILTERABLE_ATTRS: &[&str] = &[
 /// Fields that can be used in sort expressions.
 pub(super) static SORTABLE_ATTRS: &[&str] = &["id", "meta_created_year", "meta_file_size"];
 
+/// Ranking rules with "sort" first so that explicit sort parameters are the
+/// primary ordering criterion.  When no sort is specified in a query,
+/// Meilisearch ignores the sort rule and falls through to "words", preserving
+/// normal relevance-based ranking for "best match" searches.
+pub(super) static RANKING_RULES: &[&str] = &[
+    "sort",
+    "words",
+    "typo",
+    "proximity",
+    "attribute",
+    "exactness",
+];
+
 /// Fields included in full-text search (order determines ranking priority).
 ///
 /// `display_path` ranks before `content` so that filename matches are scored
@@ -58,6 +71,7 @@ pub(super) fn base_settings() -> Settings {
         .with_filterable_attributes(FILTERABLE_ATTRS)
         .with_sortable_attributes(SORTABLE_ATTRS)
         .with_searchable_attributes(SEARCHABLE_ATTRS)
+        .with_ranking_rules(RANKING_RULES)
         .with_pagination(PaginationSetting {
             max_total_hits: 1_000_000,
         })
