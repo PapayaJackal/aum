@@ -209,35 +209,37 @@ impl<T: Send + Sync> InstancePool<T> {
     ///
     /// Prefers healthy instances and unhealthy instances whose cooldown has
     /// elapsed. Falls back to all instances when none qualify.
+    ///
+    /// Eligibility is snapshotted in a single pass so each health mutex is
+    /// locked at most once per call, halving lock acquisitions compared to
+    /// the previous two-pass approach.
     fn select_instance(&self) -> &InstanceState<T> {
         let now = Instant::now();
         let retry_interval = self.config.health_retry_interval;
 
-        let is_eligible = |inst: &InstanceState<T>| {
+        // Single pass: lock each health mutex once, record eligibility.
+        let mut eligible_indices: Vec<usize> = Vec::with_capacity(self.instances.len());
+        for (i, inst) in self.instances.iter().enumerate() {
             let health = inst
                 .health
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            health.healthy
+            if health.healthy
                 || health
                     .last_failure_time
                     .is_some_and(|t| now.duration_since(t) >= retry_interval)
-        };
+            {
+                eligible_indices.push(i);
+            }
+        }
 
-        let eligible_count = self.instances.iter().filter(|i| is_eligible(i)).count();
         let idx = self.index.fetch_add(1, Ordering::Relaxed);
 
-        if eligible_count > 0 {
-            let target = idx % eligible_count;
-            #[allow(clippy::expect_used)] // guarded by eligible_count > 0
-            self.instances
-                .iter()
-                .filter(|i| is_eligible(i))
-                .nth(target)
-                .expect("eligible_count > 0 guarantees nth succeeds")
-        } else {
+        if eligible_indices.is_empty() {
             // All instances unhealthy — fall back to round-robin over all.
             &self.instances[idx % self.instances.len()]
+        } else {
+            &self.instances[eligible_indices[idx % eligible_indices.len()]]
         }
     }
 }

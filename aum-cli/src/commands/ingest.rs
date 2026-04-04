@@ -25,6 +25,9 @@ pub struct IngestArgs {
     pub directory: PathBuf,
     #[command(flatten)]
     pub common: CommonIngestArgs,
+    /// Stop after indexing this many documents (useful for memory profiling).
+    #[arg(long)]
+    pub limit: Option<u64>,
 }
 
 /// # Errors
@@ -55,7 +58,7 @@ pub async fn run(
 
     let (progress_tx, progress_rx) = tokio::sync::watch::channel(IngestSnapshot::default());
 
-    let pipeline = IngestPipeline::new(
+    let mut pipeline = IngestPipeline::new(
         pool,
         Arc::clone(&backend),
         tracker,
@@ -65,6 +68,10 @@ pub async fn run(
     )
     .with_ocr_settings(ocr)
     .with_progress(progress_tx);
+
+    if let Some(limit) = args.limit {
+        pipeline = pipeline.with_doc_limit(limit);
+    }
 
     let render_handle = tokio::spawn(render_progress(progress_rx, args.common.debug));
     let job = pipeline

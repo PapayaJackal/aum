@@ -25,10 +25,13 @@ use crate::pool::InstancePool;
 
 /// Shared state tracking which files are currently in extraction.
 ///
-/// Cheap to clone: the inner `Arc` bumps a reference count.
+/// Cheap to clone: the inner `Arc` bumps a reference count.  Uses a
+/// [`HashSet`](std::collections::HashSet) so that `remove_path` is O(1)
+/// instead of the O(n) `Vec::retain` that caused lock contention when many
+/// workers competed for the mutex.
 #[derive(Clone, Default)]
 pub struct InFlightState {
-    paths: Arc<std::sync::Mutex<Vec<String>>>,
+    paths: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl InFlightState {
@@ -37,15 +40,15 @@ impl InFlightState {
         self.paths
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(path.to_owned());
+            .insert(path.to_owned());
     }
 
-    /// Deregister `path` (removes the first matching entry).
+    /// Deregister `path`.
     pub fn remove_path(&self, path: &str) {
         self.paths
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|p| p != path);
+            .remove(path);
     }
 
     /// Returns `(count, paths_clone)` in a single lock acquisition.
@@ -54,7 +57,7 @@ impl InFlightState {
             .paths
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (guard.len() as u64, guard.clone())
+        (guard.len() as u64, guard.iter().cloned().collect())
     }
 }
 

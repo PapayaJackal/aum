@@ -59,6 +59,8 @@ pub struct IngestPipeline<E: Extractor + 'static, S: BatchSink> {
     progress_tx: Option<ProgressTx>,
     /// OCR settings to persist with the job record for change detection on retry.
     ocr_settings: Option<OcrSettings>,
+    /// Stop indexing after this many documents (for profiling / debugging).
+    doc_limit: Option<u64>,
 }
 
 impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
@@ -81,6 +83,7 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
             max_workers,
             progress_tx: None,
             ocr_settings: None,
+            doc_limit: None,
         }
     }
 
@@ -89,6 +92,15 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
     #[must_use]
     pub fn with_ocr_settings(mut self, settings: OcrSettings) -> Self {
         self.ocr_settings = Some(settings);
+        self
+    }
+
+    /// Stop indexing after `n` documents have been processed.
+    ///
+    /// Useful for memory profiling with a bounded workload.
+    #[must_use]
+    pub fn with_doc_limit(mut self, n: u64) -> Self {
+        self.doc_limit = Some(n);
         self
     }
 
@@ -383,6 +395,7 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
             last_total_update: 0,
             last_total_sync: Instant::now(),
         };
+        let mut doc_count: u64 = 0;
 
         while let Some(result) = result_rx.recv().await {
             // Only emit snapshots on file-level boundaries, not every document.
@@ -394,6 +407,7 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
                     let mut doc = ed.doc;
                     set_display_path(&mut doc, source_dir);
                     st.batch.push((doc_id, doc));
+                    doc_count += 1;
                 }
                 WorkerResult::FileComplete(fc) => {
                     st.progress.extracted += 1;
@@ -460,6 +474,11 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
                     counters,
                     st.extraction_secs_total,
                 );
+            }
+
+            if self.doc_limit.is_some_and(|limit| doc_count >= limit) {
+                info!(doc_count, "document limit reached, stopping early");
+                break;
             }
         }
 

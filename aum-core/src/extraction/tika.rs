@@ -634,7 +634,7 @@ impl TikaExtractor {
         file_path: &Path,
         part: &Map<String, Value>,
         i: usize,
-        attachment_map: &HashMap<String, PathBuf>,
+        attachment_source: Option<&Path>,
         metadata: &mut HashMap<String, MetadataValue>,
     ) -> PathBuf {
         let erp = part
@@ -642,10 +642,7 @@ impl TikaExtractor {
             .and_then(Value::as_str)
             .unwrap_or("");
         let resource_name = resolve_resource_name(part, erp, i);
-        let source = attachment_map
-            .get(erp)
-            .cloned()
-            .unwrap_or_else(|| file_path.to_path_buf());
+        let source = attachment_source.map_or_else(|| file_path.to_path_buf(), Path::to_path_buf);
 
         let display = if erp.is_empty() {
             file_path.join(&resource_name)
@@ -664,45 +661,6 @@ impl TikaExtractor {
         );
 
         source
-    }
-
-    /// Consume the unpack stream, building the attachment map.
-    ///
-    /// Returns `(attachment_map, unpack_failed)`. On non-depth errors the
-    /// stream is abandoned and embedded documents should be dropped.
-    async fn collect_unpack_stream(
-        file_path: &Path,
-        mut stream: BoxStream<'_, Result<(String, PathBuf), ExtractionError>>,
-        embedded_count: usize,
-        record_error: Option<&RecordErrorFn>,
-    ) -> Result<(HashMap<String, PathBuf>, bool), ExtractionError> {
-        let mut attachment_map = HashMap::new();
-        while let Some(entry) = stream.next().await {
-            match entry {
-                Ok((erp, path)) => {
-                    attachment_map.insert(erp, path);
-                }
-                Err(e @ ExtractionError::DepthLimitExceeded { .. }) => return Err(e),
-                Err(e) => {
-                    tracing::warn!(
-                        path = %file_path.display(),
-                        embedded_count,
-                        error = %e,
-                        "unpack failed, dropping embedded documents"
-                    );
-                    record_error_metric("UnpackError");
-                    if let Some(cb) = record_error {
-                        cb(
-                            file_path,
-                            "UnpackError",
-                            &format!("failed to unpack {embedded_count} embedded documents: {e}"),
-                        );
-                    }
-                    return Ok((HashMap::new(), true));
-                }
-            }
-        }
-        Ok((attachment_map, false))
     }
 
     fn report_truncation(
@@ -849,6 +807,7 @@ async fn prepare_entry_parent(att_path: &Path, resolved_dest: &Path) -> bool {
 // ---------------------------------------------------------------------------
 
 impl Extractor for TikaExtractor {
+    #[allow(clippy::too_many_lines)]
     fn extract<'a>(
         &'a self,
         file_path: &'a Path,
@@ -880,7 +839,7 @@ impl Extractor for TikaExtractor {
 
             // Yield container document before unpacking starts.
             let container_doc = self.build_one_document(
-                file_path, &first_part, 0, &HashMap::new(), record_error,
+                file_path, &first_part, 0, None, record_error,
             ).await;
             if Self::check_empty_extraction(&container_doc).await {
                 empty_extractions += 1;
@@ -890,43 +849,117 @@ impl Extractor for TikaExtractor {
             if has_embedded {
                 let container_paths =
                     Arc::new(find_container_paths(embedded_parts.iter()));
-                let unpack_stream = self.unpack_recursive(
-                    file_path, container_paths, 0, String::new(),
-                );
-                let (attachment_map, unpack_failed) =
-                    Self::collect_unpack_stream(
-                        file_path, unpack_stream, embedded_parts.len(), record_error,
-                    )
-                    .await
-                    .inspect_err(|_| record_duration())?;
 
-                if !unpack_failed {
-                    for (i, part) in embedded_parts.drain(..).enumerate() {
-                        let doc = self.build_one_document(
-                            file_path, &part, i + 1, &attachment_map, record_error,
-                        ).await;
-                        let display_path = doc
-                            .metadata
-                            .get(AUM_DISPLAY_PATH_KEY)
-                            .and_then(|v| {
-                                if let MetadataValue::Single(s) = v {
-                                    Some(s.as_str())
-                                } else {
-                                    None
+                // Index embedded parts by their embedded-resource-path so we
+                // can yield documents incrementally as unpack entries arrive
+                // instead of collecting the entire attachment map first.
+                let mut erp_to_idx: HashMap<String, usize> =
+                    HashMap::with_capacity(embedded_parts.len());
+                for (i, part) in embedded_parts.iter().enumerate() {
+                    if let Some(erp) = part
+                        .get(EMBEDDED_RESOURCE_PATH_KEY)
+                        .and_then(Value::as_str)
+                    {
+                        erp_to_idx.insert(erp.to_owned(), i);
+                    }
+                }
+
+                let mut yielded = vec![false; embedded_parts.len()];
+                let mut unpack_failed = false;
+                let embedded_count = embedded_parts.len();
+
+                {
+                    let mut unpack_stream = self.unpack_recursive(
+                        file_path, container_paths, 0, String::new(),
+                    );
+                    while let Some(entry) = unpack_stream.next().await {
+                        match entry {
+                            Ok((erp, local_path)) => {
+                                if let Some(&idx) = erp_to_idx.get(&erp)
+                                    && !yielded[idx]
+                                {
+                                    yielded[idx] = true;
+                                    let doc = self.build_one_document(
+                                        file_path, &embedded_parts[idx],
+                                        idx + 1, Some(&local_path), record_error,
+                                    ).await;
+                                    let empty = Self::check_empty_extraction(&doc).await;
+                                    if empty {
+                                        empty_extractions += 1;
+                                    }
+                                    let display_path = doc
+                                        .metadata
+                                        .get(AUM_DISPLAY_PATH_KEY)
+                                        .and_then(|v| match v {
+                                            MetadataValue::Single(s) => Some(s.as_str()),
+                                            MetadataValue::List(_) => None,
+                                        })
+                                        .unwrap_or("");
+                                    tracing::info!(
+                                        attachment = display_path,
+                                        content_chars = doc.content.len(),
+                                        empty,
+                                        "indexing attachment"
+                                    );
+                                    yield doc;
                                 }
-                            })
-                            .unwrap_or("");
-                        let empty = Self::check_empty_extraction(&doc).await;
-                        if empty {
-                            empty_extractions += 1;
+                            }
+                            Err(e @ ExtractionError::DepthLimitExceeded { .. }) => {
+                                record_duration();
+                                Err(e)?;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    path = %file_path.display(),
+                                    embedded_count,
+                                    error = %e,
+                                    "unpack failed, dropping remaining embedded documents"
+                                );
+                                record_error_metric("UnpackError");
+                                if let Some(cb) = record_error {
+                                    cb(
+                                        file_path,
+                                        "UnpackError",
+                                        &format!(
+                                            "failed to unpack {embedded_count} embedded documents: {e}"
+                                        ),
+                                    );
+                                }
+                                unpack_failed = true;
+                                break;
+                            }
                         }
-                        tracing::info!(
-                            attachment = display_path,
-                            content_chars = doc.content.len(),
-                            empty,
-                            "indexing attachment"
-                        );
-                        yield doc;
+                    }
+                }
+
+                // Yield remaining embedded parts whose erp didn't match any
+                // unpack entry (they fall back to the container as source).
+                if !unpack_failed {
+                    for (i, part) in embedded_parts.iter().enumerate() {
+                        if !yielded[i] {
+                            let doc = self.build_one_document(
+                                file_path, part, i + 1, None, record_error,
+                            ).await;
+                            let empty = Self::check_empty_extraction(&doc).await;
+                            if empty {
+                                empty_extractions += 1;
+                            }
+                            let display_path = doc
+                                .metadata
+                                .get(AUM_DISPLAY_PATH_KEY)
+                                .and_then(|v| match v {
+                                    MetadataValue::Single(s) => Some(s.as_str()),
+                                    MetadataValue::List(_) => None,
+                                })
+                                .unwrap_or("");
+                            tracing::info!(
+                                attachment = display_path,
+                                content_chars = doc.content.len(),
+                                empty,
+                                "indexing attachment"
+                            );
+                            yield doc;
+                        }
                     }
                 }
             }
@@ -960,7 +993,7 @@ impl TikaExtractor {
         file_path: &Path,
         part: &Map<String, Value>,
         index: usize,
-        attachment_map: &HashMap<String, PathBuf>,
+        attachment_source: Option<&Path>,
         record_error: Option<&RecordErrorFn>,
     ) -> Document {
         let raw = part
@@ -977,7 +1010,7 @@ impl TikaExtractor {
         let source = if index == 0 {
             file_path.to_path_buf()
         } else {
-            Self::build_embedded_metadata(file_path, part, index, attachment_map, &mut metadata)
+            Self::build_embedded_metadata(file_path, part, index, attachment_source, &mut metadata)
         };
 
         if truncated {
