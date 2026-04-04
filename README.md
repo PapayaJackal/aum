@@ -41,11 +41,10 @@ document search platform, look at
 
 ## Requirements
 
-- Python 3.11+
+- Rust 1.85+ (to build from source)
 - Meilisearch 1.x+
 - Apache Tika 3.x
 - Node.js 22+ (to build the frontend)
-- [uv](https://docs.astral.sh/uv/)
 - Optional: Ollama or an OpenAI-compatible API for embeddings
 
 ## Getting started
@@ -62,16 +61,22 @@ Build the frontend:
 cd frontend && npm ci && npm run build && cd ..
 ```
 
+Build the binaries:
+
+```sh
+cargo build --release
+```
+
 Create an admin user:
 
 ```sh
-uv run aum user create admin --admin --generate-password
+./target/release/aum user create admin --admin --generate-password
 ```
 
 Start the server:
 
 ```sh
-uv run aum serve
+./target/release/aum-api serve
 ```
 
 The web UI will be available at `http://localhost:8000`.
@@ -79,7 +84,7 @@ The web UI will be available at `http://localhost:8000`.
 Ingest a directory of documents:
 
 ```sh
-uv run aum ingest <index> /path/to/documents
+./target/release/aum ingest <index> /path/to/documents
 ```
 
 ## Configuration
@@ -90,7 +95,7 @@ aum reads configuration from these sources, in order of priority:
 2. An `aum.toml` file in the working directory
 3. A `.env` file in the working directory
 
-Run `uv run aum config` to print the resolved configuration.
+Run `aum config` to print the resolved configuration.
 
 Key settings:
 
@@ -142,8 +147,7 @@ searching.
 - `aum user reset-mfa <name>` -- Remove all passkeys for a user
 - `aum config` -- Print the resolved configuration
 
-Run any command with `--help` for full usage details. All commands should be
-invoked with `uv run aum`.
+Run any command with `--help` for full usage details.
 
 ## Scaling extraction
 
@@ -182,14 +186,14 @@ ollama serve
 Enable embeddings and generate them:
 
 ```sh
-AUM_EMBEDDINGS_ENABLED=true uv run aum embed <index>
+AUM_EMBEDDINGS_ENABLED=true aum embed <index>
 ```
 
 The default model is `snowflake-arctic-embed2` (1024 dimensions). aum will
 pull it automatically on first use. To use a different model:
 
 ```sh
-uv run aum embed <index> --backend ollama --model nomic-embed-text
+aum embed <index> --backend ollama --model nomic-embed-text
 ```
 
 ### Using an OpenAI-compatible API
@@ -201,7 +205,7 @@ export AUM_EMBEDDINGS_BACKEND=openai
 export AUM_EMBEDDINGS_API_URL=https://api.openai.com/v1/embeddings
 export AUM_EMBEDDINGS_API_KEY=sk-...
 export AUM_EMBEDDINGS_MODEL=text-embedding-3-small
-AUM_EMBEDDINGS_ENABLED=true uv run aum embed <index>
+AUM_EMBEDDINGS_ENABLED=true aum embed <index>
 ```
 
 This also works with any OpenAI-compatible endpoint (vLLM, LiteLLM,
@@ -212,20 +216,11 @@ running the server to enable the hybrid search option in the UI.
 
 ## Testing
 
-Unit tests run locally without external services:
+Run the test suite:
 
 ```bash
-uv run python -m pytest
+cargo test
 ```
-
-Integration tests exercise the full stack (Meilisearch, Tika, Ollama) inside containers. The frontend is built automatically as part of the Docker image:
-
-```bash
-docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner
-docker compose -f docker-compose.test.yml down -v
-```
-
-This ingests real test data, runs CLI/API/embedding/permission tests, and Playwright browser tests against the SPA.
 
 ## Prometheus metrics
 

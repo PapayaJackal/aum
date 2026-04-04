@@ -6,29 +6,55 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Application
-FROM python:3.14-slim
+# Stage 2: Build Rust binaries
+FROM rust:slim AS rust-builder
+WORKDIR /app
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cache dependencies by copying manifests first
+COPY Cargo.toml Cargo.lock ./
+COPY aum-core/Cargo.toml aum-core/
+COPY aum-cli/Cargo.toml aum-cli/
+COPY aum-api/Cargo.toml aum-api/
+COPY aum-macros/Cargo.toml aum-macros/
+
+# Create dummy source files to cache dependencies
+RUN mkdir -p aum-core/src aum-cli/src aum-api/src aum-macros/src && \
+    echo "fn main() {}" > aum-cli/src/main.rs && \
+    echo "fn main() {}" > aum-api/src/main.rs && \
+    touch aum-core/src/lib.rs && \
+    touch aum-macros/src/lib.rs && \
+    cargo build --release --bin aum || true
+
+# Copy actual source and build
+COPY aum-core/ aum-core/
+COPY aum-cli/ aum-cli/
+COPY aum-api/ aum-api/
+COPY aum-macros/ aum-macros/
+RUN touch aum-core/src/lib.rs aum-macros/src/lib.rs aum-cli/src/main.rs aum-api/src/main.rs && \
+    cargo build --release --bin aum
+
+# Stage 3: Runtime image
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python dependencies first for layer caching
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
-
-# Copy source and install the project
-COPY src/ src/
-COPY tests/ tests/
-RUN uv sync --frozen --no-dev
-
-# Copy built frontend (served at runtime via FastAPI StaticFiles)
+COPY --from=rust-builder /app/target/release/aum /usr/local/bin/aum
 COPY --from=frontend-builder /app/frontend/dist frontend/dist
 
 ENV AUM_DATA_DIR=/data
 VOLUME ["/data"]
 EXPOSE 8000 9090
 
-ENTRYPOINT ["uv", "run", "aum"]
+ENTRYPOINT ["aum"]
 CMD ["serve"]
