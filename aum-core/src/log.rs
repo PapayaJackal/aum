@@ -7,7 +7,6 @@ use std::fmt;
 use tracing_subscriber::{
     EnvFilter, fmt::writer::BoxMakeWriter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
-use tracing_timing::{Builder as TimingBuilder, Histogram, TimingLayer};
 
 use crate::config::{LogFormat, LogLevel, LoggingConfig};
 
@@ -48,11 +47,6 @@ fn build_filter(level: LogLevel) -> EnvFilter {
 /// Must be called once, early in `main()`, before any `tracing` macros are used.
 /// The log level can be overridden at runtime with the `RUST_LOG` environment variable.
 ///
-/// # Panics
-///
-/// Panics if the `tracing-timing` histogram cannot be configured (should never
-/// happen with the hard-coded parameters).
-///
 /// # Errors
 ///
 /// Returns [`LoggingInitError`] if a global subscriber has already been set.
@@ -74,18 +68,9 @@ pub fn init(config: &LoggingConfig, writer: BoxMakeWriter) -> Result<(), Logging
         ),
     };
 
-    // tracing-timing records histogram distributions of how long each named span
-    // takes. Spans named "db.query" (emitted by the database layer) accumulate
-    // per-operation SQL latency data accessible via the returned handle.
-    // Max bucket: 60 seconds in nanoseconds; 3 significant figures of precision.
-    #[allow(clippy::expect_used)] // hard-coded params that are always valid
-    let timing: TimingLayer = TimingBuilder::default()
-        .layer(|| Histogram::new_with_max(60_000_000_000, 3).expect("histogram config is valid"));
-
     tracing_subscriber::registry()
         .with(filter)
         .with(fmt_layer)
-        .with(timing)
         .try_init()
         .map_err(|e| LoggingInitError(e.to_string()))
 }
