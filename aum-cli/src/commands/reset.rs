@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 use std::io::{self, Write as _};
 use std::path::Path;
 
+use anyhow::Context as _;
 use clap::Args;
 use tracing::info;
 
@@ -39,13 +40,16 @@ pub async fn run(
         return Ok(());
     }
 
-    let (delete_result, clear_result) = tokio::join!(
+    let (delete_result, clear_result, embed_clear_result) = tokio::join!(
         backend.delete_index(&args.index),
         tracker.clear_index(&args.index),
+        tracker.clear_embedding_model(&args.index),
     );
-    delete_result.map_err(|e| anyhow::anyhow!("failed to delete index '{}': {e}", args.index))?;
+    delete_result.with_context(|| format!("failed to delete index '{}'", args.index))?;
     let deleted = clear_result
-        .map_err(|e| anyhow::anyhow!("failed to clear tracker data for '{}': {e}", args.index))?;
+        .with_context(|| format!("failed to clear tracker data for '{}'", args.index))?;
+    embed_clear_result
+        .with_context(|| format!("failed to clear embedding model for '{}'", args.index))?;
 
     let files_dir = extract_dir.join(&args.index);
     let size = {
