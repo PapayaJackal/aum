@@ -478,7 +478,7 @@ mod tests {
         assert_eq!(all.len(), 2);
 
         let excluding_empty: Vec<_> = t
-            .get_failed_paths("t_fp", ErrorFilter::Exclude("EmptyExtraction"))
+            .get_failed_paths("t_fp", ErrorFilter::Exclude(&["EmptyExtraction"]))
             .try_collect()
             .await?;
         assert_eq!(excluding_empty.len(), 1);

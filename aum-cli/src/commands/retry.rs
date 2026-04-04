@@ -9,7 +9,7 @@ use futures::TryStreamExt as _;
 use aum_core::config::AumConfig;
 use aum_core::db::JobTracker;
 use aum_core::ingest::{IngestPipeline, IngestSnapshot};
-use aum_core::models::{EMPTY_EXTRACTION_ERROR_TYPE, ErrorFilter};
+use aum_core::models::{EMPTY_EXTRACTION_ERROR_TYPE, ErrorFilter, TRUNCATED_EXTRACTION_ERROR_TYPE};
 use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
@@ -21,10 +21,12 @@ use crate::output::print_job_summary;
 /// Restricts retry to a specific failure category.
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum RetryScope {
-    /// Only retry files that produced actual extraction errors (skips empty extractions).
+    /// Only retry files that produced actual extraction errors (skips empty and truncated).
     Failed,
     /// Only retry files that produced empty content.
     Empty,
+    /// Only retry files whose content was truncated due to the content-length limit.
+    Truncated,
 }
 
 #[derive(Args)]
@@ -35,8 +37,8 @@ pub struct RetryArgs {
     pub common: CommonIngestArgs,
     /// Restrict retry to a specific failure category.
     ///
-    /// By default, failed files are retried and empty extractions are skipped
-    /// unless OCR settings have changed, in which case both are retried.
+    /// By default, failed files are retried and empty/truncated extractions are
+    /// skipped unless OCR settings have changed, in which case all are retried.
     #[arg(long, value_enum)]
     pub only: Option<RetryScope>,
 }
@@ -66,10 +68,13 @@ pub async fn run(
     // Treat them as "unchanged" so empty extractions are not auto-included.
     let ocr_changed = job.ocr_settings.as_ref().is_some_and(|prev| prev != &ocr);
 
+    const AUTO_SKIP: &[&str] = &[EMPTY_EXTRACTION_ERROR_TYPE, TRUNCATED_EXTRACTION_ERROR_TYPE];
+
     let filter = match args.only {
         Some(RetryScope::Empty) => ErrorFilter::Only(EMPTY_EXTRACTION_ERROR_TYPE),
+        Some(RetryScope::Truncated) => ErrorFilter::Only(TRUNCATED_EXTRACTION_ERROR_TYPE),
         None if ocr_changed => ErrorFilter::All,
-        Some(RetryScope::Failed) | None => ErrorFilter::Exclude(EMPTY_EXTRACTION_ERROR_TYPE),
+        Some(RetryScope::Failed) | None => ErrorFilter::Exclude(AUTO_SKIP),
     };
 
     // Collect failed paths using the selected filter.
@@ -87,6 +92,10 @@ pub async fn run(
             Some(RetryScope::Empty) => println!(
                 "No empty extractions recorded for job '{}' (or none exist on disk).\n\
                  Note: empty extractions are only tracked for jobs run with this version of aum.",
+                args.job_id
+            ),
+            Some(RetryScope::Truncated) => println!(
+                "No truncated documents recorded for job '{}' (or none exist on disk).",
                 args.job_id
             ),
             _ => println!(

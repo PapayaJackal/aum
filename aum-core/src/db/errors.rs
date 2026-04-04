@@ -107,32 +107,47 @@ impl JobErrorRepository for SqlxJobErrorRepository {
             table = "job_errors"
         );
         let job_id = job_id.to_owned();
-        let (sql, type_filter) = match filter {
-            ErrorFilter::Exclude(t) => (
-                "SELECT DISTINCT file_path FROM job_errors \
-                 WHERE job_id = $1 AND error_type != $2",
-                Some(t.to_owned()),
+        // Build SQL and collect the types to bind.
+        let (sql, types): (String, Vec<String>) = match filter {
+            ErrorFilter::Exclude(types) if !types.is_empty() => {
+                // NOT IN ($2, $3, ...) — one placeholder per excluded type.
+                let placeholders: String = (2..=(types.len() + 1))
+                    .map(|n| format!("${n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    format!(
+                        "SELECT DISTINCT file_path FROM job_errors \
+                         WHERE job_id = $1 AND error_type NOT IN ({placeholders})"
+                    ),
+                    types.iter().map(|&s| s.to_owned()).collect(),
+                )
+            }
+            ErrorFilter::Exclude(_) | ErrorFilter::All => (
+                "SELECT DISTINCT file_path FROM job_errors WHERE job_id = $1".to_owned(),
+                vec![],
             ),
             ErrorFilter::Only(t) => (
                 "SELECT DISTINCT file_path FROM job_errors \
-                 WHERE job_id = $1 AND error_type = $2",
-                Some(t.to_owned()),
-            ),
-            ErrorFilter::All => (
-                "SELECT DISTINCT file_path FROM job_errors WHERE job_id = $1",
-                None,
+                 WHERE job_id = $1 AND error_type = $2"
+                    .to_owned(),
+                vec![t.to_owned()],
             ),
         };
-        let mut query = sqlx::query_as::<sqlx::Any, (String,)>(sql).bind(job_id);
-        if let Some(t) = type_filter {
-            query = query.bind(t);
-        }
-        Box::pin(
-            query
-                .fetch(&self.pool)
-                .instrument(span)
-                .map(|r| r.map(|(p,)| PathBuf::from(p)).map_err(DbError::from)),
-        )
+        // Capture `sql` and `types` by value into an async stream so the
+        // dynamically-built SQL string doesn't need to outlive this call.
+        let pool = self.pool.clone();
+        Box::pin(async_stream::try_stream! {
+            let mut query = sqlx::query_as::<sqlx::Any, (String,)>(&sql).bind(job_id);
+            for t in types {
+                query = query.bind(t);
+            }
+            let mut stream = query.fetch(&pool).instrument(span);
+            while let Some(row) = stream.next().await {
+                let (p,) = row.map_err(DbError::from)?;
+                yield PathBuf::from(p);
+            }
+        })
     }
 }
 
@@ -271,11 +286,55 @@ mod tests {
             .await?;
 
         let paths: Vec<_> = repo
-            .get_failed_paths("err_job_5", ErrorFilter::Exclude("EmptyExtraction"))
+            .get_failed_paths("err_job_5", ErrorFilter::Exclude(&["EmptyExtraction"]))
             .try_collect()
             .await?;
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], PathBuf::from("/b.pdf"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_failed_paths_exclude_multiple_types() -> anyhow::Result<()> {
+        let pool = test_pool().await?;
+        setup_job(&pool, "err_job_6").await?;
+        let repo = SqlxJobErrorRepository::new(pool);
+
+        repo.record_error("err_job_6", Path::new("/a.pdf"), "EmptyExtraction", "msg")
+            .await?;
+        repo.record_error("err_job_6", Path::new("/b.pdf"), "ContentTruncated", "msg")
+            .await?;
+        repo.record_error("err_job_6", Path::new("/c.pdf"), "ParseError", "msg")
+            .await?;
+
+        let paths: Vec<_> = repo
+            .get_failed_paths(
+                "err_job_6",
+                ErrorFilter::Exclude(&["EmptyExtraction", "ContentTruncated"]),
+            )
+            .try_collect()
+            .await?;
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], PathBuf::from("/c.pdf"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_failed_paths_exclude_empty_slice_returns_all() -> anyhow::Result<()> {
+        let pool = test_pool().await?;
+        setup_job(&pool, "err_job_7").await?;
+        let repo = SqlxJobErrorRepository::new(pool);
+
+        repo.record_error("err_job_7", Path::new("/a.pdf"), "TypeA", "msg")
+            .await?;
+        repo.record_error("err_job_7", Path::new("/b.pdf"), "TypeB", "msg")
+            .await?;
+
+        let paths: Vec<_> = repo
+            .get_failed_paths("err_job_7", ErrorFilter::Exclude(&[]))
+            .try_collect()
+            .await?;
+        assert_eq!(paths.len(), 2);
         Ok(())
     }
 }

@@ -161,6 +161,12 @@ pub enum JobType {
 /// include them in the retry set when OCR settings change.
 pub const EMPTY_EXTRACTION_ERROR_TYPE: &str = "EmptyExtraction";
 
+/// Error type recorded when extracted content is truncated due to `max_content_length`.
+///
+/// Used by `aum retry` to skip truncated documents by default, since re-running
+/// them produces the same result unless the content-length limit is raised.
+pub const TRUNCATED_EXTRACTION_ERROR_TYPE: &str = "ContentTruncated";
+
 /// OCR configuration captured at job creation time.
 ///
 /// Stored alongside each job so that `aum retry` can detect when OCR settings
@@ -184,8 +190,10 @@ pub enum ErrorFilter<'a> {
     All,
     /// Return only paths with this specific error type.
     Only(&'a str),
-    /// Return paths excluding this specific error type.
-    Exclude(&'a str),
+    /// Return paths that have at least one error NOT in the given set.
+    ///
+    /// An empty slice is treated as [`ErrorFilter::All`].
+    Exclude(&'a [&'a str]),
 }
 
 // ---------------------------------------------------------------------------
