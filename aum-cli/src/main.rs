@@ -36,9 +36,11 @@ enum Commands {
     Reset(commands::reset::ResetArgs),
     /// Ingest documents from a directory into a search index.
     Ingest(commands::ingest::IngestArgs),
-    /// Resume an interrupted or failed ingest job.
+    /// Generate embeddings for documents in a search index.
+    Embed(commands::embed::EmbedArgs),
+    /// Resume an interrupted or failed ingest or embed job.
     Resume(commands::resume::ResumeArgs),
-    /// Retry failed files from a previous ingest job.
+    /// Retry failed files or documents from a previous ingest or embed job.
     Retry(commands::retry::RetryArgs),
     /// List ingest and embed jobs.
     Jobs(commands::jobs::JobsArgs),
@@ -119,6 +121,12 @@ async fn run() -> anyhow::Result<()> {
             commands::ingest::run(&args, &config, backend, tracker).await?;
         }
 
+        Commands::Embed(args) => {
+            let tracker = create_tracker(&config).await;
+            let backend = Arc::new(create_backend(&config)?);
+            commands::embed::run(&args, &config, backend, tracker).await?;
+        }
+
         Commands::Resume(args) => {
             let tracker = create_tracker(&config).await;
             let backend = Arc::new(create_backend(&config)?);
@@ -142,8 +150,9 @@ async fn run() -> anyhow::Result<()> {
         }
 
         Commands::Search(args) => {
+            let tracker = create_tracker(&config).await;
             let backend = create_backend(&config)?;
-            commands::search::run(&args, &backend).await?;
+            commands::search::run(&args, &config, &backend, &tracker).await?;
         }
     }
 

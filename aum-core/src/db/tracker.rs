@@ -121,10 +121,14 @@ impl JobTracker {
         for status in [JobStatus::Running, JobStatus::Pending] {
             let active: Vec<IngestJob> = self.jobs.list_jobs(Some(status)).try_collect().await?;
             for job in active {
-                if !lock::is_locked(lock_dir, &job.source_dir) {
+                let locked = match job.job_type {
+                    JobType::Ingest => lock::is_locked(lock_dir, &job.source_dir),
+                    JobType::Embed => lock::embed_is_locked(lock_dir, &job.index_name),
+                };
+                if !locked {
                     info!(
                         job_id = %job.job_id,
-                        source_dir = %job.source_dir.display(),
+                        job_type = ?job.job_type,
                         "marking stale job as interrupted (lock not held)"
                     );
                     self.jobs

@@ -99,21 +99,40 @@ pub trait SearchBackend: Send + Sync {
     async fn count_unembedded(&self, index: &str) -> Result<u64, SearchError>;
 
     /// Stream batches of documents that do not yet have embedding vectors.
+    ///
+    /// The returned stream is `'static` — implementations must clone/own all
+    /// state so the stream can be sent to a spawned task.
     fn scroll_unembedded(
         &self,
         index: &str,
         batch_size: usize,
-    ) -> BoxStream<'_, Result<Vec<SearchResult>, SearchError>>;
+    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>>;
 
     /// Bulk-update embedding vectors for a set of document IDs.
     ///
     /// `updates` is a list of `(doc_id, chunks)` pairs where each chunk is a
     /// flat embedding vector.
+    ///
+    /// Returns the number of documents that **failed** to update.
     async fn update_embeddings(
         &self,
         index: &str,
         updates: &[(String, Vec<Vec<f32>>)],
     ) -> Result<u64, SearchError>;
+
+    /// Stream batches of documents by their IDs.
+    ///
+    /// Used by embed retry to re-embed specific documents that failed previously.
+    /// Each returned batch contains up to `batch_size` results with their `snippet`
+    /// field populated with the full document content.
+    /// The returned stream is `'static` — implementations must clone/own all
+    /// state so the stream can be sent to a spawned task.
+    fn scroll_documents(
+        &self,
+        index: &str,
+        doc_ids: &[String],
+        batch_size: usize,
+    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>>;
 
     /// Return the subset of `doc_ids` that already exist in the given index.
     ///

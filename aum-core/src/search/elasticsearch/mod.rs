@@ -6,6 +6,7 @@ mod query;
 mod settings;
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use elasticsearch::Elasticsearch;
 use elasticsearch::http::request::JsonBody;
@@ -398,23 +399,29 @@ impl SearchBackend for ElasticsearchBackend {
         &self,
         index: &str,
         batch_size: usize,
-    ) -> BoxStream<'_, Result<Vec<SearchResult>, SearchError>> {
+    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
         let client = self.client.clone();
         let index = index.to_owned();
 
-        let stream = stream::unfold((0usize, false), move |(offset, done)| {
+        // Cursor-based pagination using `search_after` on `_id`.  This is safe
+        // to use when backend writes overlap with fetches because the cursor
+        // advances past already-seen documents regardless of their
+        // `has_embeddings` state.
+        let stream = stream::unfold((None::<String>, false), move |(cursor, done)| {
             let client = client.clone();
             let index = index.clone();
             async move {
                 if done {
                     return None;
                 }
-                let result = fetch_unembedded_page(&client, &index, batch_size, offset).await;
+                let result =
+                    fetch_unembedded_cursor(&client, &index, batch_size, cursor.as_deref()).await;
                 match result {
-                    Err(e) => Some((Err(e), (offset, true))),
+                    Err(e) => Some((Err(e), (cursor, true))),
                     Ok(hits) => {
-                        let exhausted = hits.len() < batch_size;
-                        Some((Ok(hits), (offset + batch_size, exhausted)))
+                        let exhausted = hits.is_empty();
+                        let new_cursor = hits.last().map(|h| h.doc_id.clone());
+                        Some((Ok(hits), (new_cursor.or(cursor), exhausted)))
                     }
                 }
             }
@@ -458,12 +465,50 @@ impl SearchBackend for ElasticsearchBackend {
         let resp_body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
 
         let failures = count_bulk_failures(&resp_body);
-        let succeeded = (updates.len() as u64).saturating_sub(failures);
 
         metrics::histogram!("aum_es_update_embeddings_seconds")
             .record(timer.elapsed().as_secs_f64());
 
-        Ok(succeeded)
+        Ok(failures)
+    }
+
+    fn scroll_documents(
+        &self,
+        index: &str,
+        doc_ids: &[String],
+        batch_size: usize,
+    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+        if doc_ids.is_empty() {
+            return futures::stream::empty().boxed();
+        }
+        let client = self.client.clone();
+        let index = index.to_owned();
+        let doc_ids: Arc<[String]> = doc_ids.to_vec().into();
+
+        let stream = stream::unfold((0usize, false), move |(offset, done)| {
+            let client = client.clone();
+            let index = index.clone();
+            let doc_ids = Arc::clone(&doc_ids);
+            async move {
+                if done {
+                    return None;
+                }
+                let end = (offset + batch_size).min(doc_ids.len());
+                let page_ids = &doc_ids[offset..end];
+                let body = serde_json::json!({
+                    "query": { "ids": { "values": page_ids } },
+                    "size": batch_size,
+                });
+                let result = search_raw(&client, &[&index], body).await;
+                let exhausted = end >= doc_ids.len();
+                match result {
+                    Err(e) => Some((Err(e), (offset, true))),
+                    Ok(hits) => Some((Ok(hits), (end, exhausted))),
+                }
+            }
+        });
+
+        stream.boxed()
     }
 
     #[instrument(skip(self, doc_ids), fields(index, id_count = doc_ids.len()))]
@@ -800,6 +845,25 @@ async fn fetch_unembedded_page(
         "size":  limit,
         "from":  offset,
     });
+    search_raw(client, &[index], body).await
+}
+
+/// Fetch a page of unembedded documents using cursor-based `search_after`
+/// pagination, sorted by `_id`.
+async fn fetch_unembedded_cursor(
+    client: &Elasticsearch,
+    index: &str,
+    limit: usize,
+    search_after: Option<&str>,
+) -> Result<Vec<SearchResult>, SearchError> {
+    let mut body = json!({
+        "query": { "term": { "has_embeddings": false } },
+        "size": limit,
+        "sort": [{ "_id": "asc" }],
+    });
+    if let Some(cursor) = search_after {
+        body["search_after"] = json!([cursor]);
+    }
     search_raw(client, &[index], body).await
 }
 

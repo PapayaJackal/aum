@@ -1,4 +1,4 @@
-//! `aum retry <JOB_ID>` — retry failed files from a previous ingest job.
+//! `aum retry <JOB_ID>` — retry failed files from a previous ingest or embed job.
 
 use std::sync::Arc;
 
@@ -8,13 +8,17 @@ use futures::TryStreamExt as _;
 
 use aum_core::config::AumConfig;
 use aum_core::db::JobTracker;
+use aum_core::embeddings::{EmbedPipeline, EmbedSnapshot};
 use aum_core::ingest::{IngestPipeline, IngestSnapshot};
-use aum_core::models::{EMPTY_EXTRACTION_ERROR_TYPE, ErrorFilter, TRUNCATED_EXTRACTION_ERROR_TYPE};
+use aum_core::models::{
+    EMPTY_EXTRACTION_ERROR_TYPE, ErrorFilter, JobType, TRUNCATED_EXTRACTION_ERROR_TYPE,
+};
 use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
-    CommonIngestArgs, acquire_ingest_lock, build_tika_pool, effective_ocr_settings,
-    initialize_backend, render_progress, resolve_ocr_override,
+    CommonIngestArgs, acquire_embed_lock, acquire_ingest_lock, build_embedder_pool,
+    build_tika_pool, effective_ocr_settings, initialize_backend, render_embed_progress,
+    render_progress, resolve_ocr_override,
 };
 use crate::output::print_job_summary;
 
@@ -58,6 +62,106 @@ pub async fn run(
         .context("failed to query job")?
         .with_context(|| format!("job '{}' not found", args.job_id))?;
 
+    match job.job_type {
+        JobType::Embed => retry_embed(args, config, backend, tracker, &job).await,
+        JobType::Ingest => retry_ingest(args, config, backend, tracker, &job).await,
+    }
+}
+
+async fn retry_embed(
+    args: &RetryArgs,
+    config: &AumConfig,
+    backend: Arc<AumBackend>,
+    tracker: JobTracker,
+    job: &aum_core::models::IngestJob,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        config.embeddings.enabled,
+        "embeddings are not enabled in the configuration (set embeddings.enabled = true)"
+    );
+
+    if args.only.is_some() {
+        anyhow::bail!(
+            "the --only flag is not supported for embed jobs; all failed documents will be retried"
+        );
+    }
+
+    let doc_ids: Vec<String> = tracker
+        .get_failed_doc_ids(&args.job_id)
+        .try_collect()
+        .await
+        .context("failed to read embed error records")?;
+
+    if doc_ids.is_empty() {
+        println!("No failed documents found for embed job '{}'.", args.job_id);
+        return Ok(());
+    }
+
+    println!(
+        "Retrying {} failed document(s) from embed job '{}' (index '{}')…",
+        doc_ids.len(),
+        job.job_id,
+        job.index_name,
+    );
+
+    let _lock = acquire_embed_lock(config, &job.index_name)?;
+    let pool = build_embedder_pool(config)
+        .await
+        .context("failed to build embedder pool")?;
+
+    let batch_size = args
+        .common
+        .batch_size
+        .unwrap_or(config.embeddings.batch_size) as usize;
+    let max_chunk_chars = (config.embeddings.context_length * 4) as usize;
+    let overlap_chars = config.embeddings.chunk_overlap as usize;
+
+    let (progress_tx, progress_rx) = tokio::sync::watch::channel(EmbedSnapshot::default());
+
+    let pipeline = EmbedPipeline::new(
+        Arc::clone(&backend),
+        Arc::clone(&pool),
+        tracker.clone(),
+        job.index_name.clone(),
+        batch_size,
+        max_chunk_chars,
+        overlap_chars,
+    )
+    .with_progress(progress_tx);
+
+    let render_handle = tokio::spawn(render_embed_progress(progress_rx, false));
+    let completed_job = pipeline
+        .run_for_doc_ids(doc_ids)
+        .await
+        .context("embed retry pipeline failed")?;
+    render_handle.abort();
+
+    if completed_job.processed > 0 {
+        let dimension = pool.first_client().dimension();
+        tracker
+            .set_embedding_model(
+                &job.index_name,
+                &config.embeddings.model,
+                &config.embeddings.backend.to_string(),
+                i64::from(dimension),
+            )
+            .await
+            .context("failed to store embedding model metadata")?;
+    }
+
+    print_job_summary(&completed_job);
+    Ok(())
+}
+
+async fn retry_ingest(
+    args: &RetryArgs,
+    config: &AumConfig,
+    backend: Arc<AumBackend>,
+    tracker: JobTracker,
+    job: &aum_core::models::IngestJob,
+) -> anyhow::Result<()> {
+    const AUTO_SKIP: &[&str] = &[EMPTY_EXTRACTION_ERROR_TYPE, TRUNCATED_EXTRACTION_ERROR_TYPE];
+
     let _lock = acquire_ingest_lock(config, &job.source_dir)?;
 
     // Determine which error category to retry.
@@ -67,8 +171,6 @@ pub async fn run(
     // Old jobs (before OCR tracking was added) have no stored settings.
     // Treat them as "unchanged" so empty extractions are not auto-included.
     let ocr_changed = job.ocr_settings.as_ref().is_some_and(|prev| prev != &ocr);
-
-    const AUTO_SKIP: &[&str] = &[EMPTY_EXTRACTION_ERROR_TYPE, TRUNCATED_EXTRACTION_ERROR_TYPE];
 
     let filter = match args.only {
         Some(RetryScope::Empty) => ErrorFilter::Only(EMPTY_EXTRACTION_ERROR_TYPE),

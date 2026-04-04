@@ -1,6 +1,7 @@
 //! CLI subcommand modules.
 
 pub mod config;
+pub mod embed;
 pub mod indices;
 pub mod ingest;
 pub mod init;

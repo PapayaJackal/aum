@@ -30,6 +30,9 @@ pub mod ingest;
 /// Search backend abstraction: Meilisearch client, types, and BatchSink/ExistenceChecker implementations.
 pub mod search;
 
+/// Embedding pipeline: backends (Ollama, OpenAI), text chunking, and orchestration.
+pub mod embeddings;
+
 /// Load config and initialise logging, printing errors to stderr and exiting on failure.
 ///
 /// Call this at the very start of `main()` before any `tracing` macros.

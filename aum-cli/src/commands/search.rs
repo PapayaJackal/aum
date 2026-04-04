@@ -3,7 +3,12 @@
 use clap::Args;
 use futures::TryStreamExt as _;
 use owo_colors::OwoColorize as _;
+use tracing::info;
 
+use aum_core::config::{AumConfig, EmbeddingsBackend};
+use aum_core::db::JobTracker;
+use aum_core::embeddings::{Embedder, OllamaEmbedder, OpenAiEmbedder};
+use aum_core::models::EmbeddingModelInfo;
 use aum_core::search::SearchBackend;
 use aum_core::search::constants::{
     FACET_CREATED, FACET_CREATOR, FACET_EMAIL_ADDRESSES, FACET_FILE_TYPE,
@@ -42,6 +47,13 @@ pub struct SearchArgs {
     /// Sort by field: date:asc, date:desc, size:asc, size:desc.
     #[arg(long)]
     pub sort: Option<String>,
+    /// Use hybrid (keyword + semantic) search instead of text-only.
+    #[arg(long)]
+    pub hybrid: bool,
+    /// Ratio of semantic to keyword score in hybrid search (0.0–1.0).
+    /// Overrides the backend default when set.
+    #[arg(long, value_parser = clap::value_parser!(f32))]
+    pub semantic_ratio: Option<f32>,
     /// Display available facet values.
     #[arg(long)]
     pub show_facets: bool,
@@ -50,7 +62,12 @@ pub struct SearchArgs {
 /// # Errors
 ///
 /// Returns an error if the backend query fails.
-pub async fn run(args: &SearchArgs, backend: &dyn SearchBackend) -> anyhow::Result<()> {
+pub async fn run(
+    args: &SearchArgs,
+    config: &AumConfig,
+    backend: &dyn SearchBackend,
+    tracker: &JobTracker,
+) -> anyhow::Result<()> {
     let indices: Vec<String> = args
         .index
         .split(',')
@@ -110,11 +127,30 @@ pub async fn run(args: &SearchArgs, backend: &dyn SearchBackend) -> anyhow::Resu
         include_facets: false,
     };
 
-    let results: Vec<_> = backend
-        .search_text(request)
-        .try_collect()
-        .await
-        .map_err(|e| anyhow::anyhow!("search failed: {e}"))?;
+    let results: Vec<_> = if args.hybrid {
+        let model_info = validate_embeddings_for_indices(tracker, &indices).await?;
+        let embedder = build_embedder(config, &model_info)?;
+
+        info!(query = %args.query, model = %model_info.model, backend = %model_info.backend, "embedding query for hybrid search");
+        let vector = embedder
+            .embed_query(&args.query)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to embed query: {e}"))?;
+
+        let semantic_ratio = args.semantic_ratio.unwrap_or(0.5);
+
+        backend
+            .search_hybrid(request, &vector, semantic_ratio)
+            .try_collect()
+            .await
+            .map_err(|e| anyhow::anyhow!("hybrid search failed: {e}"))?
+    } else {
+        backend
+            .search_text(request)
+            .try_collect()
+            .await
+            .map_err(|e| anyhow::anyhow!("search failed: {e}"))?
+    };
 
     if results.is_empty() {
         println!("No results found.");
@@ -126,6 +162,73 @@ pub async fn run(args: &SearchArgs, backend: &dyn SearchBackend) -> anyhow::Resu
     }
 
     Ok(())
+}
+
+/// Validate that every index has embeddings and all use the same model.
+async fn validate_embeddings_for_indices(
+    tracker: &JobTracker,
+    indices: &[String],
+) -> anyhow::Result<EmbeddingModelInfo> {
+    let mut model_info: Option<EmbeddingModelInfo> = None;
+
+    for idx in indices {
+        let info = tracker
+            .get_embedding_model(idx)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to query embedding model for index '{idx}': {e}"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No embeddings found for index '{idx}'. Run 'aum embed {idx}' first."
+                )
+            })?;
+
+        if let Some(ref existing) = model_info {
+            if existing.model != info.model || existing.backend != info.backend {
+                anyhow::bail!(
+                    "Embedding model mismatch: index '{}' uses '{}/{}' but index '{idx}' uses '{}/{}'. \
+                     Hybrid search requires all indices to use the same embedding model.",
+                    indices[0],
+                    existing.backend,
+                    existing.model,
+                    info.backend,
+                    info.model,
+                );
+            }
+        } else {
+            model_info = Some(info);
+        }
+    }
+
+    model_info.ok_or_else(|| anyhow::anyhow!("no indices provided"))
+}
+
+/// Build a single embedder instance for query embedding.
+fn build_embedder(
+    config: &AumConfig,
+    model_info: &EmbeddingModelInfo,
+) -> anyhow::Result<Box<dyn Embedder>> {
+    let mut embed_config = config.embeddings.clone();
+    embed_config.model.clone_from(&model_info.model);
+    embed_config.dimension = u32::try_from(model_info.dimension)
+        .map_err(|_| anyhow::anyhow!("invalid embedding dimension: {}", model_info.dimension))?;
+
+    let backend: EmbeddingsBackend = model_info
+        .backend
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!("{e}"))?;
+    embed_config.backend = backend.clone();
+
+    let url = match backend {
+        EmbeddingsBackend::Ollama => &embed_config.ollama_url,
+        EmbeddingsBackend::OpenAi => &embed_config.api_url,
+    };
+
+    let embedder: Box<dyn Embedder> = match backend {
+        EmbeddingsBackend::Ollama => Box::new(OllamaEmbedder::new(&embed_config, url)),
+        EmbeddingsBackend::OpenAi => Box::new(OpenAiEmbedder::new(&embed_config, url)),
+    };
+
+    Ok(embedder)
 }
 
 fn print_result(n: usize, r: &SearchResult) {

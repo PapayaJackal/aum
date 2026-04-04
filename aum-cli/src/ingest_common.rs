@@ -1,13 +1,14 @@
-//! Shared helpers for ingest, resume, and retry commands.
+//! Shared helpers for ingest, resume, retry, and embed commands.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use aum_core::config::AumConfig;
+use aum_core::config::{AumConfig, EmbeddingsBackend};
+use aum_core::embeddings::{EmbedSnapshot, Embedder, OllamaEmbedder, OpenAiEmbedder};
 use aum_core::extraction::TikaExtractor;
 use aum_core::extraction::tika::TikaExtractorConfig;
-use aum_core::ingest::IngestLock;
+use aum_core::ingest::{EmbedLock, IngestLock};
 use aum_core::models::OcrSettings;
 use aum_core::pool::{InstanceDesc, InstancePool, InstancePoolConfig};
 use aum_core::search::{AumBackend, SearchBackend as _};
@@ -62,8 +63,31 @@ pub fn effective_ocr_settings(
     }
 }
 
+/// Acquire an exclusive embed lock for `index_name`, or return an error
+/// explaining that another process already holds it.
+///
+/// # Errors
+///
+/// Returns an error if the lock cannot be acquired or is already held.
+pub fn acquire_embed_lock(config: &AumConfig, index_name: &str) -> anyhow::Result<EmbedLock> {
+    EmbedLock::try_acquire(&config.lock_dir(), index_name)
+        .context("failed to acquire embed lock")?
+        .with_context(|| {
+            let pid = EmbedLock::read_holder_pid(&config.lock_dir(), index_name);
+            format!(
+                "another embed job is already running on index '{}' (holder pid: {})",
+                index_name,
+                pid.map_or_else(|| "unknown".to_owned(), |p| p.to_string())
+            )
+        })
+}
+
 /// Acquire an exclusive ingest lock for `source_dir`, or return an error
 /// explaining that another process already holds it.
+///
+/// # Errors
+///
+/// Returns an error if the lock cannot be acquired or is already held.
 pub fn acquire_ingest_lock(config: &AumConfig, source_dir: &Path) -> anyhow::Result<IngestLock> {
     IngestLock::try_acquire(&config.lock_dir(), source_dir)
         .context("failed to acquire ingest lock")?
@@ -113,6 +137,47 @@ pub fn build_tika_pool(
 
     let pool =
         InstancePool::new(descs, InstancePoolConfig::new("tika")).context("Tika pool is empty")?;
+    Ok(Arc::new(pool))
+}
+
+/// Build an embedder instance pool from config.
+///
+/// For Ollama backends, pulls the configured model on each server before
+/// returning so that the first embed request does not fail with a 404.
+///
+/// # Errors
+///
+/// Returns an error if no embedder instances can be constructed, the pool is
+/// empty, or an Ollama model pull fails.
+pub async fn build_embedder_pool(
+    config: &AumConfig,
+) -> anyhow::Result<Arc<InstancePool<Box<dyn Embedder>>>> {
+    let instances = config.effective_embedder_instances();
+
+    let mut descs: Vec<InstanceDesc<Box<dyn Embedder>>> = Vec::with_capacity(instances.len());
+    for inst in &instances {
+        let client: Box<dyn Embedder> = match config.embeddings.backend {
+            EmbeddingsBackend::Ollama => {
+                let embedder = OllamaEmbedder::new(&config.embeddings, &inst.url);
+                embedder
+                    .ensure_model()
+                    .await
+                    .with_context(|| format!("failed to pull ollama model from {}", inst.url))?;
+                Box::new(embedder)
+            }
+            EmbeddingsBackend::OpenAi => {
+                Box::new(OpenAiEmbedder::new(&config.embeddings, &inst.url))
+            }
+        };
+        descs.push(InstanceDesc {
+            url: inst.url.clone(),
+            client,
+            concurrency: inst.concurrency,
+        });
+    }
+
+    let pool = InstancePool::new(descs, InstancePoolConfig::new("embedder"))
+        .context("embedder pool is empty")?;
     Ok(Arc::new(pool))
 }
 
@@ -304,6 +369,129 @@ pub async fn render_progress(
     apply_snap(&pb, &snap, start);
     if let Some(ref db) = debug_bar {
         apply_debug(db, &snap);
+        db.finish_and_clear();
+    }
+    pb.finish();
+    mp.remove(&pb);
+}
+
+// ---------------------------------------------------------------------------
+// Embed progress rendering
+// ---------------------------------------------------------------------------
+
+/// Build the embed progress message:
+/// `[████████░░░░░░░░░░] embedded/total (pct%)  in_flight:N  fail:N  MM:SS`
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn format_embed_progress_line(snap: &EmbedSnapshot, start: Instant) -> String {
+    let mut parts = Vec::new();
+
+    if snap.total > 0 {
+        let pct = (snap.embedded as f64 / snap.total as f64 * 100.0).min(100.0);
+        let filled = (20.0 * pct / 100.0) as usize;
+        let unfilled = 20 - filled;
+        parts.push(format!(
+            "{}{}{}{} {}",
+            "[".dimmed(),
+            "█".repeat(filled).blue(),
+            "░".repeat(unfilled).blue().dimmed(),
+            "]".dimmed(),
+            format_args!("{}/{} ({pct:.0}%)", snap.embedded, snap.total).white(),
+        ));
+    } else {
+        parts.push(format!(
+            "{}",
+            format_args!("{} embedded", snap.embedded).white()
+        ));
+    }
+
+    parts.push(format!(
+        "{}",
+        format!("in_flight:{}", snap.in_flight).cyan()
+    ));
+
+    if snap.failed > 0 {
+        parts.push(format!("{}", format!("fail:{}", snap.failed).red().bold()));
+    }
+
+    let elapsed = start.elapsed().as_secs();
+    let m = elapsed / 60;
+    let s = elapsed % 60;
+    parts.push(format!("{}", format!("{m:02}:{s:02}").dimmed()));
+
+    parts.join("  ")
+}
+
+/// Render an embed progress bar from a watch receiver until the channel closes.
+///
+/// Returns immediately without displaying anything if stderr is not a TTY.
+///
+/// When `debug` is `true`, a second bar above the progress bar shows the display
+/// paths of documents currently being embedded by each worker.
+pub async fn render_embed_progress(
+    mut rx: tokio::sync::watch::Receiver<EmbedSnapshot>,
+    debug: bool,
+) {
+    use std::io::IsTerminal as _;
+    use std::time::Duration;
+
+    if !std::io::stderr().is_terminal() {
+        while rx.changed().await.is_ok() {}
+        return;
+    }
+
+    let mp = crate::progress::get();
+    let start = Instant::now();
+
+    let debug_bar: Option<ProgressBar> = if debug {
+        let b = mp.add(ProgressBar::new_spinner());
+        b.set_style(
+            ProgressStyle::with_template("{msg}")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+        );
+        Some(b)
+    } else {
+        None
+    };
+
+    let pb = mp.add(ProgressBar::new(0));
+    pb.set_style(
+        ProgressStyle::with_template("{msg}").unwrap_or_else(|_| ProgressStyle::default_bar()),
+    );
+    pb.enable_steady_tick(Duration::from_millis(250));
+
+    loop {
+        let snap = rx.borrow_and_update().clone();
+        if snap.total > 0 {
+            pb.set_length(snap.total);
+        }
+        pb.set_position(snap.embedded);
+        pb.set_message(format_embed_progress_line(&snap, start));
+        if let Some(ref db) = debug_bar {
+            let paths: Vec<String> = snap
+                .in_flight_paths
+                .iter()
+                .map(|p| format!("{}", p.dimmed().cyan()))
+                .collect();
+            db.set_message(if paths.is_empty() {
+                String::new()
+            } else {
+                paths.join("\n")
+            });
+        }
+        if rx.changed().await.is_err() {
+            break;
+        }
+    }
+
+    let snap = rx.borrow().clone();
+    pb.set_length(snap.total);
+    pb.set_position(snap.embedded);
+    pb.set_message(format_embed_progress_line(&snap, start));
+    if let Some(ref db) = debug_bar {
         db.finish_and_clear();
     }
     pb.finish();

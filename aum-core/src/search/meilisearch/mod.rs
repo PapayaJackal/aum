@@ -7,7 +7,7 @@ mod parse;
 mod settings;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use futures::stream::{self, BoxStream, StreamExt as _};
 use meilisearch_sdk::client::Client;
@@ -282,13 +282,54 @@ impl SearchBackend for MeilisearchBackend {
         &self,
         index: &str,
         batch_size: usize,
-    ) -> BoxStream<'_, Result<Vec<SearchResult>, SearchError>> {
-        scroll_filter(
+    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+        scroll_cursor(
             &self.client,
             index.to_owned(),
             "has_embeddings = false".to_owned(),
             batch_size,
         )
+    }
+
+    fn scroll_documents(
+        &self,
+        index: &str,
+        doc_ids: &[String],
+        batch_size: usize,
+    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+        if doc_ids.is_empty() {
+            return futures::stream::empty().boxed();
+        }
+        let client = self.client.clone();
+        let index = index.to_owned();
+        let doc_ids: Arc<[String]> = doc_ids.to_vec().into();
+
+        let stream = stream::unfold((0usize, false), move |(offset, done)| {
+            let client = client.clone();
+            let index = index.clone();
+            let doc_ids = Arc::clone(&doc_ids);
+            async move {
+                if done {
+                    return None;
+                }
+                let end = (offset + batch_size).min(doc_ids.len());
+                let page_ids = &doc_ids[offset..end];
+                let ids_list = page_ids
+                    .iter()
+                    .map(|id| format!("\"{id}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let filter = format!("id IN [{ids_list}]");
+                let result = fetch_filter_page(&client, &index, &filter, batch_size, 0).await;
+                let exhausted = end >= doc_ids.len();
+                match result {
+                    Err(e) => Some((Err(e), (offset, true))),
+                    Ok(hits) => Some((Ok(hits), (end, exhausted))),
+                }
+            }
+        });
+
+        stream.boxed()
     }
 
     #[instrument(skip(self, updates), fields(index, update_count = updates.len()))]
@@ -320,7 +361,9 @@ impl SearchBackend for MeilisearchBackend {
         wait_for_task(task, &self.client, EMBED_TASK_TIMEOUT).await?;
 
         metrics::histogram!("aum_meili_task_wait_seconds").record(timer.elapsed().as_secs_f64());
-        Ok(updates.len() as u64)
+        // Return the number of failed updates. Meilisearch tasks are all-or-nothing:
+        // if wait_for_task succeeded above, all documents were updated successfully.
+        Ok(0)
     }
 
     #[instrument(skip(self, doc_ids), fields(index, id_count = doc_ids.len()))]
@@ -715,34 +758,72 @@ fn filter_stream<'a>(
     stream.boxed()
 }
 
-fn scroll_filter(
+/// Cursor-based scroll: sort by `id` ascending and advance past the last-seen
+/// doc ID.  Unlike draining pagination, this is safe to use when writes overlap
+/// with fetches because the cursor position is independent of the filter result
+/// set.
+fn scroll_cursor(
     client: &Client,
     index: String,
-    filter: String,
+    base_filter: String,
     batch_size: usize,
-) -> BoxStream<'_, Result<Vec<SearchResult>, SearchError>> {
+) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
     let client = client.clone();
 
-    let stream = stream::unfold((0usize, false), move |(offset, done)| {
-        let filter = filter.clone();
+    let stream = stream::unfold((None::<String>, false), move |(cursor, done)| {
+        let base_filter = base_filter.clone();
         let client = client.clone();
         let index = index.clone();
         async move {
             if done {
                 return None;
             }
-            let result = fetch_filter_page(&client, &index, &filter, batch_size, offset).await;
+            let result =
+                fetch_cursor_page(&client, &index, &base_filter, cursor.as_deref(), batch_size)
+                    .await;
             match result {
-                Err(e) => Some((Err(e), (offset, true))),
+                Err(e) => Some((Err(e), (cursor, true))),
                 Ok(hits) => {
-                    let exhausted = hits.len() < batch_size;
-                    Some((Ok(hits), (offset + batch_size, exhausted)))
+                    let exhausted = hits.is_empty();
+                    let new_cursor = hits.last().map(|h| h.doc_id.clone());
+                    Some((Ok(hits), (new_cursor.or(cursor), exhausted)))
                 }
             }
         }
     });
 
     stream.boxed()
+}
+
+async fn fetch_cursor_page(
+    client: &Client,
+    index: &str,
+    base_filter: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    let idx = client.index(index);
+    let mut q = SearchQuery::new(&idx);
+
+    let filter_owned;
+    let filter: &str = if let Some(last_id) = cursor {
+        filter_owned = format!("{base_filter} AND id > '{last_id}'");
+        &filter_owned
+    } else {
+        base_filter
+    };
+
+    q.with_query("")
+        .with_filter(filter)
+        .with_sort(&["id:asc"])
+        .with_limit(limit)
+        .with_offset(0);
+    let resp: SearchResults<Value> = q.execute().await.map_err(SearchError::Meilisearch)?;
+    Ok(resp
+        .hits
+        .iter()
+        .filter_map(|h| parse_hit(&h.result, index, None))
+        .collect())
 }
 
 async fn fetch_filter_page(

@@ -115,6 +115,9 @@ pub(super) fn build_doc_body(doc_id: &str, document: &Document) -> Value {
     flat.insert("extracted_from".into(), Value::String(extracted_from));
     flat.insert("content".into(), Value::String(document.content.clone()));
     flat.insert("has_embeddings".into(), Value::Bool(false));
+    // Opt out of the userProvided embedder requirement — vectors are written
+    // later by `aum embed`. Without this Meilisearch rejects the entire batch.
+    flat.insert("_vectors".into(), serde_json::json!({ "default": null }));
 
     Value::Object(flat)
 }
@@ -164,6 +167,7 @@ mod tests {
         assert_eq!(obj["id"], Value::String("doc1".into()));
         assert_eq!(obj["content"], Value::String("hello world".into()));
         assert_eq!(obj["has_embeddings"], Value::Bool(false));
+        assert_eq!(obj["_vectors"], serde_json::json!({ "default": null }));
         Ok(())
     }
 

@@ -31,7 +31,7 @@ pub(super) static FILTERABLE_ATTRS: &[&str] = &[
 ];
 
 /// Fields that can be used in sort expressions.
-pub(super) static SORTABLE_ATTRS: &[&str] = &["meta_created_year", "meta_file_size"];
+pub(super) static SORTABLE_ATTRS: &[&str] = &["id", "meta_created_year", "meta_file_size"];
 
 /// Fields included in full-text search (order determines ranking priority).
 ///

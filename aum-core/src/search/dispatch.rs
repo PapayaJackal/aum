@@ -252,7 +252,7 @@ impl SearchBackend for AumBackend {
         &self,
         index: &str,
         batch_size: usize,
-    ) -> BoxStream<'_, Result<Vec<SearchResult>, SearchError>> {
+    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.scroll_unembedded(index, batch_size),
@@ -273,6 +273,22 @@ impl SearchBackend for AumBackend {
             AumBackend::Meilisearch(b) => b.update_embeddings(index, updates).await,
             #[cfg(feature = "elasticsearch")]
             AumBackend::Elasticsearch(b) => b.update_embeddings(index, updates).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            AumBackend::_None(n) => match *n {},
+        }
+    }
+
+    fn scroll_documents(
+        &self,
+        index: &str,
+        doc_ids: &[String],
+        batch_size: usize,
+    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+        match self {
+            #[cfg(feature = "meilisearch")]
+            AumBackend::Meilisearch(b) => b.scroll_documents(index, doc_ids, batch_size),
+            #[cfg(feature = "elasticsearch")]
+            AumBackend::Elasticsearch(b) => b.scroll_documents(index, doc_ids, batch_size),
             #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
             AumBackend::_None(n) => match *n {},
         }

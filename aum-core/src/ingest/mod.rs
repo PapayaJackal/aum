@@ -23,10 +23,11 @@ pub mod worker;
 
 pub use doc_id::file_doc_id;
 pub use error::IngestPipelineError;
-pub use lock::IngestLock;
+pub use lock::{EmbedLock, IngestLock};
 pub use pipeline::IngestPipeline;
 pub use progress::{IngestSnapshot, ProgressTx};
 pub use sink::{BatchSink, ExistenceChecker, NoOpChecker, NullSink};
+pub use worker::InFlightState;
 
 use std::path::Path;
 use std::sync::Arc;

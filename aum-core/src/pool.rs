@@ -198,6 +198,19 @@ impl<T: Send + Sync> InstancePool<T> {
     pub fn is_empty(&self) -> bool {
         self.instances.is_empty()
     }
+
+    /// Return a reference to the first instance's client.
+    ///
+    /// Useful for querying properties (e.g. embedding dimension) that are
+    /// identical across all instances in the pool.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pool is empty (impossible for a validly constructed pool).
+    #[must_use]
+    pub fn first_client(&self) -> &T {
+        &self.instances[0].client
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +408,40 @@ impl<T: Send + Sync> InstancePool<T> {
             Err(e) => self.record_failure(instance, &e.to_string()),
         }
 
+        result
+    }
+
+    /// Execute an operation on a pool-selected instance using a boxed future.
+    ///
+    /// This variant is required when the returned future's lifetime depends on
+    /// the `&T` argument (e.g. `async_trait` methods on `dyn Trait`).  The
+    /// closure must satisfy a higher-ranked trait bound so it works for any
+    /// reference lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error produced by the closure.
+    pub async fn run_dyn<R, E>(
+        &self,
+        f: impl for<'a> FnOnce(
+            &'a T,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<R, E>> + Send + 'a>,
+        >,
+    ) -> Result<R, E>
+    where
+        E: std::fmt::Display,
+    {
+        let instance = self.select_instance();
+        let _permit = instance.semaphore.clone().acquire_owned().await.ok();
+        self.emit_acquire_metrics(instance);
+        let start = Instant::now();
+        let result = f(&instance.client).await;
+        self.emit_release_metrics(instance, start.elapsed());
+        match &result {
+            Ok(_) => self.record_success(instance),
+            Err(e) => self.record_failure(instance, &e.to_string()),
+        }
         result
     }
 

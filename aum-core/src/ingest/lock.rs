@@ -1,11 +1,12 @@
-//! flock-based ingest lock for crash detection.
+//! flock-based job locks for crash detection.
 //!
 //! Each ingest job acquires an exclusive advisory lock on a file keyed by the
-//! canonical source directory.  If the process crashes or is killed the OS
-//! automatically releases the lock, allowing [`is_locked`] to detect the stale
-//! job so it can be marked as interrupted.
+//! canonical source directory, and each embed job acquires one keyed by index
+//! name.  If the process crashes or is killed the OS automatically releases
+//! the lock, allowing the stale-job check to mark interrupted jobs correctly.
 //!
-//! Only one ingest job can run per source directory at a time.
+//! Only one job can run per source directory (ingest) or index name (embed)
+//! at a time.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
@@ -95,19 +96,112 @@ impl Drop for IngestLock {
     }
 }
 
-/// Check whether a lock for the given source directory is currently held by
-/// another process.
-///
-/// Returns `true` if the lock file exists and cannot be exclusively locked
-/// (i.e. another live process holds it).
+/// Check whether an ingest lock for the given source directory is currently
+/// held by another process.
 #[must_use]
 pub fn is_locked(lock_dir: &Path, source_dir: &Path) -> bool {
-    let path = lock_path(lock_dir, source_dir);
+    file_is_locked(&lock_path(lock_dir, source_dir))
+}
+
+// ---------------------------------------------------------------------------
+// EmbedLock
+// ---------------------------------------------------------------------------
+
+fn embed_lock_path(lock_dir: &Path, index_name: &str) -> PathBuf {
+    let hash = blake3::hash(index_name.as_bytes());
+    lock_dir.join(format!("embed.{}.lock", &hash.to_hex()[..16]))
+}
+
+/// An exclusive advisory lock for an embed job, backed by
+/// `{lock_dir}/embed.{hash}.lock` where the hash is derived from `index_name`.
+///
+/// The lock is held for the lifetime of this struct.  Dropping it releases the
+/// lock and removes the lock file.  Only one embed job per index can run at a
+/// time.
+pub struct EmbedLock {
+    path: PathBuf,
+    file: File,
+}
+
+impl EmbedLock {
+    /// Try to acquire an exclusive lock for `index_name`.
+    ///
+    /// Returns `Ok(Some(lock))` on success, `Ok(None)` if another process
+    /// holds the lock, or an I/O error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the lock directory cannot be created or the lock
+    /// file cannot be opened/written.
+    pub fn try_acquire(lock_dir: &Path, index_name: &str) -> io::Result<Option<Self>> {
+        fs::create_dir_all(lock_dir)?;
+        let path = embed_lock_path(lock_dir, index_name);
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+
+        if file.try_lock_exclusive().is_err() {
+            return Ok(None);
+        }
+
+        file.set_len(0)?;
+        let mut f = &file;
+        writeln!(f, "pid={}", std::process::id())?;
+        writeln!(f, "index={index_name}")?;
+
+        debug!(path = %path.display(), "acquired embed lock");
+        Ok(Some(Self { path, file }))
+    }
+
+    /// Read the PID from an embed lock file, if present and parseable.
+    #[must_use]
+    pub fn read_holder_pid(lock_dir: &Path, index_name: &str) -> Option<u32> {
+        let path = embed_lock_path(lock_dir, index_name);
+        let text = fs::read_to_string(&path).ok()?;
+        for line in text.lines() {
+            if let Some(val) = line.strip_prefix("pid=") {
+                return val.trim().parse().ok();
+            }
+        }
+        None
+    }
+}
+
+impl Drop for EmbedLock {
+    fn drop(&mut self) {
+        if let Err(e) = self.file.unlock() {
+            warn!(error = %e, path = %self.path.display(), "failed to unlock embed lock");
+        }
+        if let Err(e) = fs::remove_file(&self.path)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            warn!(error = %e, path = %self.path.display(), "failed to remove embed lock file");
+        }
+        debug!(path = %self.path.display(), "released embed lock");
+    }
+}
+
+/// Check whether an embed lock for `index_name` is currently held by another
+/// process.
+#[must_use]
+pub fn embed_is_locked(lock_dir: &Path, index_name: &str) -> bool {
+    file_is_locked(&embed_lock_path(lock_dir, index_name))
+}
+
+// ---------------------------------------------------------------------------
+// Shared helper
+// ---------------------------------------------------------------------------
+
+fn file_is_locked(path: &Path) -> bool {
     let Ok(file) = OpenOptions::new()
         .read(true)
         .write(true)
         .create(false)
-        .open(&path)
+        .open(path)
     else {
         return false;
     };

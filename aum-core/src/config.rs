@@ -51,6 +51,18 @@ impl fmt::Display for EmbeddingsBackend {
     }
 }
 
+impl std::str::FromStr for EmbeddingsBackend {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ollama" => Ok(Self::Ollama),
+            "openai" => Ok(Self::OpenAi),
+            other => Err(format!("unknown embeddings backend: '{other}'")),
+        }
+    }
+}
+
 /// The search backend to use for indexing and querying documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -276,19 +288,19 @@ pub struct TikaConfig {
 #[config_section = "embeddings"]
 pub struct EmbeddingsConfig {
     /// Enable semantic vector embeddings for hybrid search.
-    #[config_default = "false"]
+    #[config_default = "true"]
     pub enabled: bool,
     /// Embeddings backend to use: "ollama" or "openai".
     #[config_default = "ollama"]
     pub backend: EmbeddingsBackend,
     /// Name of the embedding model to use.
-    #[config_default = "snowflake-arctic-embed2"]
+    #[config_default = "qwen3-embedding:0.6b"]
     pub model: String,
     /// Dimension of the embedding vectors produced by the model.
-    #[config_default = "1024"]
+    #[config_default = "256"]
     pub dimension: u32,
     /// Number of text chunks to embed in a single batch request.
-    #[config_default = "8"]
+    #[config_default = "50"]
     pub batch_size: u32,
     /// Maximum token context length supported by the embedding model.
     #[config_default = "8192"]
@@ -297,7 +309,8 @@ pub struct EmbeddingsConfig {
     #[config_default = "200"]
     pub chunk_overlap: u32,
     /// Prefix prepended to query strings before embedding (model-specific).
-    #[config_default = "query: "]
+    /// For Qwen3-Embedding use: "Instruct: <task>\nQuery:"
+    #[config_default = "Instruct: Given a search query in any language, retrieve relevant documents regardless of the document's language\nQuery:"]
     pub query_prefix: String,
     /// List of embedder instances for parallel embedding. If empty, falls back to `ollama_url` or `api_url`.
     #[config_default = "[]"]
@@ -527,7 +540,9 @@ impl AumConfig {
     /// Returns the effective embedder instances to use.
     ///
     /// If `embeddings.instances` is empty, falls back to a single instance
-    /// using `embeddings.ollama_url` (Ollama) or `embeddings.api_url` (OpenAI).
+    /// using `embeddings.ollama_url` (Ollama) or `embeddings.api_url` (OpenAI)
+    /// with concurrency set to `ingest.max_workers` so that one slow embedding
+    /// request cannot starve the entire worker pool.
     #[allow(clippy::doc_markdown)]
     #[must_use]
     pub fn effective_embedder_instances(&self) -> Vec<EmbedderInstance> {
@@ -540,7 +555,7 @@ impl AumConfig {
         };
         vec![EmbedderInstance {
             url,
-            ..Default::default()
+            concurrency: self.ingest.max_workers,
         }]
     }
 }
@@ -745,7 +760,7 @@ mod tests {
     fn test_env_overlay_bool() -> anyhow::Result<()> {
         let cfg = config_from_env(&[("AUM_TIKA__OCR_ENABLED", "true")])?;
         assert!(cfg.tika.ocr_enabled);
-        assert!(!cfg.embeddings.enabled); // untouched default
+        assert!(cfg.embeddings.enabled); // untouched default
         Ok(())
     }
 
@@ -845,7 +860,7 @@ mod tests {
         let instances = cfg.effective_embedder_instances();
         assert_eq!(instances.len(), 1);
         assert_eq!(instances[0].url, "http://custom-ollama:11434");
-        assert_eq!(instances[0].concurrency, 1);
+        assert_eq!(instances[0].concurrency, cfg.ingest.max_workers);
     }
 
     #[test]
