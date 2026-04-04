@@ -21,7 +21,9 @@ use crate::extraction::RecordErrorFn;
 use crate::ingest::sink::{BatchSink, ExistenceChecker};
 use crate::models::Document;
 use crate::search::backend::SearchBackend;
-use crate::search::constants::{FACET_FIELDS, REVERSE_FACET_FIELDS};
+use crate::search::constants::{
+    FACET_FIELDS, HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG, REVERSE_FACET_FIELDS,
+};
 use crate::search::types::{
     BatchIndexResult, FacetMap, FilterMap, SearchError, SearchRequest, SearchResult, SortSpec,
 };
@@ -206,7 +208,7 @@ impl SearchBackend for MeilisearchBackend {
     ) -> Result<Option<SearchResult>, SearchError> {
         let idx = self.client.index(index);
         match idx.get_document::<Value>(doc_id).await {
-            Ok(doc) => Ok(parse_hit(&doc, index, None)),
+            Ok(doc) => Ok(parse_hit(&doc, index, None, None)),
             Err(meilisearch_sdk::errors::Error::Meilisearch(ref e))
                 if e.error_code == meilisearch_sdk::errors::ErrorCode::DocumentNotFound =>
             {
@@ -620,6 +622,8 @@ async fn search_one_index(
         .with_limit(params.limit)
         .with_offset(params.offset)
         .with_attributes_to_highlight(Selectors::Some(&["display_path", "content"]))
+        .with_highlight_pre_tag(HIGHLIGHT_PRE_TAG)
+        .with_highlight_post_tag(HIGHLIGHT_POST_TAG)
         .with_attributes_to_crop(Selectors::Some(&[("content", None)]))
         .with_crop_length(params.crop_length as usize)
         .with_show_ranking_score(true);
@@ -642,7 +646,14 @@ async fn search_one_index(
     let hits: Vec<SearchResult> = resp
         .hits
         .iter()
-        .filter_map(|h| parse_hit(&h.result, name, h.ranking_score))
+        .filter_map(|h| {
+            parse_hit(
+                &h.result,
+                name,
+                h.ranking_score,
+                h.formatted_result.as_ref(),
+            )
+        })
         .collect();
     Ok(hits)
 }
@@ -836,7 +847,7 @@ async fn fetch_cursor_page(
     Ok(resp
         .hits
         .iter()
-        .filter_map(|h| parse_hit(&h.result, index, None))
+        .filter_map(|h| parse_hit(&h.result, index, None, None))
         .collect())
 }
 
@@ -857,6 +868,6 @@ async fn fetch_filter_page(
     Ok(resp
         .hits
         .iter()
-        .filter_map(|h| parse_hit(&h.result, index, None))
+        .filter_map(|h| parse_hit(&h.result, index, None, None))
         .collect())
 }

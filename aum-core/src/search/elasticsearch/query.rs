@@ -5,7 +5,9 @@ use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
-use crate::search::constants::{DATE_FACETS, REVERSE_MIMETYPE_ALIASES};
+use crate::search::constants::{
+    DATE_FACETS, HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG, REVERSE_MIMETYPE_ALIASES,
+};
 use crate::search::types::{FacetMap, FilterMap, SortSpec};
 
 // ---------------------------------------------------------------------------
@@ -175,8 +177,8 @@ pub(super) fn build_knn_body(vector: &[f32], limit: usize, filter_clauses: &[Val
 /// Uses `<mark>` tags to match the Meilisearch backend output.
 pub(super) fn build_highlight(max_analyzed_offset: u64) -> Value {
     json!({
-        "pre_tags":  ["<mark>"],
-        "post_tags": ["</mark>"],
+        "pre_tags":  [HIGHLIGHT_PRE_TAG],
+        "post_tags": [HIGHLIGHT_POST_TAG],
         "max_analyzed_offset": max_analyzed_offset,
         "fields": {
             "content":      { "fragment_size": 200, "number_of_fragments": 1 },

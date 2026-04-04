@@ -17,10 +17,15 @@ use crate::search::utils::string_field;
 /// the JSON — the SDK surfaces the score on the typed hit wrapper rather than
 /// inside the document body, so callers that have access to it should pass it
 /// here.
+///
+/// `formatted` is the `_formatted` map from the SDK's `SearchResult::formatted_result`
+/// field — the SDK extracts it from the hit before exposing `result`, so it must be
+/// passed separately.
 pub(super) fn parse_hit(
     hit: &Value,
     index_name: &str,
     score_override: Option<f64>,
+    formatted: Option<&serde_json::Map<String, Value>>,
 ) -> Option<SearchResult> {
     let obj = hit.as_object()?;
     let doc_id = obj.get("id")?.as_str()?.to_owned();
@@ -33,7 +38,7 @@ pub(super) fn parse_hit(
             .unwrap_or(0.0)
     });
 
-    let (snippet, display_path_highlighted) = extract_formatted(obj, &display_path);
+    let (snippet, display_path_highlighted) = extract_formatted(obj, &display_path, formatted);
     let metadata = extract_metadata(obj);
 
     Some(SearchResult {
@@ -49,9 +54,15 @@ pub(super) fn parse_hit(
     })
 }
 
-/// Extract highlighted snippet and display path from the `_formatted` object.
-fn extract_formatted(obj: &serde_json::Map<String, Value>, display_path: &str) -> (String, String) {
-    let formatted = obj.get("_formatted").and_then(|v| v.as_object());
+/// Extract highlighted snippet and display path from the `_formatted` map.
+///
+/// `formatted` comes from the SDK's `SearchResult::formatted_result` — the SDK
+/// deserialises it into its own field rather than leaving it inside the document.
+fn extract_formatted(
+    obj: &serde_json::Map<String, Value>,
+    display_path: &str,
+    formatted: Option<&serde_json::Map<String, Value>>,
+) -> (String, String) {
     let snippet = formatted
         .and_then(|f| f.get("content"))
         .and_then(|v| v.as_str())
@@ -145,7 +156,7 @@ mod tests {
             "has_embeddings": false,
             "_rankingScore": 0.9,
         });
-        let result = parse_hit(&hit, "aum", None).context("should parse hit")?;
+        let result = parse_hit(&hit, "aum", None, None).context("should parse hit")?;
         assert_eq!(result.doc_id, "doc1");
         assert_eq!(result.display_path, "docs/foo.pdf");
         assert!((result.score - 0.9).abs() < f64::EPSILON);
@@ -160,15 +171,16 @@ mod tests {
             "display_path": "a.txt",
             "extracted_from": "",
             "content": "full content",
-            "_formatted": {
-                "content": "<em>highlighted</em> content",
-                "display_path": "<em>a</em>.txt",
-            },
             "_rankingScore": 0.5,
         });
-        let result = parse_hit(&hit, "idx", None).context("should parse hit")?;
-        assert_eq!(result.snippet, "<em>highlighted</em> content");
-        assert_eq!(result.display_path_highlighted, "<em>a</em>.txt");
+        // The SDK extracts `_formatted` into a separate field before exposing the document.
+        let formatted: serde_json::Map<String, Value> = serde_json::from_value(json!({
+            "content": "<mark>highlighted</mark> content",
+            "display_path": "<mark>a</mark>.txt",
+        }))?;
+        let result = parse_hit(&hit, "idx", None, Some(&formatted)).context("should parse hit")?;
+        assert_eq!(result.snippet, "<mark>highlighted</mark> content");
+        assert_eq!(result.display_path_highlighted, "<mark>a</mark>.txt");
         Ok(())
     }
 
@@ -183,7 +195,7 @@ mod tests {
             "meta_creator": "Alice",
             "_rankingScore": 1.0,
         });
-        let result = parse_hit(&hit, "aum", None).context("should parse hit")?;
+        let result = parse_hit(&hit, "aum", None, None).context("should parse hit")?;
         assert_eq!(
             result.metadata.get("content_type").and_then(|v| v.as_str()),
             Some("application/pdf")

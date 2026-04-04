@@ -171,3 +171,12 @@ pub static REVERSE_FACET_FIELDS: LazyLock<HashMap<&'static str, &'static str>> =
 pub static DATE_FACETS: phf::Set<&'static str> = phf::phf_set! {
     "Created",
 };
+
+// ---------------------------------------------------------------------------
+// Highlight tag constants
+// ---------------------------------------------------------------------------
+
+/// Opening tag injected around highlighted terms by both search backends.
+pub const HIGHLIGHT_PRE_TAG: &str = "<mark>";
+/// Closing tag injected around highlighted terms by both search backends.
+pub const HIGHLIGHT_POST_TAG: &str = "</mark>";
