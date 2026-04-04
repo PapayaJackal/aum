@@ -3,10 +3,12 @@
     facets = {},
     activeFacets = $bindable({}),
     dateFacets = [] as string[],
+    valueLabelFn = undefined,
   }: {
     facets: Record<string, string[]>;
     activeFacets: Record<string, string[]>;
     dateFacets?: string[];
+    valueLabelFn?: (facetKey: string, value: string) => string;
   } = $props();
 
   const dateFacetSet = $derived(new Set(dateFacets));
@@ -127,6 +129,7 @@
         </div>
       {:else}
         {#each values as value}
+          {@const label = valueLabelFn ? valueLabelFn(key, value) : value}
           <label class="flex items-center gap-1.5 text-sm py-0.5 cursor-pointer">
             <input
               type="checkbox"
@@ -134,7 +137,7 @@
               onchange={() => toggleFacet(key, value)}
               class="shrink-0"
             />
-            <span class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0" title={value}>{value}</span>
+            <span class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0" title={label}>{label}</span>
           </label>
         {/each}
       {/if}

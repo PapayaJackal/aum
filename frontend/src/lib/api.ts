@@ -210,13 +210,13 @@ const PREVIEWABLE_TYPES = new Set([
 ]);
 
 export function isPreviewable(metadata: Record<string, string | string[]>): boolean {
-  const ct = metadata["Content-Type"];
+  const ct = metadata["content_type"];
   const contentType = (Array.isArray(ct) ? ct[0] : ct)?.split(";")[0]?.trim().toLowerCase() ?? "";
   return PREVIEWABLE_TYPES.has(contentType);
 }
 
 export function getContentType(metadata: Record<string, string | string[]>): string {
-  const ct = metadata["Content-Type"];
+  const ct = metadata["content_type"];
   return (Array.isArray(ct) ? ct[0] : ct)?.split(";")[0]?.trim().toLowerCase() ?? "";
 }
 

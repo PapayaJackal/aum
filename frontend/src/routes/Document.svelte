@@ -7,6 +7,7 @@
     type DocumentDetail,
     type ThreadMessage,
   } from "../lib/api";
+  import { mimeAlias } from "../lib/mime";
   import { highlightTerms } from "../lib/highlight";
   import HtmlPreview from "../components/HtmlPreview.svelte";
   import ImagePreview from "../components/ImagePreview.svelte";
@@ -37,41 +38,23 @@
   let showAllMeta = $state(false);
   let showRichPreview = $state(true);
 
-  // Human-readable aliases for common Tika metadata keys.
+  // Human-readable aliases for metadata keys returned by the Rust backend (snake_case).
   const KEY_ALIASES: Record<string, string> = {
-    "Content-Type": "Content Type",
-    "dc:creator": "Author",
-    "meta:author": "Author",
-    Author: "Author",
+    content_type: "Content Type",
     creator: "Creator",
-    "dcterms:created": "Created",
-    "Creation-Date": "Created",
-    "meta:creation-date": "Created",
-    "dcterms:modified": "Modified",
-    "Last-Modified": "Modified",
-    "meta:save-date": "Modified",
-    "Content-Length": "File Size",
-    "dc:title": "Title",
-    "dc:subject": "Subject",
-    "dc:description": "Description",
-    "Message-From": "From",
-    "Message-To": "To",
-    "Message-CC": "CC",
-    "Message-BCC": "BCC",
-    subject: "Subject",
-    "pdf:PDFVersion": "PDF Version",
-    "xmpTPg:NPages": "Page Count",
-    "meta:page-count": "Page Count",
-    "meta:word-count": "Word Count",
-    "meta:character-count": "Character Count",
-    "Application-Name": "Application",
-    producer: "Producer",
-    "pdf:docinfo:producer": "Producer",
+    created: "Created",
+    modified: "Modified",
+    file_size: "File Size",
+    email_subject: "Subject",
+    email_from: "From",
+    email_to: "To",
+    email_cc: "CC",
+    email_bcc: "BCC",
+    message_id: "Message ID",
   };
 
   // Keys whose display name should appear in the priority section (default).
   const DEFAULT_PRIORITY = new Set([
-    "Title",
     "Creator",
     "From",
     "To",
@@ -79,10 +62,7 @@
     "Created",
     "Modified",
     "Content Type",
-    "File Type",
     "File Size",
-    "Page Count",
-    "Word Count",
     "Subject",
   ]);
 
@@ -90,33 +70,24 @@
   const EMAIL_PRIORITY_ORDER = ["From", "To", "CC", "BCC", "Subject", "Created", "File Size"];
   const EMAIL_PRIORITY = new Set(EMAIL_PRIORITY_ORDER);
 
-  // Noisy internal keys to hide by default.
-  const HIDDEN_PREFIXES = [
-    "X-TIKA:",
-    "X-Parsed-By",
-    "access_permission:",
-    "pdf:has",
-    "pdf:encrypted",
-    "pdf:unmapped",
-    "pdf:charsPerPage",
-    "pdf:containsDamagedFont",
-    "pdf:totalUnmapped",
-    "resourceName",
-    "pdf:docinfo:custom:",
-  ];
-  // Keys injected by the backend for faceting that shouldn't appear as metadata rows.
-  const HIDDEN_EXACT = new Set(["Email Addresses"]);
+  // Internal keys to hide from the metadata table.
+  const HIDDEN_PREFIXES: string[] = [];
+  // Exact keys to hide (internal faceting fields, email threading, etc.).
+  const HIDDEN_EXACT = new Set(["email_addresses", "created_year", "in_reply_to", "references"]);
 
   // Keys whose values are email addresses and should link to the Email Addresses facet.
-  const EMAIL_KEYS = new Set(["Message-From", "Message-To", "Message-CC", "Message-BCC"]);
+  const EMAIL_KEYS = new Set(["email_from", "email_to", "email_cc", "email_bcc"]);
 
-  // Facet labels (injected by backend) that can be clicked to filter search results.
-  const FACET_LABELS = new Set(["File Type", "Creator", "Created"]);
+  // Maps metadata keys to their facet labels for clickable filter links.
+  const FACET_LABEL_MAP: Record<string, string> = {
+    content_type: "File Type",
+    creator: "Creator",
+  };
 
   function isHidden(key: string): boolean {
-    if (key.startsWith("_aum_")) return true;
     if (HIDDEN_EXACT.has(key)) return true;
-    return HIDDEN_PREFIXES.some((p) => key.startsWith(p));
+    if (HIDDEN_PREFIXES.length > 0) return HIDDEN_PREFIXES.some((p) => key.startsWith(p));
+    return false;
   }
 
   function displayKey(key: string): string {
@@ -174,11 +145,10 @@
     isEmail?: boolean;
     isFileSize?: boolean;
     isDate?: boolean;
+    displayFn?: (v: string) => string;
   };
 
-  let isEmailDoc = $derived(
-    doc?.metadata["File Type"] === "Email" || doc?.metadata["Content-Type"]?.toString().startsWith("message/rfc822"),
-  );
+  let isEmailDoc = $derived(doc?.metadata["content_type"]?.toString().startsWith("message/rfc822") === true);
 
   let metaEntries = $derived.by(() => {
     if (!doc) return { priority: [] as MetaEntry[], extra: [] as MetaEntry[] };
@@ -204,11 +174,12 @@
       // Hide Modified if it matches Created (non-email docs only).
       if (!isEmailDoc && display === "Modified" && typeof value === "string" && value === createdValue) continue;
       seen.add(display);
-      const facetLabel = FACET_LABELS.has(key) ? key : undefined;
+      const facetLabel = FACET_LABEL_MAP[key];
       const isEmail = EMAIL_KEYS.has(key);
       const isFileSize = display === "File Size";
       const isDate = DATE_DISPLAY_KEYS.has(display);
-      const entry: MetaEntry = { key, display, value, facetLabel, isEmail, isFileSize, isDate };
+      const displayFn = key === "content_type" ? mimeAlias : undefined;
+      const entry: MetaEntry = { key, display, value, facetLabel, isEmail, isFileSize, isDate, displayFn };
       if (priorityNames.has(display)) {
         priority.push(entry);
       } else {
@@ -246,19 +217,14 @@
   /** Unified thread: all thread messages plus the current document, sorted by date. */
   let unifiedThread = $derived.by<Array<ThreadMessage & { isCurrent?: boolean }>>(() => {
     if (!doc || !doc.thread.length) return [];
-    let docDate = "";
-    for (const k of ["dcterms:created", "Creation-Date", "meta:creation-date", "created", "date"]) {
-      const v = doc.metadata[k];
-      if (v && typeof v === "string") {
-        docDate = v;
-        break;
-      }
-    }
+    const docDate = typeof doc.metadata["created"] === "string" ? (doc.metadata["created"] as string) : "";
     const currentEntry: ThreadMessage & { isCurrent: boolean } = {
       doc_id: doc.doc_id,
       display_path: doc.display_path,
-      subject: (doc.metadata["dc:subject"] ?? doc.metadata["subject"] ?? "") as string,
-      sender: (doc.metadata["Message-From"] ?? "") as string,
+      subject: (doc.metadata["email_subject"] ?? "") as string,
+      sender: (Array.isArray(doc.metadata["email_from"])
+        ? doc.metadata["email_from"][0]
+        : (doc.metadata["email_from"] ?? "")) as string,
       date: docDate,
       snippet: doc.content?.slice(0, 200) ?? "",
       isCurrent: true,
@@ -398,7 +364,7 @@
         <a
           class="text-(--color-accent) no-underline hover:underline"
           href={facetSearchHref(entry.facetLabel, entry.value)}
-          onclick={handleFacetClick}>{entry.value}</a
+          onclick={handleFacetClick}>{entry.displayFn ? entry.displayFn(entry.value) : entry.value}</a
         >
       {:else if entry.facetLabel && Array.isArray(entry.value)}
         {#each entry.value as v, i}
@@ -407,11 +373,11 @@
           <a
             class="text-(--color-accent) no-underline hover:underline"
             href={facetSearchHref(entry.facetLabel, v)}
-            onclick={handleFacetClick}>{v}</a
+            onclick={handleFacetClick}>{entry.displayFn ? entry.displayFn(v) : v}</a
           >
         {/each}
       {:else}
-        {displayValue(entry.value)}
+        {entry.displayFn ? entry.displayFn(displayValue(entry.value)) : displayValue(entry.value)}
       {/if}
     {/snippet}
 

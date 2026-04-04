@@ -2,6 +2,7 @@
   import type { Snippet } from "svelte";
   import { onMount, untrack } from "svelte";
   import { search, listIndices, type IndexInfo } from "../lib/api";
+  import { mimeAlias } from "../lib/mime";
   import {
     searchState,
     getSearchQs,
@@ -591,7 +592,12 @@
         <aside
           class="shrink-0 basis-[220px] max-w-[220px] min-w-0 mr-4 sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
         >
-          <FacetPanel {facets} bind:activeFacets={searchState.activeFacets} dateFacets={["Created"]} />
+          <FacetPanel
+            {facets}
+            bind:activeFacets={searchState.activeFacets}
+            dateFacets={["Created"]}
+            valueLabelFn={(key, value) => (key === "File Type" ? mimeAlias(value) : value)}
+          />
         </aside>
       {/if}
 
