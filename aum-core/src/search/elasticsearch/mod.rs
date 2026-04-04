@@ -273,6 +273,28 @@ impl SearchBackend for ElasticsearchBackend {
         Ok(parse_hit(&hit, index))
     }
 
+    #[instrument(skip(self), fields(index, display_path))]
+    async fn find_by_display_path(
+        &self,
+        index: &str,
+        display_path: &str,
+    ) -> Result<Option<SearchResult>, SearchError> {
+        let body = json!({
+            "query": { "term": { "display_path": display_path } },
+            "size": 1,
+        });
+        let resp = self
+            .client
+            .search(SearchParts::Index(&[index]))
+            .body(body)
+            .send()
+            .await
+            .map_err(SearchError::Elasticsearch)?;
+        let json: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let (results, _) = parse_hits(&json);
+        Ok(results.into_iter().next())
+    }
+
     #[instrument(skip(self), fields(index))]
     async fn delete_index(&self, index: &str) -> Result<(), SearchError> {
         let resp = self

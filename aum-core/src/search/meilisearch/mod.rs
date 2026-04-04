@@ -216,6 +216,20 @@ impl SearchBackend for MeilisearchBackend {
         }
     }
 
+    #[instrument(skip(self), fields(index, display_path))]
+    async fn find_by_display_path(
+        &self,
+        index: &str,
+        display_path: &str,
+    ) -> Result<Option<SearchResult>, SearchError> {
+        let f = format!(
+            "display_path = \"{}\"",
+            filter::escape_filter_value(display_path)
+        );
+        let hits = fetch_filter_page(&self.client, index, &f, 1, 0).await?;
+        Ok(hits.into_iter().next())
+    }
+
     #[instrument(skip(self), fields(index))]
     async fn delete_index(&self, index: &str) -> Result<(), SearchError> {
         let task = self

@@ -50,6 +50,8 @@ enum Commands {
     Search(commands::search::SearchArgs),
     /// Manage users, invitations, and permissions.
     User(commands::user::UserArgs),
+    /// Start the HTTP API server.
+    Serve,
 }
 
 #[tokio::main]
@@ -161,6 +163,10 @@ async fn run() -> anyhow::Result<()> {
             let pool = aum_core::bootstrap_db(&config).await;
             let auth = aum_core::auth::AuthService::new(pool, &config.auth);
             commands::user::run(&args, &auth, &config).await?;
+        }
+
+        Commands::Serve => {
+            aum_api::serve(config).await?;
         }
     }
 

@@ -111,6 +111,10 @@ pub(super) fn build_doc_body(doc_id: &str, document: &Document) -> Value {
         .unwrap_or_default();
 
     flat.insert("id".into(), Value::String(doc_id.to_owned()));
+    flat.insert(
+        "source_path".into(),
+        Value::String(document.source_path.to_string_lossy().into_owned()),
+    );
     flat.insert("display_path".into(), Value::String(display_path));
     flat.insert("extracted_from".into(), Value::String(extracted_from));
     flat.insert("content".into(), Value::String(document.content.clone()));

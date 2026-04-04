@@ -323,6 +323,22 @@ impl AuthService {
         Ok(invitation)
     }
 
+    /// Validate an invitation token without consuming it.
+    ///
+    /// Returns `Some(invitation)` if the token exists, is unused, and not expired.
+    /// Returns `None` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthError::Db`] on database failure.
+    pub async fn validate_invitation(&self, token: &str) -> AuthResult<Option<Invitation>> {
+        let invitation = self.invitations.get_invitation(token).await?;
+        match invitation {
+            Some(inv) if inv.used_at.is_none() && inv.expires_at > Utc::now() => Ok(Some(inv)),
+            _ => Ok(None),
+        }
+    }
+
     /// Redeem an invitation: validate, create the user, and mark the invitation used.
     ///
     /// # Errors

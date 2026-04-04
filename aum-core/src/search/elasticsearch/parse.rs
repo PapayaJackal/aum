@@ -22,6 +22,7 @@ pub(super) fn parse_hit(hit: &Value, index_name: &str) -> Option<SearchResult> {
     let doc_id = obj.get("_id")?.as_str()?.to_owned();
     let source = obj.get("_source")?.as_object()?;
 
+    let source_path = string_field(source, "source_path");
     let display_path = string_field(source, "display_path");
     let extracted_from = string_field(source, "extracted_from");
     let score = obj.get("_score").and_then(Value::as_f64).unwrap_or(0.0);
@@ -67,6 +68,7 @@ pub(super) fn parse_hit(hit: &Value, index_name: &str) -> Option<SearchResult> {
 
     Some(SearchResult {
         doc_id,
+        source_path,
         display_path,
         display_path_highlighted,
         score,

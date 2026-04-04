@@ -24,6 +24,7 @@ pub(super) fn parse_hit(
 ) -> Option<SearchResult> {
     let obj = hit.as_object()?;
     let doc_id = obj.get("id")?.as_str()?.to_owned();
+    let source_path = string_field(obj, "source_path");
     let display_path = string_field(obj, "display_path");
     let extracted_from = string_field(obj, "extracted_from");
     let score = score_override.unwrap_or_else(|| {
@@ -37,6 +38,7 @@ pub(super) fn parse_hit(
 
     Some(SearchResult {
         doc_id,
+        source_path,
         display_path,
         display_path_highlighted,
         score,

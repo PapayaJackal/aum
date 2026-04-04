@@ -437,6 +437,10 @@ impl TikaExtractor {
                 .await
                 .map_err(|e| io_error(tmp.path(), e))?;
         }
+        async_file
+            .shutdown()
+            .await
+            .map_err(|e| io_error(tmp.path(), e))?;
 
         Ok(tmp)
     }

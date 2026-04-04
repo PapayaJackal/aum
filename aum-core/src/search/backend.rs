@@ -92,6 +92,16 @@ pub trait SearchBackend: Send + Sync {
         references: &'a [String],
     ) -> BoxStream<'a, Result<SearchResult, SearchError>>;
 
+    /// Find a document by its exact display path.
+    ///
+    /// Returns the first match, or `None` if no document has the given path.
+    /// Used to resolve `extracted_from` parent references in the API.
+    async fn find_by_display_path(
+        &self,
+        index: &str,
+        display_path: &str,
+    ) -> Result<Option<SearchResult>, SearchError>;
+
     /// List the names of all available indices on the search backend.
     async fn list_indices(&self) -> Result<Vec<String>, SearchError>;
 

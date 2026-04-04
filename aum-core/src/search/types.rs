@@ -11,6 +11,8 @@ use std::collections::HashMap;
 pub struct SearchResult {
     /// Unique document identifier (hash of source path).
     pub doc_id: String,
+    /// Absolute path to the original file on disk.
+    pub source_path: String,
     /// Human-readable relative path shown in the UI.
     pub display_path: String,
     /// Display path with search-term highlights (may contain HTML tags).

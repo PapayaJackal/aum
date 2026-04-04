@@ -170,6 +170,21 @@ impl SearchBackend for AumBackend {
         }
     }
 
+    async fn find_by_display_path(
+        &self,
+        index: &str,
+        display_path: &str,
+    ) -> Result<Option<SearchResult>, SearchError> {
+        match self {
+            #[cfg(feature = "meilisearch")]
+            AumBackend::Meilisearch(b) => b.find_by_display_path(index, display_path).await,
+            #[cfg(feature = "elasticsearch")]
+            AumBackend::Elasticsearch(b) => b.find_by_display_path(index, display_path).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            AumBackend::_None(n) => match *n {},
+        }
+    }
+
     async fn delete_index(&self, index: &str) -> Result<(), SearchError> {
         match self {
             #[cfg(feature = "meilisearch")]

@@ -29,3 +29,4 @@ anyhow = { workspace = true }
 owo-colors = { workspace = true }
 dhat = { workspace = true, optional = true }
 rpassword = "7.4.0"
+aum-api = { version = "0.3.0", path = "../aum-api" }

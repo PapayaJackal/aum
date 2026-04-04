@@ -350,6 +350,9 @@ pub struct ServerConfig {
     /// Port to bind the API server to.
     #[config_default = "8000"]
     pub port: u16,
+    /// Default search index name used when no index is specified in API requests.
+    #[config_default = "aum"]
+    pub default_index: String,
     /// Enable the OpenAPI documentation UI at `/docs`.
     #[allow(clippy::doc_markdown)]
     #[config_default = "false"]
