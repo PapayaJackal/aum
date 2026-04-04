@@ -22,26 +22,17 @@ pub fn normalize_message_id(raw: &str) -> String {
 /// Extract the bare email address from an RFC 2822 address string.
 ///
 /// Handles both `"Name <user@example.com>"` and plain `"user@example.com"` forms.
-/// Returns `None` if the result would be empty.
+/// Returns `None` if the extracted value contains no `@`.
 #[must_use]
 pub fn extract_email(raw: &str) -> Option<String> {
-    if let (Some(start), Some(end)) = (raw.find('<'), raw.find('>'))
+    let addr = if let (Some(start), Some(end)) = (raw.find('<'), raw.find('>'))
         && start < end
     {
-        // Angle-bracket form: return the inner address or None.
-        let addr = raw[start + 1..end].trim();
-        return if addr.is_empty() {
-            None
-        } else {
-            Some(addr.to_owned())
-        };
-    }
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
+        raw[start + 1..end].trim()
     } else {
-        Some(trimmed.to_owned())
-    }
+        raw.trim()
+    };
+    addr.contains('@').then(|| addr.to_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +121,13 @@ mod tests {
     fn extract_email_empty_brackets_returns_none() {
         assert_eq!(extract_email("<>"), None);
         assert_eq!(extract_email("Name <>"), None);
+    }
+
+    #[test]
+    fn extract_email_undisclosed_recipients_returns_none() {
+        assert_eq!(extract_email("undisclosed-recipients:;"), None);
+        assert_eq!(extract_email("undisclosed-recipients: ;"), None);
+        assert_eq!(extract_email("Recipients <undisclosed>"), None);
     }
 
     #[test]
