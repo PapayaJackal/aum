@@ -57,8 +57,12 @@ pub fn extract_email_html(file_path: &Path) -> Result<Vec<u8>, ApiError> {
             cid_map.get(cid_key).cloned().unwrap_or_default()
         });
 
-        // Sanitize HTML to prevent XSS.
-        ammonia::clean(&replaced)
+        // Sanitize HTML but allow data: URIs so that inline images (cid: → data:)
+        // survive. The frontend DOMPurify adds a second layer that restricts
+        // img src to data:image/ only.
+        let mut builder = ammonia::Builder::default();
+        builder.add_url_schemes(["data"]);
+        builder.clean(&replaced).to_string()
     } else {
         // Wrap plain text in minimal HTML.
         let escaped = text_part
@@ -124,5 +128,81 @@ fn collect_parts(
     // Recurse into sub-parts.
     for sub in &mail.subparts {
         collect_parts(sub, cid_map, html_part, text_part);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write as _;
+
+    use super::*;
+
+    /// Minimal 1×1 red PNG, base64-encoded, used as inline image fixture.
+    const TINY_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
+
+    fn write_temp_eml(content: &[u8]) -> (tempfile::NamedTempFile, std::path::PathBuf) {
+        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
+        f.write_all(content).expect("write eml");
+        let path = f.path().to_owned();
+        (f, path)
+    }
+
+    /// Build a multipart/related EML with an HTML part that references an
+    /// inline image via `cid:`.
+    fn make_eml_with_inline_image() -> Vec<u8> {
+        let boundary = "TEST_BOUNDARY_42";
+        let cid = "img001@example.com";
+        format!(
+            "MIME-Version: 1.0\r\n\
+             Content-Type: multipart/related; boundary=\"{boundary}\"\r\n\
+             \r\n\
+             --{boundary}\r\n\
+             Content-Type: text/html; charset=utf-8\r\n\
+             \r\n\
+             <html><body><img src=\"cid:{cid}\"></body></html>\r\n\
+             --{boundary}\r\n\
+             Content-Type: image/png\r\n\
+             Content-ID: <{cid}>\r\n\
+             Content-Transfer-Encoding: base64\r\n\
+             \r\n\
+             {TINY_PNG_B64}\r\n\
+             --{boundary}--\r\n",
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn inline_image_cid_resolved_to_data_uri() -> anyhow::Result<()> {
+        let eml = make_eml_with_inline_image();
+        let (_tmp, path) = write_temp_eml(&eml);
+
+        let html = String::from_utf8(extract_email_html(&path)?)?;
+
+        // The cid: reference must be gone.
+        assert!(
+            !html.contains("cid:"),
+            "cid: reference was not replaced: {html}"
+        );
+        // The img src must be a data:image/ URI.
+        assert!(
+            html.contains("src=\"data:image/png;base64,"),
+            "expected data:image/png src in output: {html}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn plain_text_fallback_is_escaped() -> anyhow::Result<()> {
+        let eml = b"MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\n<hello & world>\r\n";
+        let (_tmp, path) = write_temp_eml(eml);
+
+        let html = String::from_utf8(extract_email_html(&path)?)?;
+
+        assert!(html.contains("&lt;hello"), "< should be escaped: {html}");
+        assert!(html.contains("&amp;"), "&amp; should be escaped: {html}");
+        assert!(!html.contains("<hello"), "raw < must not appear: {html}");
+
+        Ok(())
     }
 }

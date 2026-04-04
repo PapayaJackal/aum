@@ -38,6 +38,24 @@ pub enum ApiError {
     Internal(String),
 }
 
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BadRequest(msg)
+            | Self::Unauthorized(msg)
+            | Self::Forbidden(msg)
+            | Self::NotFound(msg)
+            | Self::Conflict(msg)
+            | Self::UnsupportedMediaType(msg)
+            | Self::UnprocessableEntity(msg)
+            | Self::RateLimited(msg)
+            | Self::Internal(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ApiError {}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {

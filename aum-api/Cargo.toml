@@ -37,3 +37,6 @@ indexmap = { version = "2.13.1", features = ["serde"] }
 
 [features]
 bundle-frontend = ["dep:rust-embed"]
+
+[dev-dependencies]
+tempfile.workspace = true
