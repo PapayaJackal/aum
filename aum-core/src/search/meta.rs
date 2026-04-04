@@ -187,10 +187,11 @@ pub fn extract_indexed_meta<S: std::hash::BuildHasher>(
             continue;
         };
         for raw in as_string_list(val).iter() {
-            if let Some(addr) = extract_email(raw)
-                && seen.insert(addr.clone())
-            {
-                out.email_addresses.push(addr);
+            if let Some(addr) = extract_email(raw) {
+                let lower = addr.to_lowercase();
+                if seen.insert(lower.clone()) {
+                    out.email_addresses.push(lower);
+                }
             }
         }
     }
@@ -289,5 +290,21 @@ mod tests {
                 .contains(&"alice@example.com".to_owned())
         );
         assert!(out.email_addresses.contains(&"bob@example.com".to_owned()));
+    }
+
+    #[test]
+    fn extract_email_addresses_case_insensitive_dedup() {
+        let mut md: HashMap<String, MetadataValue> = HashMap::new();
+        md.insert(
+            "Message-From".into(),
+            MetadataValue::Single("ALICE@EXAMPLE.COM".into()),
+        );
+        md.insert(
+            "Message-To".into(),
+            MetadataValue::Single("alice@example.com".into()),
+        );
+        let out = extract_indexed_meta(&md);
+        assert_eq!(out.email_addresses.len(), 1);
+        assert_eq!(out.email_addresses[0], "alice@example.com");
     }
 }
