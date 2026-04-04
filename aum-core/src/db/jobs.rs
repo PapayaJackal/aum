@@ -346,6 +346,29 @@ impl JobRepository for SqlxJobRepository {
         record_db_metrics("clear_index", "jobs", start, true);
         Ok(deleted)
     }
+
+    async fn get_source_dirs_for_index(&self, index_name: &str) -> DbResult<Vec<PathBuf>> {
+        #[derive(sqlx::FromRow)]
+        struct DirRow {
+            source_dir: String,
+        }
+
+        let start = Instant::now();
+        let rows = sqlx::query_as::<sqlx::Any, DirRow>(
+            "SELECT DISTINCT source_dir FROM jobs \
+             WHERE index_name = $1 AND job_type = $2",
+        )
+        .bind(index_name)
+        .bind(job_type_str(JobType::Ingest))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(DbError::from)?;
+        record_db_metrics("get_source_dirs_for_index", "jobs", start, true);
+        Ok(rows
+            .into_iter()
+            .map(|r| PathBuf::from(r.source_dir))
+            .collect())
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -146,13 +146,10 @@ pub struct DocumentResponse {
     /// Document metadata.
     pub metadata: HashMap<String, serde_json::Value>,
     /// Documents extracted from this container (e.g. files within an archive).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentResponse>,
     /// Parent container this document was extracted from.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub extracted_from: Option<ExtractedFromResponse>,
     /// Other messages in the same email thread.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub thread: Vec<ThreadMessageResponse>,
 }
 

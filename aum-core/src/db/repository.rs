@@ -5,7 +5,7 @@
 //! `embeddings` modules. Tests can supply in-memory or mock implementations
 //! without touching real database state.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -71,6 +71,13 @@ pub trait JobRepository: Send + Sync {
     ///
     /// Returns the number of job rows deleted.
     async fn clear_index(&self, index_name: &str) -> DbResult<u64>;
+
+    /// Return the distinct source directories used by all ingest jobs for the
+    /// given index.
+    ///
+    /// Used for path-containment checks when serving downloaded or previewed
+    /// files to prevent symlink traversal outside the dataset directory.
+    async fn get_source_dirs_for_index(&self, index_name: &str) -> DbResult<Vec<PathBuf>>;
 }
 
 // ---------------------------------------------------------------------------
