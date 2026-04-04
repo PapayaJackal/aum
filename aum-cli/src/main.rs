@@ -48,6 +48,8 @@ enum Commands {
     Job(commands::job::JobArgs),
     /// Search documents in an index.
     Search(commands::search::SearchArgs),
+    /// Manage users, invitations, and permissions.
+    User(commands::user::UserArgs),
 }
 
 #[tokio::main]
@@ -153,6 +155,12 @@ async fn run() -> anyhow::Result<()> {
             let tracker = create_tracker(&config).await;
             let backend = create_backend(&config)?;
             commands::search::run(&args, &config, &backend, &tracker).await?;
+        }
+
+        Commands::User(args) => {
+            let pool = aum_core::bootstrap_db(&config).await;
+            let auth = aum_core::auth::AuthService::new(pool, &config.auth);
+            commands::user::run(&args, &auth, &config).await?;
         }
     }
 

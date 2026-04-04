@@ -28,3 +28,4 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 owo-colors = { workspace = true }
 dhat = { workspace = true, optional = true }
+rpassword = "7.4.0"

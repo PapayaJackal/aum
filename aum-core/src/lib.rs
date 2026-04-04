@@ -33,6 +33,9 @@ pub mod search;
 /// Embedding pipeline: backends (Ollama, OpenAI), text chunking, and orchestration.
 pub mod embeddings;
 
+/// Authentication and authorization: local auth, sessions, invitations, permissions, rate limiting.
+pub mod auth;
+
 /// Load config and initialise logging, printing errors to stderr and exiting on failure.
 ///
 /// Call this at the very start of `main()` before any `tracing` macros.

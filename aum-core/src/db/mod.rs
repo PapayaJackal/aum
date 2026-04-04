@@ -29,6 +29,19 @@ pub mod tracker;
 
 use std::time::Instant;
 
+use chrono::{DateTime, Utc};
+
+/// Parse an RFC 3339 timestamp stored in the database into a `DateTime<Utc>`.
+///
+/// Panics if the string is not valid RFC 3339 — this is intentional because
+/// all timestamps are written by the application and corruption is a bug.
+pub(crate) fn parse_dt(s: &str) -> DateTime<Utc> {
+    #[allow(clippy::expect_used)]
+    DateTime::parse_from_rfc3339(s)
+        .expect("timestamps in the database are always valid RFC3339")
+        .with_timezone(&Utc)
+}
+
 /// Record query count and duration metrics for a database operation.
 pub(crate) fn record_db_metrics(
     op: &'static str,

@@ -380,6 +380,12 @@ pub struct AuthConfig {
     /// Disable authentication and allow all requests without credentials.
     #[config_default = "false"]
     pub public_mode: bool,
+    /// Minimum password length for user accounts.
+    #[config_default = "8"]
+    pub password_min_length: u32,
+    /// Session token lifetime in hours (default: 168 = 7 days). Sessions are automatically renewed on use.
+    #[config_default = "168"]
+    pub session_expire_hours: i64,
 }
 
 /// Configuration for log output.

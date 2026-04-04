@@ -11,3 +11,4 @@ pub mod reset;
 pub mod resume;
 pub mod retry;
 pub mod search;
+pub mod user;

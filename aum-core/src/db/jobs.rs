@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 use sqlx::AnyPool;
@@ -14,6 +14,7 @@ use tracing_futures::Instrument as _;
 use crate::models::{IngestError, IngestJob, JobProgress, JobStatus, JobType, OcrSettings};
 
 use super::error::{DbError, DbResult};
+use super::parse_dt;
 use super::repository::JobRepository;
 
 // ---------------------------------------------------------------------------
@@ -56,13 +57,6 @@ fn parse_job_type(s: &str) -> JobType {
         "embed" => JobType::Embed,
         _ => JobType::Ingest,
     }
-}
-
-fn parse_dt(s: &str) -> DateTime<Utc> {
-    #[allow(clippy::expect_used)] // DB timestamps are always valid RFC3339; corrupt data is a bug
-    DateTime::parse_from_rfc3339(s)
-        .expect("timestamps in the database are always valid RFC3339")
-        .with_timezone(&Utc)
 }
 
 /// Column list shared by all `jobs` SELECT queries.
