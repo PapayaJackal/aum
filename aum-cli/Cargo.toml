@@ -9,6 +9,9 @@ license.workspace = true
 name = "aum"
 path = "src/main.rs"
 
+[features]
+dhat-heap = ["dep:dhat"]
+
 [lints]
 workspace = true
 
@@ -24,3 +27,4 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 owo-colors = { workspace = true }
+dhat = { workspace = true, optional = true }

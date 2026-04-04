@@ -1,5 +1,9 @@
 //! aum command-line interface.
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
@@ -65,6 +69,9 @@ async fn create_tracker(config: &aum_core::config::AumConfig) -> aum_core::db::J
 }
 
 async fn run() -> anyhow::Result<()> {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     let cli = Cli::parse();
 
     // Load config and initialise the global MultiProgress before starting the
