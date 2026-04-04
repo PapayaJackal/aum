@@ -156,6 +156,15 @@ pub static FACET_FIELDS: phf::Map<&'static str, &'static str> = phf::phf_map! {
     "Email Addresses" => "meta_email_addresses",
 };
 
+/// Canonical display order for facet panels: Created, File Type, Creator, Email Addresses.
+/// Unknown facets fall after this list.
+pub const FACET_ORDER: &[&str] = &[
+    FACET_CREATED,
+    FACET_FILE_TYPE,
+    FACET_CREATOR,
+    FACET_EMAIL_ADDRESSES,
+];
+
 /// Maps indexed Meilisearch field names back to their facet display labels.
 ///
 /// Derived from [`FACET_FIELDS`] at first use.

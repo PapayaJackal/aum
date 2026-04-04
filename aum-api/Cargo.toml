@@ -33,6 +33,7 @@ futures = { workspace = true }
 anyhow = { workspace = true }
 tokio-util.workspace = true
 rust-embed = { version = "8.11.0", optional = true }
+indexmap = { version = "2.13.1", features = ["serde"] }
 
 [features]
 bundle-frontend = ["dep:rust-embed"]

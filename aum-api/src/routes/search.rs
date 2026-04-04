@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use indexmap::IndexMap;
+
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
@@ -13,6 +15,7 @@ use futures::StreamExt as _;
 use tracing::info;
 
 use aum_core::search::backend::SearchBackend;
+use aum_core::search::constants::FACET_ORDER;
 use aum_core::search::types::{FilterMap, SearchRequest, SearchResult, SortSpec};
 use aum_core::search::utils::normalize_message_id;
 
@@ -283,17 +286,35 @@ pub async fn search(
     }))
 }
 
+/// Sort the values of a facet by count descending, returning just the value strings.
+fn sort_facet_values(counts: &HashMap<String, u64>) -> Vec<String> {
+    let mut values: Vec<(&str, u64)> = counts.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    values.sort_by(|a, b| b.1.cmp(&a.1));
+    values.into_iter().map(|(v, _)| v.to_owned()).collect()
+}
+
 /// Convert full facet distribution to a simplified list of values per facet label.
-fn simplify_facets(facets: &HashMap<String, HashMap<String, u64>>) -> HashMap<String, Vec<String>> {
-    facets
-        .iter()
-        .map(|(label, counts)| {
-            let mut values: Vec<(String, u64)> =
-                counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
-            values.sort_by(|a, b| b.1.cmp(&a.1));
-            (label.clone(), values.into_iter().map(|(v, _)| v).collect())
-        })
-        .collect()
+///
+/// Returns an `IndexMap` with facets in the canonical display order defined by
+/// [`FACET_ORDER`]. Any unknown facets are appended after the known ones.
+fn simplify_facets(
+    facets: &HashMap<String, HashMap<String, u64>>,
+) -> IndexMap<String, Vec<String>> {
+    let mut map = IndexMap::with_capacity(facets.len());
+
+    for &label in FACET_ORDER {
+        if let Some(counts) = facets.get(label) {
+            map.insert(label.to_owned(), sort_facet_values(counts));
+        }
+    }
+
+    for (label, counts) in facets {
+        if !map.contains_key(label.as_str()) {
+            map.insert(label.clone(), sort_facet_values(counts));
+        }
+    }
+
+    map
 }
 
 /// Embed a query string using the appropriate model for the given indices.

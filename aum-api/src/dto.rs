@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -37,7 +39,8 @@ pub struct SearchResponse {
     pub total: u64,
     /// Facet distributions (only on first page or when filters are applied).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub facets: Option<HashMap<String, Vec<String>>>,
+    #[schema(value_type = Option<HashMap<String, Vec<String>>>)]
+    pub facets: Option<IndexMap<String, Vec<String>>>,
 }
 
 /// Search type discriminator.
