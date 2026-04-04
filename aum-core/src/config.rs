@@ -412,8 +412,8 @@ pub struct IngestConfig {
     /// Maximum depth to recurse into nested archives during extraction.
     #[config_default = "5"]
     pub max_extract_depth: u32,
-    /// Maximum size in bytes of document text content to store and index.
-    #[config_default = "10485760"]
+    /// Maximum character count of document text content to store and index; 0 means unlimited.
+    #[config_default = "100000"]
     pub max_content_length: u64,
 }
 
