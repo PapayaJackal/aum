@@ -273,7 +273,7 @@ impl EmbedPipeline {
     ) -> Result<(), EmbedPipelineError> {
         let embedded = Arc::new(AtomicU64::new(0));
         let failed = Arc::new(AtomicU64::new(0));
-        let in_flight_state = InFlightState::default();
+        let in_flight_state = InFlightState::new(self.debug);
 
         // Stage 1 → Stage 2 channel: scroll source sends chunked docs to the
         // embed dispatcher.
@@ -296,7 +296,6 @@ impl EmbedPipeline {
         let job_id_owned = job_id.to_owned();
         let in_flight_clone = in_flight_state.clone();
         let failed_clone = Arc::clone(&failed);
-        let debug = self.debug;
         let dispatcher_handle = tokio::spawn(async move {
             Self::embed_dispatcher(
                 pool,
@@ -306,7 +305,6 @@ impl EmbedPipeline {
                 &job_id_owned,
                 in_flight_clone,
                 failed_clone,
-                debug,
             )
             .await;
         });
@@ -381,10 +379,6 @@ impl EmbedPipeline {
     /// A semaphore caps concurrency so that a new embed starts as soon as any
     /// in-flight embed completes — no batch boundaries, no head-of-line
     /// blocking.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "all parameters are required by the pipeline stage"
-    )]
     async fn embed_dispatcher(
         pool: Arc<InstancePool<Box<dyn Embedder>>>,
         mut rx: mpsc::Receiver<EmbedItem>,
@@ -393,7 +387,6 @@ impl EmbedPipeline {
         job_id: &str,
         in_flight: InFlightState,
         embed_failed: Arc<AtomicU64>,
-        debug: bool,
     ) {
         let max_workers = pool.total_concurrency() as usize;
         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_workers));
@@ -411,9 +404,7 @@ impl EmbedPipeline {
             let embed_failed = Arc::clone(&embed_failed);
 
             tokio::spawn(async move {
-                if debug {
-                    in_flight.add_path(&item.display_path);
-                }
+                in_flight.add_path(&item.display_path);
 
                 let outcome = pool.run_dyn(move |e| e.embed_documents(item.chunks)).await;
 
@@ -441,9 +432,7 @@ impl EmbedPipeline {
                     }
                 };
 
-                if debug {
-                    in_flight.remove_path(&item.display_path);
-                }
+                in_flight.remove_path(&item.display_path);
 
                 let _ = result_tx.send(msg).await;
                 drop(permit);
@@ -652,19 +641,13 @@ impl EmbedPipeline {
         let Some(ref tx) = self.progress_tx else {
             return;
         };
-        // In non-debug mode the set is always empty (add_path/remove_path are
-        // guarded by `if debug`), so snapshot() is essentially free.
         let (in_flight_count, in_flight_paths) = in_flight_state.snapshot();
         tx.send_replace(EmbedSnapshot {
             total,
             embedded: embedded.load(Ordering::Relaxed),
             failed: failed.load(Ordering::Relaxed),
             in_flight: in_flight_count,
-            in_flight_paths: if self.debug {
-                in_flight_paths
-            } else {
-                Vec::new()
-            },
+            in_flight_paths,
         });
     }
 }

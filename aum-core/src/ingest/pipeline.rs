@@ -209,7 +209,7 @@ impl PipelineCounters {
             discovered: Arc::new(AtomicU64::new(0)),
             skip_count: Arc::new(AtomicU64::new(0)),
             scan_done: Arc::new(AtomicBool::new(false)),
-            in_flight: InFlightState::default(),
+            in_flight: InFlightState::new(true),
         }
     }
 }

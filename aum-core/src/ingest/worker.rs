@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use futures::StreamExt as _;
@@ -25,39 +26,67 @@ use crate::pool::InstancePool;
 
 /// Shared state tracking which files are currently in extraction.
 ///
-/// Cheap to clone: the inner `Arc` bumps a reference count.  Uses a
-/// [`HashSet`](std::collections::HashSet) so that `remove_path` is O(1)
-/// instead of the O(n) `Vec::retain` that caused lock contention when many
-/// workers competed for the mutex.
-#[derive(Clone, Default)]
+/// Cheap to clone: the inner `Arc` bumps a reference count.  Uses an atomic
+/// counter (always updated) plus an optional [`HashSet`] of paths (populated
+/// only when `debug` is true) to avoid mutex overhead on hot paths in
+/// production.
+#[derive(Clone)]
 pub struct InFlightState {
+    debug: bool,
+    count: Arc<AtomicU64>,
     paths: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl InFlightState {
+    /// Create a new `InFlightState`.  When `debug` is true, path strings are
+    /// tracked and returned by [`snapshot`](Self::snapshot); otherwise only
+    /// the count is maintained.
+    #[must_use]
+    pub fn new(debug: bool) -> Self {
+        Self {
+            debug,
+            count: Arc::new(AtomicU64::new(0)),
+            paths: Arc::default(),
+        }
+    }
+
     /// Register `path` as in-flight.
     pub fn add_path(&self, path: &str) {
-        self.paths
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(path.to_owned());
+        self.count.fetch_add(1, Ordering::Relaxed);
+        if self.debug {
+            self.paths
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(path.to_owned());
+        }
     }
 
     /// Deregister `path`.
     pub fn remove_path(&self, path: &str) {
-        self.paths
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(path);
+        self.count.fetch_sub(1, Ordering::Relaxed);
+        if self.debug {
+            self.paths
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(path);
+        }
     }
 
-    /// Returns `(count, paths_clone)` in a single lock acquisition.
+    /// Returns `(count, paths_clone)`.  The count is always accurate; the
+    /// path vec is empty unless constructed with `debug = true`.
     pub fn snapshot(&self) -> (u64, Vec<String>) {
-        let guard = self
-            .paths
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (guard.len() as u64, guard.iter().cloned().collect())
+        let count = self.count.load(Ordering::Relaxed);
+        let paths = if self.debug {
+            self.paths
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        (count, paths)
     }
 }
 
@@ -394,7 +423,7 @@ mod tests {
         let (path_tx, path_rx) = mpsc::channel(10);
         let (result_tx, mut result_rx) = mpsc::channel(10);
 
-        let in_flight = InFlightState::default();
+        let in_flight = InFlightState::new(false);
         let handle = spawn_dispatcher(pool, path_rx, result_tx, tracker, "wj1", 2, in_flight);
 
         path_tx.send(PathBuf::from("/tmp/test.txt")).await?;
@@ -440,7 +469,7 @@ mod tests {
         let (path_tx, path_rx) = mpsc::channel(10);
         let (result_tx, mut result_rx) = mpsc::channel(10);
 
-        let in_flight = InFlightState::default();
+        let in_flight = InFlightState::new(false);
         let handle = spawn_dispatcher(pool, path_rx, result_tx, tracker, "wj2", 1, in_flight);
 
         path_tx.send(PathBuf::from("/tmp/bad.pdf")).await?;
@@ -479,7 +508,7 @@ mod tests {
         let (path_tx, path_rx) = mpsc::channel(10);
         let (result_tx, mut result_rx) = mpsc::channel(10);
 
-        let in_flight = InFlightState::default();
+        let in_flight = InFlightState::new(false);
         let handle = spawn_dispatcher(pool, path_rx, result_tx, tracker, "wj3", 1, in_flight);
 
         path_tx.send(PathBuf::from("/tmp/empty.txt")).await?;
@@ -527,7 +556,7 @@ mod tests {
         let (path_tx, path_rx) = mpsc::channel(num_files);
         let (result_tx, mut result_rx) = mpsc::channel(num_files);
 
-        let in_flight = InFlightState::default();
+        let in_flight = InFlightState::new(false);
         let handle = spawn_dispatcher(
             pool,
             path_rx,
