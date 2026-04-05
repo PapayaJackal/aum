@@ -189,7 +189,7 @@ Enable embeddings and generate them:
 AUM_EMBEDDINGS_ENABLED=true aum embed <index>
 ```
 
-The default model is `snowflake-arctic-embed2` (1024 dimensions). aum will
+The default model is `qwen3-embedding:0.6b` (256 dimensions). aum will
 pull it automatically on first use. To use a different model:
 
 ```sh
