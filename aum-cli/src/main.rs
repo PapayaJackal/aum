@@ -95,7 +95,6 @@ async fn run() -> anyhow::Result<()> {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
-    aum_core::metrics::record_build_info();
     debug!("configuration loaded");
 
     match cli.command {

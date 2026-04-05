@@ -17,13 +17,7 @@ use tracing::{debug, warn};
 /// Capacity of the path channel between the walker and extraction workers.
 pub const PATH_CHANNEL_CAPACITY: usize = 1000;
 
-fn set_discovered_gauge(count: u64) {
-    // f64::from(u32) is lossless; file counts never reach u32::MAX in practice.
-    metrics::gauge!("aum_ingest_files_discovered")
-        .set(f64::from(u32::try_from(count).unwrap_or(u32::MAX)));
-}
-
-/// How often to update the discovered-files gauge (every N files).
+/// How often to update the discovered count (every N files).
 const PROGRESS_INTERVAL: u64 = 500;
 
 // ---------------------------------------------------------------------------
@@ -84,12 +78,10 @@ pub async fn walk_directory(
         count += 1;
         if count.is_multiple_of(PROGRESS_INTERVAL) {
             discovered.store(count, Ordering::Relaxed);
-            set_discovered_gauge(count);
         }
     }
 
     discovered.store(count, Ordering::Relaxed);
-    set_discovered_gauge(count);
     debug!(count, "directory walk complete");
     Ok(count)
 }
@@ -122,12 +114,10 @@ pub async fn feed_paths(
         count += 1;
         if count.is_multiple_of(PROGRESS_INTERVAL) {
             discovered.store(count, Ordering::Relaxed);
-            set_discovered_gauge(count);
         }
     }
 
     discovered.store(count, Ordering::Relaxed);
-    set_discovered_gauge(count);
     count
 }
 

@@ -36,8 +36,6 @@ use crate::search::types::{
 const ATTACHMENTS_SEARCH_LIMIT: usize = 200;
 const THREAD_SEARCH_LIMIT: usize = 100;
 
-use crate::search::utils::record_search_metrics;
-
 use meta::build_doc_body;
 
 // ---------------------------------------------------------------------------
@@ -124,8 +122,6 @@ impl SearchBackend for ElasticsearchBackend {
         }
 
         let doc_count = docs.len() as u64;
-        #[allow(clippy::cast_precision_loss)] // doc counts won't exceed f64 mantissa range
-        metrics::histogram!("aum_es_batch_docs").record(doc_count as f64);
 
         // Build NDJSON bulk body: alternating action + source lines.
         let mut body: Vec<JsonBody<Value>> = Vec::with_capacity(docs.len() * 2);
@@ -157,7 +153,6 @@ impl SearchBackend for ElasticsearchBackend {
         &'a self,
         request: SearchRequest<'a>,
     ) -> BoxStream<'a, Result<SearchResult, SearchError>> {
-        let timer = std::time::Instant::now();
         results_stream(async move {
             let results = execute_text_search(
                 &self.client,
@@ -171,7 +166,6 @@ impl SearchBackend for ElasticsearchBackend {
                 self.max_highlight_offset,
             )
             .await;
-            record_search_metrics(timer.elapsed(), results.is_ok());
             results
         })
     }
@@ -182,7 +176,6 @@ impl SearchBackend for ElasticsearchBackend {
         vector: &'a [f32],
         _semantic_ratio: f32,
     ) -> BoxStream<'a, Result<SearchResult, SearchError>> {
-        let timer = std::time::Instant::now();
         results_stream(async move {
             let results = execute_hybrid_search(
                 &self.client,
@@ -198,7 +191,6 @@ impl SearchBackend for ElasticsearchBackend {
                 self.max_highlight_offset,
             )
             .await;
-            record_search_metrics(timer.elapsed(), results.is_ok());
             results
         })
     }
@@ -462,8 +454,6 @@ impl SearchBackend for ElasticsearchBackend {
             return Ok(0);
         }
 
-        let timer = std::time::Instant::now();
-
         let mut body: Vec<JsonBody<Value>> = Vec::with_capacity(updates.len() * 2);
         for (doc_id, chunk_vectors) in updates {
             let chunks: Vec<Value> = chunk_vectors
@@ -487,9 +477,6 @@ impl SearchBackend for ElasticsearchBackend {
         let resp_body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
 
         let failures = count_bulk_failures(&resp_body);
-
-        metrics::histogram!("aum_es_update_embeddings_seconds")
-            .record(timer.elapsed().as_secs_f64());
 
         Ok(failures)
     }
@@ -583,21 +570,13 @@ impl BatchSink for ElasticsearchBackend {
         batch: &[(String, Document)],
         record_error: &RecordErrorFn,
     ) -> (u64, u64) {
-        let timer = std::time::Instant::now();
         match self.index_batch(index, batch).await {
-            Ok(result) => {
-                metrics::histogram!("aum_es_flush_batch_seconds")
-                    .record(timer.elapsed().as_secs_f64());
-                (result.indexed, result.failed)
-            }
+            Ok(result) => (result.indexed, result.failed),
             Err(e) => {
                 tracing::error!(job_id, error = %e, "elasticsearch batch indexing failed");
                 for (id, _doc) in batch {
                     record_error(std::path::Path::new(id), "IndexError", &e.to_string());
                 }
-                metrics::counter!("aum_es_docs_failed_total").increment(batch.len() as u64);
-                metrics::histogram!("aum_es_flush_batch_seconds")
-                    .record(timer.elapsed().as_secs_f64());
                 (0, batch.len() as u64)
             }
         }
@@ -662,7 +641,6 @@ async fn initialize_index(
             .map_err(SearchError::Elasticsearch)?;
         del.error_for_status_code()
             .map_err(SearchError::Elasticsearch)?;
-        metrics::counter!("aum_indexes_recreated_total", "index" => name.to_owned()).increment(1);
     }
 
     let body = build_index_body(vector_dimension, max_highlight_offset);

@@ -54,7 +54,7 @@ COPY --from=frontend-builder /app/frontend/dist frontend/dist
 
 ENV AUM_DATA_DIR=/data
 VOLUME ["/data"]
-EXPOSE 8000 9090
+EXPOSE 8000
 
 ENTRYPOINT ["aum"]
 CMD ["serve"]

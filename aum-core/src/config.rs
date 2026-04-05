@@ -362,19 +362,6 @@ pub struct ServerConfig {
     pub cors_origins: Vec<String>,
 }
 
-/// Configuration for the Prometheus metrics endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize, ConfigDocs, ConfigDefault, ConfigValues)]
-#[serde(default)]
-#[config_section = "prometheus"]
-pub struct PrometheusConfig {
-    /// Enable the Prometheus metrics endpoint.
-    #[config_default = "false"]
-    pub enabled: bool,
-    /// Port to expose Prometheus metrics on.
-    #[config_default = "9090"]
-    pub port: u16,
-}
-
 /// Configuration for authentication and access control.
 #[derive(Debug, Clone, Serialize, Deserialize, ConfigDocs, ConfigDefault, ConfigValues)]
 #[serde(default)]
@@ -453,8 +440,6 @@ pub struct AumConfig {
     pub data: DataConfig,
     /// Log output settings.
     pub log: LoggingConfig,
-    /// Prometheus metrics endpoint settings.
-    pub prometheus: PrometheusConfig,
     /// Which search backend to use: "meilisearch" or "elasticsearch".
     pub search_backend: SearchBackendType,
     /// Meilisearch connection settings.
@@ -488,7 +473,6 @@ impl AumConfig {
             DataConfig::config_docs(),
             DatabaseConfig::config_docs(),
             LoggingConfig::config_docs(),
-            PrometheusConfig::config_docs(),
         ];
         #[cfg(feature = "meilisearch")]
         sections.push(MeilisearchConfig::config_docs());
@@ -629,11 +613,6 @@ pub fn format_config(config: &AumConfig) -> String {
         LoggingConfig::config_docs(),
         config.log.config_values(),
     );
-    write_section(
-        &mut out,
-        PrometheusConfig::config_docs(),
-        config.prometheus.config_values(),
-    );
     #[cfg(feature = "meilisearch")]
     write_section(
         &mut out,
@@ -738,7 +717,6 @@ mod tests {
         );
         assert_eq!(actual.embeddings.ollama_url, expected.embeddings.ollama_url);
         assert_eq!(actual.server.port, expected.server.port);
-        assert_eq!(actual.prometheus.port, expected.prometheus.port);
         assert_eq!(actual.ingest.batch_size, expected.ingest.batch_size);
         assert_eq!(
             actual.ingest.max_content_length,
@@ -777,7 +755,6 @@ mod tests {
     fn test_env_overlay_integer() -> anyhow::Result<()> {
         let cfg = config_from_env(&[("AUM_SERVER__PORT", "9001")])?;
         assert_eq!(cfg.server.port, 9001);
-        assert_eq!(cfg.prometheus.port, 9090); // untouched default
         Ok(())
     }
 
@@ -961,7 +938,6 @@ mod tests {
         assert!(out.contains("AUM_MEILISEARCH__URL=http://localhost:7700"));
         assert!(out.contains("AUM_SERVER__PORT=8000"));
         assert!(out.contains("AUM_DATA__DIR=data"));
-        assert!(out.contains("AUM_PROMETHEUS__ENABLED=false"));
         assert!(out.contains("AUM_DATABASE__URL="));
         assert!(out.contains("AUM_DATABASE__MAX_CONNECTIONS=16"));
     }
@@ -1012,7 +988,6 @@ mod tests {
             "data",
             "database",
             "log",
-            "prometheus",
             "ingest",
             "tika",
             "embeddings",

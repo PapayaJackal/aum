@@ -1,14 +1,11 @@
 //! sqlx implementation of [`IndexEmbeddingRepository`].
 
-use std::time::Instant;
-
 use async_trait::async_trait;
 use sqlx::AnyPool;
 
 use crate::models::EmbeddingModelInfo;
 
 use super::error::{DbError, DbResult};
-use super::record_db_metrics;
 use super::repository::IndexEmbeddingRepository;
 
 /// sqlx-backed implementation of [`IndexEmbeddingRepository`].
@@ -28,8 +25,7 @@ impl SqlxIndexEmbeddingRepository {
 #[async_trait]
 impl IndexEmbeddingRepository for SqlxIndexEmbeddingRepository {
     async fn get_embedding_model(&self, index_name: &str) -> DbResult<Option<EmbeddingModelInfo>> {
-        let start = Instant::now();
-        let result = sqlx::query_as::<sqlx::Any, (String, String, i64)>(
+        sqlx::query_as::<sqlx::Any, (String, String, i64)>(
             "SELECT model, backend, dimension FROM index_embeddings WHERE index_name = $1",
         )
         .bind(index_name)
@@ -42,14 +38,7 @@ impl IndexEmbeddingRepository for SqlxIndexEmbeddingRepository {
                 dimension,
             })
         })
-        .map_err(DbError::from);
-        record_db_metrics(
-            "get_embedding_model",
-            "index_embeddings",
-            start,
-            result.is_ok(),
-        );
-        result
+        .map_err(DbError::from)
     }
 
     async fn set_embedding_model(
@@ -60,10 +49,9 @@ impl IndexEmbeddingRepository for SqlxIndexEmbeddingRepository {
         dimension: i64,
     ) -> DbResult<()> {
         let now = chrono::Utc::now().to_rfc3339();
-        let start = Instant::now();
         // INSERT OR REPLACE is SQLite syntax; use the ANSI equivalent that all
         // three backends support.
-        let result = sqlx::query(
+        sqlx::query(
             "INSERT INTO index_embeddings (index_name, model, backend, dimension, updated_at) \
              VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (index_name) DO UPDATE \
@@ -78,31 +66,16 @@ impl IndexEmbeddingRepository for SqlxIndexEmbeddingRepository {
         .execute(&self.pool)
         .await
         .map(|_| ())
-        .map_err(DbError::from);
-        record_db_metrics(
-            "set_embedding_model",
-            "index_embeddings",
-            start,
-            result.is_ok(),
-        );
-        result
+        .map_err(DbError::from)
     }
 
     async fn clear_embedding_model(&self, index_name: &str) -> DbResult<()> {
-        let start = Instant::now();
-        let result = sqlx::query("DELETE FROM index_embeddings WHERE index_name = $1")
+        sqlx::query("DELETE FROM index_embeddings WHERE index_name = $1")
             .bind(index_name)
             .execute(&self.pool)
             .await
             .map(|_| ())
-            .map_err(DbError::from);
-        record_db_metrics(
-            "clear_embedding_model",
-            "index_embeddings",
-            start,
-            result.is_ok(),
-        );
-        result
+            .map_err(DbError::from)
     }
 }
 

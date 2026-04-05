@@ -145,32 +145,16 @@ impl<T: Send + Sync> InstancePool<T> {
 
         let states: Vec<InstanceState<T>> = instances
             .into_iter()
-            .map(|desc| {
-                metrics::gauge!(
-                    "aum_pool_instance_healthy",
-                    "service" => config.service.clone(),
-                    "instance" => desc.url.clone(),
-                )
-                .set(1.0);
-
-                metrics::gauge!(
-                    "aum_pool_in_flight",
-                    "service" => config.service.clone(),
-                    "instance" => desc.url.clone(),
-                )
-                .set(0.0);
-
-                InstanceState {
-                    url: desc.url,
-                    concurrency: desc.concurrency,
-                    semaphore: Arc::new(tokio::sync::Semaphore::new(desc.concurrency as usize)),
-                    client: desc.client,
-                    health: Mutex::new(HealthState {
-                        healthy: true,
-                        consecutive_failures: 0,
-                        last_failure_time: None,
-                    }),
-                }
+            .map(|desc| InstanceState {
+                url: desc.url,
+                concurrency: desc.concurrency,
+                semaphore: Arc::new(tokio::sync::Semaphore::new(desc.concurrency as usize)),
+                client: desc.client,
+                health: Mutex::new(HealthState {
+                    healthy: true,
+                    consecutive_failures: 0,
+                    last_failure_time: None,
+                }),
             })
             .collect();
 
@@ -275,13 +259,6 @@ impl<T: Send + Sync> InstancePool<T> {
             health.healthy = true;
             drop(health);
 
-            metrics::gauge!(
-                "aum_pool_instance_healthy",
-                "service" => self.config.service.clone(),
-                "instance" => instance.url.clone(),
-            )
-            .set(1.0);
-
             tracing::info!(
                 service = %self.config.service,
                 instance = %instance.url,
@@ -291,17 +268,7 @@ impl<T: Send + Sync> InstancePool<T> {
     }
 
     /// Record a failed operation on an instance.
-    fn record_failure(&self, instance: &InstanceState<T>, error_display: &str) {
-        let error_type = truncate_error_label(error_display);
-
-        metrics::counter!(
-            "aum_pool_errors_total",
-            "service" => self.config.service.clone(),
-            "instance" => instance.url.clone(),
-            "error_type" => error_type.to_owned(),
-        )
-        .increment(1);
-
+    fn record_failure(&self, instance: &InstanceState<T>) {
         let mut health = instance
             .health
             .lock()
@@ -314,13 +281,6 @@ impl<T: Send + Sync> InstancePool<T> {
             let failures = health.consecutive_failures;
             drop(health);
 
-            metrics::gauge!(
-                "aum_pool_instance_healthy",
-                "service" => self.config.service.clone(),
-                "instance" => instance.url.clone(),
-            )
-            .set(0.0);
-
             tracing::warn!(
                 service = %self.config.service,
                 instance = %instance.url,
@@ -328,40 +288,6 @@ impl<T: Send + Sync> InstancePool<T> {
                 "instance marked unhealthy",
             );
         }
-    }
-
-    /// Emit the per-request metrics that bracket every pool operation.
-    fn emit_acquire_metrics(&self, instance: &InstanceState<T>) {
-        metrics::counter!(
-            "aum_pool_requests_total",
-            "service" => self.config.service.clone(),
-            "instance" => instance.url.clone(),
-        )
-        .increment(1);
-
-        metrics::gauge!(
-            "aum_pool_in_flight",
-            "service" => self.config.service.clone(),
-            "instance" => instance.url.clone(),
-        )
-        .increment(1.0);
-    }
-
-    /// Emit the completion metrics after a pool operation.
-    fn emit_release_metrics(&self, instance: &InstanceState<T>, elapsed: Duration) {
-        metrics::histogram!(
-            "aum_pool_duration_seconds",
-            "service" => self.config.service.clone(),
-            "instance" => instance.url.clone(),
-        )
-        .record(elapsed.as_secs_f64());
-
-        metrics::gauge!(
-            "aum_pool_in_flight",
-            "service" => self.config.service.clone(),
-            "instance" => instance.url.clone(),
-        )
-        .decrement(1.0);
     }
 }
 
@@ -396,16 +322,11 @@ impl<T: Send + Sync> InstancePool<T> {
         // lifetime), so `acquire_owned` always succeeds.
         let _permit = instance.semaphore.clone().acquire_owned().await.ok();
 
-        self.emit_acquire_metrics(instance);
-        let start = Instant::now();
-
         let result = f(&instance.client).await;
-
-        self.emit_release_metrics(instance, start.elapsed());
 
         match &result {
             Ok(_) => self.record_success(instance),
-            Err(e) => self.record_failure(instance, &e.to_string()),
+            Err(_) => self.record_failure(instance),
         }
 
         result
@@ -434,13 +355,10 @@ impl<T: Send + Sync> InstancePool<T> {
     {
         let instance = self.select_instance();
         let _permit = instance.semaphore.clone().acquire_owned().await.ok();
-        self.emit_acquire_metrics(instance);
-        let start = Instant::now();
         let result = f(&instance.client).await;
-        self.emit_release_metrics(instance, start.elapsed());
         match &result {
             Ok(_) => self.record_success(instance),
-            Err(e) => self.record_failure(instance, &e.to_string()),
+            Err(_) => self.record_failure(instance),
         }
         result
     }
@@ -466,29 +384,20 @@ impl<T: Send + Sync> InstancePool<T> {
             // Safety: the semaphore is never closed, so acquire always succeeds.
             let permit = instance.semaphore.clone().acquire_owned().await.ok();
 
-            self.emit_acquire_metrics(instance);
-            let start = Instant::now();
-
             let mut had_error = false;
-            let mut last_error_display: Option<String> = None;
 
             let inner = f(&instance.client);
             futures::pin_mut!(inner);
 
             while let Some(item) = inner.next().await {
-                if let Err(ref e) = item {
+                if item.is_err() {
                     had_error = true;
-                    last_error_display = Some(e.to_string());
                 }
                 yield item;
             }
 
-            self.emit_release_metrics(instance, start.elapsed());
-
             if had_error {
-                if let Some(ref msg) = last_error_display {
-                    self.record_failure(instance, msg);
-                }
+                self.record_failure(instance);
             } else {
                 self.record_success(instance);
             }
@@ -498,22 +407,6 @@ impl<T: Send + Sync> InstancePool<T> {
 
         Box::pin(stream)
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Truncate an error Display string to a short label for metric tags.
-fn truncate_error_label(display: &str) -> &str {
-    let s = display.trim();
-    // Take up to the first colon, newline, or 64 chars — whichever is shortest.
-    let end = s
-        .find(':')
-        .unwrap_or(s.len())
-        .min(s.find('\n').unwrap_or(s.len()))
-        .min(64);
-    &s[..end]
 }
 
 // ---------------------------------------------------------------------------
@@ -1059,33 +952,5 @@ mod tests {
             h.await.context("task panicked")?;
         }
         Ok(())
-    }
-
-    // -----------------------------------------------------------------------
-    // Truncate error label
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn truncate_error_label_at_colon() {
-        assert_eq!(
-            truncate_error_label("connection failed: timeout"),
-            "connection failed"
-        );
-    }
-
-    #[test]
-    fn truncate_error_label_at_newline() {
-        assert_eq!(truncate_error_label("oops\ndetails"), "oops");
-    }
-
-    #[test]
-    fn truncate_error_label_at_max_length() {
-        let long = "a".repeat(100);
-        assert_eq!(truncate_error_label(&long).len(), 64);
-    }
-
-    #[test]
-    fn truncate_error_label_short_string() {
-        assert_eq!(truncate_error_label("boom"), "boom");
     }
 }

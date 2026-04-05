@@ -6,12 +6,11 @@
 //! extraction begins as soon as *any* in-flight extraction finishes — no
 //! batch boundaries, no head-of-line blocking.
 
+use futures::StreamExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
-
-use futures::StreamExt as _;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -249,8 +248,6 @@ async fn stream_file<E: Extractor + 'static>(
     }
 
     let elapsed = start.elapsed().as_secs_f64();
-    metrics::histogram!("aum_ingest_extraction_seconds").record(elapsed);
-
     if let Some(e) = fatal_error {
         if doc_index == 0 {
             // No documents produced — report as a fatal failure.

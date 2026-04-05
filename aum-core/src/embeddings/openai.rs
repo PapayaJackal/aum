@@ -3,10 +3,9 @@
 //! Works with `OpenAI`, Azure `OpenAI`, and any provider implementing the
 //! `POST /v1/embeddings` endpoint (e.g. `vLLM`, `LiteLLM`, Together).
 
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
-
-use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::EmbeddingsConfig;
@@ -93,8 +92,6 @@ impl OpenAiEmbedder {
 
     async fn embed_raw(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
         let start = Instant::now();
-        metrics::counter!("aum_embedding_requests_total", "backend" => "openai").increment(1);
-
         let url = format!("{}/v1/embeddings", self.api_url);
         let body = EmbedRequest {
             model: &self.model,
@@ -103,9 +100,6 @@ impl OpenAiEmbedder {
         let resp = self.client.post(&url).json(&body).send().await?;
         resp.error_for_status_ref()?;
         let mut data: EmbedResponse = resp.json().await?;
-
-        metrics::histogram!("aum_embedding_duration_seconds", "backend" => "openai")
-            .record(start.elapsed().as_secs_f64());
 
         if data.data.is_empty() {
             return Err(EmbedError::EmptyResponse);

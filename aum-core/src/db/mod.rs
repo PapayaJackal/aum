@@ -27,8 +27,6 @@ pub mod pool;
 pub mod repository;
 pub mod tracker;
 
-use std::time::Instant;
-
 use chrono::{DateTime, Utc};
 
 /// Parse an RFC 3339 timestamp stored in the database into a `DateTime<Utc>`.
@@ -40,22 +38,6 @@ pub(crate) fn parse_dt(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .expect("timestamps in the database are always valid RFC3339")
         .with_timezone(&Utc)
-}
-
-/// Record query count and duration metrics for a database operation.
-pub(crate) fn record_db_metrics(
-    op: &'static str,
-    table: &'static str,
-    start: Instant,
-    is_ok: bool,
-) {
-    let status = if is_ok { "ok" } else { "error" };
-    metrics::counter!("aum_db_queries_total",
-        "operation" => op, "table" => table, "status" => status)
-    .increment(1);
-    metrics::histogram!("aum_db_query_duration_seconds",
-        "operation" => op, "table" => table)
-    .record(start.elapsed().as_secs_f64());
 }
 
 pub use embeddings::SqlxIndexEmbeddingRepository;

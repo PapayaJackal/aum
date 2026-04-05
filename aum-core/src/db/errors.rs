@@ -1,7 +1,6 @@
 //! sqlx implementation of [`JobErrorRepository`].
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
@@ -14,7 +13,6 @@ use crate::models::{ErrorFilter, IngestError};
 
 use super::error::{DbError, DbResult};
 use super::jobs::ErrorRow;
-use super::record_db_metrics;
 use super::repository::JobErrorRepository;
 
 /// sqlx-backed implementation of [`JobErrorRepository`].
@@ -42,10 +40,9 @@ impl JobErrorRepository for SqlxJobErrorRepository {
     ) -> DbResult<()> {
         let now = chrono::Utc::now().to_rfc3339();
         let path_str = file_path.to_string_lossy();
-        let start = Instant::now();
         // ON CONFLICT DO NOTHING works in SQLite 3.24+, PostgreSQL, and MariaDB.
         // For MySQL, INSERT IGNORE would be needed, but MySQL support is best-effort.
-        let result = sqlx::query(
+        sqlx::query(
             "INSERT INTO job_errors (job_id, file_path, error_type, message, timestamp) \
              VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (job_id, file_path, error_type) DO NOTHING",
@@ -58,9 +55,7 @@ impl JobErrorRepository for SqlxJobErrorRepository {
         .execute(&self.pool)
         .await
         .map(|_| ())
-        .map_err(DbError::from);
-        record_db_metrics("record_error", "job_errors", start, result.is_ok());
-        result
+        .map_err(DbError::from)
     }
 
     fn list_errors<'a>(&'a self, job_id: &str) -> BoxStream<'a, DbResult<IngestError>> {

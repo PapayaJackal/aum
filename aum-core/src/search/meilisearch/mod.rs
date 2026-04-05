@@ -28,8 +28,6 @@ use crate::search::types::{
     BatchIndexResult, FacetMap, FilterMap, SearchError, SearchRequest, SearchResult, SortSpec,
 };
 
-use crate::search::utils::record_search_metrics;
-
 use batching::{MAX_PAYLOAD_BYTES, split_by_payload_size};
 use filter::build_filter_string;
 use meta::build_doc_body;
@@ -78,17 +76,12 @@ impl MeilisearchBackend {
         &'a self,
         params: SearchExecParams<'a>,
     ) -> BoxStream<'a, Result<SearchResult, SearchError>> {
-        let timer = std::time::Instant::now();
-        stream::once(async move {
-            let results = execute_search(&self.client, params).await;
-            record_search_metrics(timer.elapsed(), results.is_ok());
-            results
-        })
-        .flat_map(|r| match r {
-            Ok(hits) => stream::iter(hits.into_iter().map(Ok)).boxed(),
-            Err(e) => stream::once(async move { Err(e) }).boxed(),
-        })
-        .boxed()
+        stream::once(async move { execute_search(&self.client, params).await })
+            .flat_map(|r| match r {
+                Ok(hits) => stream::iter(hits.into_iter().map(Ok)).boxed(),
+                Err(e) => stream::once(async move { Err(e) }).boxed(),
+            })
+            .boxed()
     }
 }
 
@@ -118,12 +111,7 @@ impl SearchBackend for MeilisearchBackend {
             .map(|(id, doc)| build_doc_body(id, doc))
             .collect();
 
-        let batch_doc_count = u32::try_from(bodies.len()).unwrap_or(u32::MAX);
-        metrics::histogram!("aum_meili_batch_docs").record(f64::from(batch_doc_count));
-
         let (sub_batches, truncations) = split_by_payload_size(bodies, MAX_PAYLOAD_BYTES);
-        let trunc_count = truncations.len() as u64;
-        metrics::counter!("aum_meili_docs_truncated_total").increment(trunc_count);
 
         let (indexed, failed) = index_sub_batches(&self.client, index, sub_batches).await?;
         Ok(BatchIndexResult {
@@ -354,7 +342,6 @@ impl SearchBackend for MeilisearchBackend {
         index: &str,
         updates: &[(String, Vec<Vec<f32>>)],
     ) -> Result<u64, SearchError> {
-        let timer = std::time::Instant::now();
         let docs: Vec<Value> = updates
             .iter()
             .map(|(id, chunks)| {
@@ -376,7 +363,6 @@ impl SearchBackend for MeilisearchBackend {
             .map_err(SearchError::Meilisearch)?;
         wait_for_task(task, &self.client, EMBED_TASK_TIMEOUT).await?;
 
-        metrics::histogram!("aum_meili_task_wait_seconds").record(timer.elapsed().as_secs_f64());
         // Return the number of failed updates. Meilisearch tasks are all-or-nothing:
         // if wait_for_task succeeded above, all documents were updated successfully.
         Ok(0)
@@ -419,7 +405,6 @@ impl BatchSink for MeilisearchBackend {
         batch: &[(String, Document)],
         record_error: &RecordErrorFn,
     ) -> (u64, u64) {
-        let timer = std::time::Instant::now();
         match self.index_batch(index, batch).await {
             Ok(result) => {
                 for trunc in &result.truncations {
@@ -438,8 +423,6 @@ impl BatchSink for MeilisearchBackend {
                         ),
                     );
                 }
-                metrics::histogram!("aum_meili_flush_batch_seconds")
-                    .record(timer.elapsed().as_secs_f64());
                 (result.indexed, result.failed)
             }
             Err(e) => {
@@ -447,8 +430,6 @@ impl BatchSink for MeilisearchBackend {
                 for (id, _doc) in batch {
                     record_error(std::path::Path::new(id), "IndexError", &e.to_string());
                 }
-                metrics::histogram!("aum_meili_flush_batch_seconds")
-                    .record(timer.elapsed().as_secs_f64());
                 (0, batch.len() as u64)
             }
         }

@@ -1,9 +1,8 @@
 //! Ollama embedding backend.
 
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
-
-use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::EmbeddingsConfig;
@@ -110,8 +109,6 @@ impl OllamaEmbedder {
 
     async fn embed_raw(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
         let start = Instant::now();
-        metrics::counter!("aum_embedding_requests_total", "backend" => "ollama").increment(1);
-
         let url = format!("{}/api/embed", self.base_url);
         let dimension = self.dimension.load(Ordering::Relaxed);
         let body = EmbedRequest {
@@ -126,9 +123,6 @@ impl OllamaEmbedder {
         let resp = self.client.post(&url).json(&body).send().await?;
         resp.error_for_status_ref()?;
         let data: EmbedResponse = resp.json().await?;
-
-        metrics::histogram!("aum_embedding_duration_seconds", "backend" => "ollama")
-            .record(start.elapsed().as_secs_f64());
 
         if data.embeddings.is_empty() {
             return Err(EmbedError::EmptyResponse);

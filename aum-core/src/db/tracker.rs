@@ -205,8 +205,6 @@ impl JobTracker {
         message: &str,
     ) -> DbResult<()> {
         warn!(job_id, ?file_path, error_type, message, "ingest error");
-        metrics::counter!("aum_job_errors_total", "error_type" => error_type.to_owned())
-            .increment(1);
         self.errors
             .record_error(job_id, file_path, error_type, message)
             .await

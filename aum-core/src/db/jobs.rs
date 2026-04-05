@@ -1,7 +1,6 @@
 //! sqlx implementation of [`JobRepository`].
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -137,8 +136,6 @@ impl SqlxJobRepository {
     }
 }
 
-use super::record_db_metrics;
-
 #[async_trait]
 impl JobRepository for SqlxJobRepository {
     async fn create_job(
@@ -152,7 +149,6 @@ impl JobRepository for SqlxJobRepository {
     ) -> DbResult<IngestJob> {
         let now = Utc::now().to_rfc3339();
         let source_dir_str = source_dir.to_string_lossy();
-        let start = Instant::now();
         let (ocr_enabled, ocr_language): (Option<i64>, Option<String>) = ocr_settings
             .map_or((None, None), |s| {
                 (Some(i64::from(s.enabled)), Some(s.language))
@@ -189,13 +185,11 @@ impl JobRepository for SqlxJobRepository {
         .map_err(DbError::from)?;
 
         tx.commit().await.map_err(DbError::from)?;
-        record_db_metrics("create_job", "jobs", start, true);
         Ok(job)
     }
 
     async fn update_progress(&self, job_id: &str, progress: &JobProgress) -> DbResult<()> {
-        let start = Instant::now();
-        let result = sqlx::query(
+        sqlx::query(
             "UPDATE jobs \
              SET extracted = $1, processed = $2, failed = $3, empty = $4, skipped = $5 \
              WHERE job_id = $6",
@@ -209,51 +203,40 @@ impl JobRepository for SqlxJobRepository {
         .execute(&self.pool)
         .await
         .map(|_| ())
-        .map_err(DbError::from);
-        record_db_metrics("update_progress", "jobs", start, result.is_ok());
-        result
+        .map_err(DbError::from)
     }
 
     async fn update_total_files(&self, job_id: &str, total_files: i64) -> DbResult<()> {
-        let start = Instant::now();
-        let result = sqlx::query("UPDATE jobs SET total_files = $1 WHERE job_id = $2")
+        sqlx::query("UPDATE jobs SET total_files = $1 WHERE job_id = $2")
             .bind(total_files)
             .bind(job_id)
             .execute(&self.pool)
             .await
             .map(|_| ())
-            .map_err(DbError::from);
-        record_db_metrics("update_total_files", "jobs", start, result.is_ok());
-        result
+            .map_err(DbError::from)
     }
 
     async fn complete_job(&self, job_id: &str, status: JobStatus) -> DbResult<()> {
         let now = Utc::now().to_rfc3339();
-        let start = Instant::now();
-        let result = sqlx::query("UPDATE jobs SET status = $1, finished_at = $2 WHERE job_id = $3")
+        sqlx::query("UPDATE jobs SET status = $1, finished_at = $2 WHERE job_id = $3")
             .bind(job_status_str(status))
             .bind(&now)
             .bind(job_id)
             .execute(&self.pool)
             .await
             .map(|_| ())
-            .map_err(DbError::from);
-        record_db_metrics("complete_job", "jobs", start, result.is_ok());
-        result
+            .map_err(DbError::from)
     }
 
     async fn get_job(&self, job_id: &str) -> DbResult<Option<IngestJob>> {
-        let start = Instant::now();
-        let result = sqlx::query_as::<sqlx::Any, JobRow>(&format!(
+        sqlx::query_as::<sqlx::Any, JobRow>(&format!(
             "SELECT {JOB_COLUMNS} FROM jobs WHERE job_id = $1"
         ))
         .bind(job_id)
         .fetch_optional(&self.pool)
         .await
         .map(|opt| opt.map(IngestJob::from))
-        .map_err(DbError::from);
-        record_db_metrics("get_job", "jobs", start, result.is_ok());
-        result
+        .map_err(DbError::from)
     }
 
     fn list_jobs(&self, status: Option<JobStatus>) -> BoxStream<'_, DbResult<IngestJob>> {
@@ -293,7 +276,6 @@ impl JobRepository for SqlxJobRepository {
         source_dir: Option<&Path>,
         job_type: JobType,
     ) -> DbResult<Option<IngestJob>> {
-        let start = Instant::now();
         let result = if let Some(dir) = source_dir {
             let dir_str = dir.to_string_lossy();
             sqlx::query_as::<sqlx::Any, JobRow>(&format!(
@@ -315,15 +297,12 @@ impl JobRepository for SqlxJobRepository {
             .fetch_optional(&self.pool)
             .await
         };
-        let result = result
-            .map(|opt| opt.map(IngestJob::from))
-            .map_err(DbError::from);
-        record_db_metrics("find_resumable_job", "jobs", start, result.is_ok());
         result
+            .map(|opt| opt.map(IngestJob::from))
+            .map_err(DbError::from)
     }
 
     async fn clear_index(&self, index_name: &str) -> DbResult<u64> {
-        let start = Instant::now();
         let mut tx = self.pool.begin().await.map_err(DbError::from)?;
 
         sqlx::query(
@@ -343,7 +322,6 @@ impl JobRepository for SqlxJobRepository {
             .map_err(DbError::from)?;
 
         tx.commit().await.map_err(DbError::from)?;
-        record_db_metrics("clear_index", "jobs", start, true);
         Ok(deleted)
     }
 
@@ -353,7 +331,6 @@ impl JobRepository for SqlxJobRepository {
             source_dir: String,
         }
 
-        let start = Instant::now();
         let rows = sqlx::query_as::<sqlx::Any, DirRow>(
             "SELECT DISTINCT source_dir FROM jobs \
              WHERE index_name = $1 AND job_type = $2",
@@ -363,7 +340,6 @@ impl JobRepository for SqlxJobRepository {
         .fetch_all(&self.pool)
         .await
         .map_err(DbError::from)?;
-        record_db_metrics("get_source_dirs_for_index", "jobs", start, true);
         Ok(rows
             .into_iter()
             .map(|r| PathBuf::from(r.source_dir))

@@ -226,8 +226,6 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
         source_dir: &Path,
         mode: PipelineMode,
     ) -> Result<IngestJob, IngestPipelineError> {
-        metrics::gauge!("aum_ingest_jobs_active").increment(1.0);
-
         let job = self
             .tracker
             .create_job(
@@ -251,8 +249,6 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
         if let Err(e) = self.tracker.complete_job(job_id, final_status).await {
             warn!(job_id, error = %e, "failed to mark job as complete");
         }
-
-        metrics::gauge!("aum_ingest_jobs_active").decrement(1.0);
 
         let progress = result?;
         let job = self.tracker.get_job(job_id, false).await?.unwrap_or(job);
@@ -414,8 +410,6 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
                     st.progress.empty += saturating_i64(fc.empty_count);
                     st.extraction_secs_total += fc.extraction_secs;
                     if fc.empty_count > 0 {
-                        metrics::counter!("aum_ingest_docs_total", "status" => "empty")
-                            .increment(fc.empty_count);
                         // Every document from this file was empty — record it so
                         // retry can filter or include it based on OCR settings.
                         if fc.empty_count == fc.total_doc_count
@@ -440,7 +434,6 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
                     message,
                 } => {
                     st.progress.failed += 1;
-                    metrics::counter!("aum_ingest_docs_total", "status" => "failed").increment(1);
                     if let Err(e) = self
                         .tracker
                         .record_error(job_id, &file_path, &error_type, &message)
@@ -462,8 +455,6 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
                     std::mem::replace(&mut st.batch, Vec::with_capacity(self.batch_size as usize));
                 self.spawn_flush(job_id, full_batch, &record_error, flush_tx.clone(), permit);
                 st.in_flight += 1;
-                #[allow(clippy::cast_precision_loss)]
-                metrics::gauge!("aum_ingest_pending_flushes").set(st.in_flight as f64);
             }
 
             if file_boundary {
@@ -526,7 +517,6 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
                 None => break,
             }
         }
-        metrics::gauge!("aum_ingest_pending_flushes").set(0.0);
 
         if !st.batch.is_empty() {
             let result = Self::flush_batch_inner(
@@ -585,7 +575,7 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
         });
     }
 
-    /// Flush a single batch and record metrics.
+    /// Flush a single batch.
     async fn flush_batch_inner(
         sink: &S,
         index_name: &str,
@@ -600,11 +590,6 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
             .await;
 
         let elapsed = start.elapsed().as_secs_f64();
-        metrics::histogram!("aum_ingest_batch_flush_seconds").record(elapsed);
-        metrics::counter!("aum_ingest_docs_total", "status" => "indexed").increment(indexed);
-        if failed > 0 {
-            metrics::counter!("aum_ingest_docs_total", "status" => "failed").increment(failed);
-        }
 
         debug!(
             job_id,
@@ -622,8 +607,6 @@ impl<E: Extractor + 'static, S: BatchSink + 'static> IngestPipeline<E, S> {
             Self::fold_flush_result(&result, &mut st.progress);
             st.in_flight -= 1;
         }
-        #[allow(clippy::cast_precision_loss)]
-        metrics::gauge!("aum_ingest_pending_flushes").set(st.in_flight as f64);
     }
 
     fn fold_flush_result(result: &FlushResult, progress: &mut JobProgress) {

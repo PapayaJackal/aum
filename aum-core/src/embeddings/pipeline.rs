@@ -219,8 +219,6 @@ impl EmbedPipeline {
         let index = &*self.index_name;
 
         info!(job_id, index, total, "starting embed job");
-        metrics::gauge!("aum_embedding_jobs_active").increment(1.0);
-
         #[expect(
             clippy::cast_possible_wrap,
             reason = "document counts do not exceed i64::MAX"
@@ -239,8 +237,6 @@ impl EmbedPipeline {
             .await?;
 
         let result = self.execute_pipeline(&job_id, total, stream).await;
-
-        metrics::gauge!("aum_embedding_jobs_active").decrement(1.0);
 
         let final_status = if result.is_err() {
             JobStatus::Failed
@@ -416,7 +412,6 @@ impl EmbedPipeline {
                     Err(e) => {
                         error!(doc_id = %item.doc_id, error = %e, "embedding failed");
                         embed_failed.fetch_add(1, Ordering::Relaxed);
-                        metrics::counter!("aum_embedding_docs_failed_total").increment(1);
                         if let Err(db_err) = tracker
                             .record_error(
                                 &job_id,
@@ -573,25 +568,14 @@ impl EmbedPipeline {
         });
     }
 
-    /// Execute a single backend write and record metrics.
+    /// Execute a single backend write.
     async fn flush_inner(
         backend: &AumBackend,
         index_name: &str,
         batch: &[(String, Vec<Vec<f32>>)],
     ) -> FlushResult {
-        let start = Instant::now();
-
         match backend.update_embeddings(index_name, batch).await {
-            Ok(n_failed) => {
-                let n_ok = batch.len() as u64 - n_failed;
-                metrics::histogram!("aum_embedding_batch_flush_seconds")
-                    .record(start.elapsed().as_secs_f64());
-                metrics::counter!("aum_embedding_docs_processed_total").increment(n_ok);
-                if n_failed > 0 {
-                    metrics::counter!("aum_embedding_docs_failed_total").increment(n_failed);
-                }
-                FlushResult { failed: n_failed }
-            }
+            Ok(n_failed) => FlushResult { failed: n_failed },
             Err(e) => {
                 error!(error = %e, "update_embeddings failed");
                 FlushResult {

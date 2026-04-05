@@ -5,15 +5,13 @@
 //! - `PUT /unpack` to retrieve direct-child embedded files; called recursively
 //!   on each extracted entry so nested attachments are also available.
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::time::Instant;
-
 use async_zip::tokio::read::fs::ZipFileReader; // crate name: async_zip
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde_json::{Map, Value};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt as _;
 use tokio_util::compat::FuturesAsyncReadCompatExt as _;
 use tracing_futures::Instrument as _;
@@ -34,11 +32,6 @@ const EMBEDDED_RESOURCE_PATH_KEY: &str = "X-TIKA:embedded_resource_path";
 const RESOURCE_NAME_KEY: &str = "resourceName";
 /// Maximum characters of an HTTP error body included in [`ExtractionError::RmetaHttp`].
 const RMETA_ERROR_BODY_LIMIT: usize = 512;
-
-fn record_error_metric(error_type: &str) {
-    metrics::counter!("aum_extraction_errors_total", "error_type" => error_type.to_owned())
-        .increment(1);
-}
 
 fn is_tika_internal(key: &str) -> bool {
     matches!(
@@ -261,7 +254,6 @@ impl TikaExtractor {
                 "rmeta/text",
                 "application/json",
                 |path, source| ExtractionError::RmetaConnection { path, source },
-                "RmetaConnectionError",
             ).await?;
 
             let resp = self.check_rmeta_status(file_path, resp).await?;
@@ -294,7 +286,6 @@ impl TikaExtractor {
         tokio::task::spawn_blocking(move || {
             let mut de = serde_json::Deserializer::from_reader(sync_reader);
             if let Err(e) = de.deserialize_seq(RmetaElementVisitor(&tx)) {
-                record_error_metric("RmetaParseError");
                 let _ = tx.blocking_send(Err(ExtractionError::RmetaJson { path, source: e }));
             }
         });
@@ -302,14 +293,13 @@ impl TikaExtractor {
         rx
     }
 
-    #[tracing::instrument(skip(self, accept, map_error, error_metric), fields(path = %file_path.display(), endpoint))]
+    #[tracing::instrument(skip(self, accept, map_error), fields(path = %file_path.display(), endpoint))]
     async fn send_tika_request(
         &self,
         file_path: &Path,
         endpoint: &str,
         accept: &'static str,
         map_error: fn(PathBuf, reqwest::Error) -> ExtractionError,
-        error_metric: &str,
     ) -> Result<reqwest::Response, ExtractionError> {
         let file = tokio::fs::File::open(file_path)
             .await
@@ -323,10 +313,7 @@ impl TikaExtractor {
             .body(stream_file_body(file))
             .send()
             .await
-            .map_err(|e| {
-                record_error_metric(error_metric);
-                map_error(file_path.to_path_buf(), e)
-            })
+            .map_err(|e| map_error(file_path.to_path_buf(), e))
     }
 
     async fn check_rmeta_status(
@@ -354,7 +341,6 @@ impl TikaExtractor {
             .chars()
             .take(RMETA_ERROR_BODY_LIMIT)
             .collect();
-        record_error_metric(&format!("TikaHTTP{status_u16}"));
         ExtractionError::RmetaHttp {
             path: file_path.to_path_buf(),
             status: status_u16,
@@ -383,13 +369,9 @@ impl TikaExtractor {
         file_path: &Path,
     ) -> Result<Option<tempfile::NamedTempFile>, ExtractionError> {
         let resp = self
-            .send_tika_request(
-                file_path,
-                "unpack",
-                "application/zip",
-                |path, source| ExtractionError::UnpackConnection { path, source },
-                "UnpackConnectionError",
-            )
+            .send_tika_request(file_path, "unpack", "application/zip", |path, source| {
+                ExtractionError::UnpackConnection { path, source }
+            })
             .await?;
         let status = resp.status();
 
@@ -397,7 +379,6 @@ impl TikaExtractor {
             return Ok(None);
         }
         if status != reqwest::StatusCode::OK {
-            record_error_metric("UnpackHttpError");
             return Err(ExtractionError::UnpackHttp {
                 path: file_path.to_path_buf(),
                 status: status.as_u16(),
@@ -714,7 +695,6 @@ impl TikaExtractor {
         record_error: Option<&RecordErrorFn>,
     ) {
         let limit = self.config.max_content_length;
-        metrics::counter!("aum_docs_truncated_total").increment(1);
         tracing::warn!(
             path = %source.display(),
             original_chars,
@@ -748,7 +728,6 @@ impl TikaExtractor {
         count: usize,
         record_error: Option<&RecordErrorFn>,
     ) {
-        record_error_metric("EmptyExtraction");
         tracing::warn!(path = %file_path.display(), count, "empty extractions");
         if let Some(cb) = record_error {
             cb(
@@ -853,22 +832,16 @@ impl Extractor for TikaExtractor {
         let span = tracing::info_span!("extract", path = %file_path.display());
         let stream = async_stream::try_stream! {
             tracing::debug!("extracting document");
-            let start = Instant::now();
-            let record_duration = || {
-                metrics::histogram!("aum_extraction_duration_seconds")
-                    .record(start.elapsed().as_secs_f64());
-            };
 
             // Stream rmeta: yield the container document immediately, then
             // collect embedded part metadata for container-path analysis.
             let mut rmeta_stream = self.rmeta(file_path);
             let first_part = rmeta_stream.next().await
-                .unwrap_or(Ok(Map::new()))
-                .inspect_err(|_| record_duration())?;
+                .unwrap_or(Ok(Map::new()))?;
 
             let mut embedded_parts: Vec<Map<String, Value>> = Vec::new();
             while let Some(part) = rmeta_stream.next().await {
-                embedded_parts.push(part.inspect_err(|_| record_duration())?);
+                embedded_parts.push(part?);
             }
 
             let has_embedded = !embedded_parts.is_empty();
@@ -934,7 +907,6 @@ impl Extractor for TikaExtractor {
                                 }
                             }
                             Err(e @ ExtractionError::DepthLimitExceeded { .. }) => {
-                                record_duration();
                                 Err(e)?;
                             }
                             Err(e) => {
@@ -944,7 +916,6 @@ impl Extractor for TikaExtractor {
                                     error = %e,
                                     "unpack failed, dropping remaining embedded documents"
                                 );
-                                record_error_metric("UnpackError");
                                 if let Some(cb) = record_error {
                                     cb(
                                         file_path,
@@ -992,8 +963,6 @@ impl Extractor for TikaExtractor {
                     }
                 }
             }
-
-            record_duration();
 
             if empty_extractions > 0 {
                 Self::report_empty_extractions(
