@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [features]
 dhat-heap = ["dep:dhat"]
+bundle-frontend = ["aum-api/bundle-frontend"]
 
 [lints]
 workspace = true

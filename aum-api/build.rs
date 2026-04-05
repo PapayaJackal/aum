@@ -33,6 +33,13 @@ fn bundle_frontend() {
         frontend_dir.join("index.html").display()
     );
 
+    // If the dist directory already exists (e.g. pre-built in a Docker stage),
+    // skip running npm so the Rust builder doesn't need Node installed.
+    let dist_dir = frontend_dir.join("dist");
+    if dist_dir.is_dir() {
+        return;
+    }
+
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
 
     let status = Command::new(npm)
