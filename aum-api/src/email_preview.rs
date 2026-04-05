@@ -140,11 +140,13 @@ mod tests {
     /// Minimal 1×1 red PNG, base64-encoded, used as inline image fixture.
     const TINY_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
 
-    fn write_temp_eml(content: &[u8]) -> (tempfile::NamedTempFile, std::path::PathBuf) {
-        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
-        f.write_all(content).expect("write eml");
+    fn write_temp_eml(
+        content: &[u8],
+    ) -> anyhow::Result<(tempfile::NamedTempFile, std::path::PathBuf)> {
+        let mut f = tempfile::NamedTempFile::new()?;
+        f.write_all(content)?;
         let path = f.path().to_owned();
-        (f, path)
+        Ok((f, path))
     }
 
     /// Build a multipart/related EML with an HTML part that references an
@@ -174,7 +176,7 @@ mod tests {
     #[test]
     fn inline_image_cid_resolved_to_data_uri() -> anyhow::Result<()> {
         let eml = make_eml_with_inline_image();
-        let (_tmp, path) = write_temp_eml(&eml);
+        let (_tmp, path) = write_temp_eml(&eml)?;
 
         let html = String::from_utf8(extract_email_html(&path)?)?;
 
@@ -195,7 +197,7 @@ mod tests {
     #[test]
     fn plain_text_fallback_is_escaped() -> anyhow::Result<()> {
         let eml = b"MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\n<hello & world>\r\n";
-        let (_tmp, path) = write_temp_eml(eml);
+        let (_tmp, path) = write_temp_eml(eml)?;
 
         let html = String::from_utf8(extract_email_html(&path)?)?;
 

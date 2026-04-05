@@ -2,12 +2,11 @@
 //!
 //! Uses Tika's HTTP API:
 //! - `PUT /rmeta/text` for recursive text and metadata extraction.
-//! - `PUT /unpack/all` to retrieve raw embedded files, called recursively on
-//!   containers so nested attachments are also available.
+//! - `PUT /unpack` to retrieve direct-child embedded files; called recursively
+//!   on each extracted entry so nested attachments are also available.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
 
 use async_zip::tokio::read::fs::ZipFileReader; // crate name: async_zip
@@ -133,37 +132,36 @@ pub(crate) fn container_dir(extract_dir: &Path, index_name: &str, file_path: &Pa
         .join(&h[..16])
 }
 
-/// Sanitise an archive entry name, preserving directory structure.
+/// Sanitise a zip entry name, extracting just the leaf filename.
 ///
-/// Returns `None` when the name is unsafe (path traversal, null bytes, hidden
-/// leaf) so the caller can skip it.
-pub(crate) fn safe_archive_path(name: &str) -> Option<PathBuf> {
-    if name.is_empty() || name.contains('\x00') || name.starts_with('/') {
+/// Returns `None` when the name is unsafe (empty, null bytes, path traversal,
+/// hidden file) so the caller can skip it.  With `/unpack` (direct children
+/// only) entries should already be leaf names, but we strip any directory
+/// components defensively.
+pub(crate) fn safe_entry_name(name: &str) -> Option<&str> {
+    if name.is_empty() || name.contains('\x00') {
         return None;
     }
-    let parts: Vec<&str> = name.split('/').filter(|p| *p != ".").collect();
-    if parts.is_empty() || parts.contains(&"..") {
+    // Take only the last path component — `/unpack` should return leaf names
+    // but some Tika versions include directory prefixes.
+    let leaf = name
+        .rsplit('/')
+        .find(|s| !s.is_empty() && *s != "." && *s != "..")?;
+    if leaf.starts_with('.') {
         return None;
     }
-    if parts.last().is_some_and(|p| p.starts_with('.')) {
-        return None;
-    }
-    Some(parts.iter().collect())
+    Some(leaf)
 }
 
 /// Identify which embedded-resource-paths are containers (have children).
 ///
 /// A path is a container if any deeper path starts with it as a prefix.
+/// Used to avoid pointless `/unpack` round-trips on leaf entries.
 pub(crate) fn find_container_paths<'a>(
-    parts: impl Iterator<Item = &'a Map<String, Value>>,
+    all_erps: impl IntoIterator<Item = &'a str>,
 ) -> HashSet<String> {
     let mut containers = HashSet::new();
-    for part in parts {
-        let erp = match part.get(EMBEDDED_RESOURCE_PATH_KEY).and_then(Value::as_str) {
-            Some(s) if !s.is_empty() => s,
-            _ => continue,
-        };
-        // Build ancestor paths incrementally instead of re-joining from scratch.
+    for erp in all_erps {
         let segments: Vec<&str> = erp.split('/').filter(|s| !s.is_empty()).collect();
         if segments.len() <= 1 {
             continue;
@@ -365,10 +363,14 @@ impl TikaExtractor {
     }
 
     // -----------------------------------------------------------------------
-    // /unpack/all + zip extraction
+    // /unpack + zip extraction
     // -----------------------------------------------------------------------
 
-    /// Stream `PUT /unpack/all` to a temp zip file, returning it or `None` on 204.
+    /// Stream `PUT /unpack` to a temp zip file, returning it or `None` on 204.
+    ///
+    /// Unlike `/unpack/all` which flattens the entire tree, `/unpack` returns
+    /// only direct children.  We call it recursively on each extracted entry
+    /// to reach nested attachments.
     ///
     /// # Errors
     ///
@@ -383,7 +385,7 @@ impl TikaExtractor {
         let resp = self
             .send_tika_request(
                 file_path,
-                "unpack/all",
+                "unpack",
                 "application/zip",
                 |path, source| ExtractionError::UnpackConnection { path, source },
                 "UnpackConnectionError",
@@ -446,12 +448,21 @@ impl TikaExtractor {
     }
 
     /// Stream zip entries to disk, yielding `(erp, local_path)` for each.
+    ///
+    /// Because we use `/unpack` (direct children only), entries are leaf
+    /// filenames — no nested paths and therefore no file/directory conflicts.
+    ///
+    /// Tika's `/unpack` may name entries differently from the ERPs reported
+    /// by `/rmeta/text`.  In particular, unnamed MIME parts get `embedded-N`
+    /// ERPs in rmeta but show up as `{N-1}.ext` in the unpack zip.  The
+    /// `erp_to_idx` map is consulted to resolve the canonical ERP for each
+    /// entry, trying both the literal leaf name and the `embedded-N` fallback.
     fn extract_zip_entries<'a>(
         &'a self,
         zip_path: &'a Path,
         dest_dir: &'a Path,
-        resolved_dest: &'a Path,
         current_erp: &'a str,
+        erp_to_idx: &'a HashMap<String, usize>,
     ) -> BoxStream<'a, Result<(String, PathBuf), ExtractionError>> {
         let span = tracing::debug_span!("extract_zip_entries", path = %zip_path.display());
         let stream = async_stream::try_stream! {
@@ -463,29 +474,62 @@ impl TikaExtractor {
 
             let num_entries = reader.file().entries().len();
 
+            // Running count of real (non-skipped) entries, used to map
+            // Tika's `N.ext` zip names back to `embedded-{N+1}` ERPs.
+            let mut entry_ordinal: u32 = 0;
+
             for i in 0..num_entries {
-                let Some(filename) = read_entry_filename(&reader, i) else { continue };
-                if filename.ends_with(".metadata.json")
-                    || filename == "__TEXT__"
-                    || filename == "__METADATA__"
+                let entry = &reader.file().entries()[i];
+                if entry.dir().unwrap_or(false) {
+                    continue;
+                }
+                // Reject symlinks: Unix mode type bits 0o120000 indicate a symbolic link.
+                if let Some(mode) = entry.unix_permissions()
+                    && mode & 0o170_000 == 0o120_000
+                {
+                    tracing::warn!(index = i, "skipping symlink zip entry");
+                    continue;
+                }
+                let Some(raw_name) = read_entry_filename(&reader, i) else { continue };
+                if raw_name.ends_with(".metadata.json")
+                    || raw_name == "__TEXT__"
+                    || raw_name == "__METADATA__"
                 {
                     continue;
                 }
-                let Some(safe_rel) = safe_archive_path(&filename) else {
+                let Some(leaf) = safe_entry_name(&raw_name) else {
                     continue;
                 };
-                let att_path = dest_dir.join(&safe_rel);
-                if !prepare_entry_parent(&att_path, resolved_dest).await {
-                    tracing::warn!(
-                        name = %filename,
-                        dest_dir = %dest_dir.display(),
-                        "path traversal blocked"
-                    );
-                    continue;
-                }
+                let att_path = dest_dir.join(leaf);
                 self.write_zip_entry(&reader, i, zip_path, &att_path).await?;
 
-                let child_erp = format!("{current_erp}/{filename}");
+                // Defense-in-depth: async_zip may materialise a symlink if the
+                // entry's external attributes are crafted despite the pre-write
+                // mode-bits check above.
+                let meta = tokio::fs::symlink_metadata(&att_path)
+                    .await
+                    .map_err(|e| io_error(&att_path, e))?;
+                if !meta.is_file() {
+                    tracing::warn!(path = %att_path.display(), "extracted entry is not a regular file, removing");
+                    let _ = tokio::fs::remove_file(&att_path).await;
+                    continue;
+                }
+
+                // Try the literal name first, then the embedded-N fallback
+                // for Tika's unnamed MIME part naming convention.
+                let literal_erp = format!("{current_erp}/{leaf}");
+                let child_erp = if erp_to_idx.contains_key(&literal_erp) {
+                    literal_erp
+                } else {
+                    let fallback = format!("{current_erp}/embedded-{}", entry_ordinal + 1);
+                    if erp_to_idx.contains_key(&fallback) {
+                        fallback
+                    } else {
+                        literal_erp
+                    }
+                };
+                entry_ordinal += 1;
+
                 tracing::info!(
                     attachment = %att_path.display(),
                     erp = %child_erp,
@@ -524,16 +568,18 @@ impl TikaExtractor {
 
     /// Recursively unpack embedded files, streaming `(erp, local_path)` pairs.
     ///
-    /// Each extracted entry is yielded immediately. Entries identified as
-    /// containers (via `container_paths`) are recursively unpacked and their
-    /// sub-entries yielded in-line.
+    /// Each extracted entry is yielded immediately.  Entries known to be
+    /// containers (from the rmeta-derived `container_paths` set) are then
+    /// recursively unpacked and their sub-entries yielded in-line.  Leaf
+    /// entries are skipped to avoid unnecessary `/unpack` round-trips.
     ///
     /// [`ExtractionError::DepthLimitExceeded`] is propagated. Other errors
     /// from recursive sub-archives are logged and the sub-archive is skipped.
     fn unpack_recursive<'a>(
         &'a self,
         file_path: &'a Path,
-        container_paths: Arc<HashSet<String>>,
+        erp_to_idx: &'a HashMap<String, usize>,
+        container_paths: &'a HashSet<String>,
         depth: u32,
         current_erp: String,
     ) -> BoxStream<'a, Result<(String, PathBuf), ExtractionError>> {
@@ -552,14 +598,13 @@ impl TikaExtractor {
             let Some(tmp) = self.unpack_raw(file_path).await? else {
                 return;
             };
-            let (dest_dir, resolved_dest) = self.prepare_dest_dir(file_path).await?;
+            let dest_dir = self.prepare_dest_dir(file_path).await?;
 
-            // Yield each entry directly from the zip stream, only collecting
-            // the subset that needs recursive unpacking.
+            // Collect direct children, then recurse into known containers.
             let mut containers_to_recurse: Vec<(String, PathBuf)> = Vec::new();
             {
                 let mut entry_stream = self.extract_zip_entries(
-                    tmp.path(), &dest_dir, &resolved_dest, &current_erp,
+                    tmp.path(), &dest_dir, &current_erp, erp_to_idx,
                 );
                 while let Some(entry) = entry_stream.next().await {
                     let (erp, path) = entry?;
@@ -574,7 +619,8 @@ impl TikaExtractor {
             for (child_erp, att_path) in containers_to_recurse {
                 let mut sub = self.unpack_recursive(
                     &att_path,
-                    Arc::clone(&container_paths),
+                    erp_to_idx,
+                    container_paths,
                     depth + 1,
                     child_erp.clone(),
                 );
@@ -599,18 +645,12 @@ impl TikaExtractor {
         Box::pin(stream.instrument(span))
     }
 
-    async fn prepare_dest_dir(
-        &self,
-        file_path: &Path,
-    ) -> Result<(PathBuf, PathBuf), ExtractionError> {
+    async fn prepare_dest_dir(&self, file_path: &Path) -> Result<PathBuf, ExtractionError> {
         let dest_dir = container_dir(&self.config.extract_dir, &self.config.index_name, file_path);
         tokio::fs::create_dir_all(&dest_dir)
             .await
             .map_err(|e| io_error(dest_dir.clone(), e))?;
-        let resolved = dest_dir
-            .canonicalize()
-            .map_err(|e| io_error(dest_dir.clone(), e))?;
-        Ok((dest_dir, resolved))
+        Ok(dest_dir)
     }
 
     // -----------------------------------------------------------------------
@@ -788,22 +828,15 @@ fn read_entry_filename(reader: &ZipFileReader, i: usize) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Create the parent directory for `att_path` and verify it stays within `resolved_dest`.
-///
-/// Returns `false` if the parent cannot be created or if canonicalization reveals the
-/// resolved path escapes the destination (symlink attack). Both failure modes result in
-/// the entry being skipped.
-async fn prepare_entry_parent(att_path: &Path, resolved_dest: &Path) -> bool {
-    let Some(parent) = att_path.parent() else {
-        return false;
-    };
-    if tokio::fs::create_dir_all(parent).await.is_err() {
-        return false;
-    }
-    parent
-        .canonicalize()
-        .map(|p| p.starts_with(resolved_dest))
-        .unwrap_or(false)
+/// Extract the display path from a document's metadata, if present.
+fn doc_display_path(doc: &Document) -> &str {
+    doc.metadata
+        .get(AUM_DISPLAY_PATH_KEY)
+        .and_then(|v| match v {
+            MetadataValue::Single(s) => Some(s.as_str()),
+            MetadataValue::List(_) => None,
+        })
+        .unwrap_or("")
 }
 
 // ---------------------------------------------------------------------------
@@ -851,9 +884,6 @@ impl Extractor for TikaExtractor {
             yield container_doc;
 
             if has_embedded {
-                let container_paths =
-                    Arc::new(find_container_paths(embedded_parts.iter()));
-
                 // Index embedded parts by their embedded-resource-path so we
                 // can yield documents incrementally as unpack entries arrive
                 // instead of collecting the entire attachment map first.
@@ -868,13 +898,15 @@ impl Extractor for TikaExtractor {
                     }
                 }
 
+                let container_paths = find_container_paths(erp_to_idx.keys().map(String::as_str));
+
                 let mut yielded = vec![false; embedded_parts.len()];
                 let mut unpack_failed = false;
                 let embedded_count = embedded_parts.len();
 
                 {
                     let mut unpack_stream = self.unpack_recursive(
-                        file_path, container_paths, 0, String::new(),
+                        file_path, &erp_to_idx, &container_paths, 0, String::new(),
                     );
                     while let Some(entry) = unpack_stream.next().await {
                         match entry {
@@ -891,14 +923,7 @@ impl Extractor for TikaExtractor {
                                     if empty {
                                         empty_extractions += 1;
                                     }
-                                    let display_path = doc
-                                        .metadata
-                                        .get(AUM_DISPLAY_PATH_KEY)
-                                        .and_then(|v| match v {
-                                            MetadataValue::Single(s) => Some(s.as_str()),
-                                            MetadataValue::List(_) => None,
-                                        })
-                                        .unwrap_or("");
+                                    let display_path = doc_display_path(&doc);
                                     tracing::info!(
                                         attachment = display_path,
                                         content_chars = doc.content.len(),
@@ -1043,7 +1068,7 @@ impl TikaExtractor {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use anyhow::Context as _;
     use serde_json::json;
@@ -1137,84 +1162,57 @@ mod tests {
     }
 
     #[test]
-    fn safe_archive_path_simple() {
-        assert_eq!(
-            safe_archive_path("file.txt"),
-            Some(PathBuf::from("file.txt"))
-        );
+    fn safe_entry_name_simple() {
+        assert_eq!(safe_entry_name("file.txt"), Some("file.txt"));
     }
 
     #[test]
-    fn safe_archive_path_nested() {
-        assert_eq!(
-            safe_archive_path("a/b/c.txt"),
-            Some(PathBuf::from("a/b/c.txt"))
-        );
+    fn safe_entry_name_strips_directory() {
+        assert_eq!(safe_entry_name("subdir/file.txt"), Some("file.txt"));
+        assert_eq!(safe_entry_name("a/b/c.txt"), Some("c.txt"));
     }
 
     #[test]
-    fn safe_archive_path_strips_dot_component() {
-        assert_eq!(
-            safe_archive_path("./file.txt"),
-            Some(PathBuf::from("file.txt"))
-        );
+    fn safe_entry_name_strips_dot_component() {
+        assert_eq!(safe_entry_name("./file.txt"), Some("file.txt"));
     }
 
     #[test]
-    fn safe_archive_path_rejects_double_dot() {
-        assert!(safe_archive_path("../escape.txt").is_none());
+    fn safe_entry_name_rejects_double_dot_only() {
+        assert!(safe_entry_name("..").is_none());
     }
 
     #[test]
-    fn safe_archive_path_rejects_double_dot_nested() {
-        assert!(safe_archive_path("a/../../escape.txt").is_none());
+    fn safe_entry_name_rejects_null_byte() {
+        assert!(safe_entry_name("fi\x00le.txt").is_none());
     }
 
     #[test]
-    fn safe_archive_path_rejects_absolute() {
-        assert!(safe_archive_path("/etc/passwd").is_none());
+    fn safe_entry_name_rejects_hidden() {
+        assert!(safe_entry_name(".hidden").is_none());
+        assert!(safe_entry_name("subdir/.hidden").is_none());
     }
 
     #[test]
-    fn safe_archive_path_rejects_null_byte() {
-        assert!(safe_archive_path("fi\x00le.txt").is_none());
-    }
-
-    #[test]
-    fn safe_archive_path_rejects_hidden_leaf() {
-        assert!(safe_archive_path(".hidden").is_none());
-        assert!(safe_archive_path("subdir/.hidden").is_none());
+    fn safe_entry_name_rejects_empty() {
+        assert!(safe_entry_name("").is_none());
     }
 
     #[test]
     fn find_container_paths_flat_archive() {
-        let mut m = Map::new();
-        m.insert(EMBEDDED_RESOURCE_PATH_KEY.to_owned(), json!("/file.txt"));
-        assert!(find_container_paths([m].iter()).is_empty());
+        assert!(find_container_paths(["/file.txt"]).is_empty());
     }
 
     #[test]
     fn find_container_paths_single_level() {
-        let mut m1 = Map::new();
-        m1.insert(EMBEDDED_RESOURCE_PATH_KEY.to_owned(), json!("/archive.zip"));
-        let mut m2 = Map::new();
-        m2.insert(
-            EMBEDDED_RESOURCE_PATH_KEY.to_owned(),
-            json!("/archive.zip/doc.pdf"),
-        );
-        let c = find_container_paths([m1, m2].iter());
+        let c = find_container_paths(["/archive.zip", "/archive.zip/doc.pdf"]);
         assert!(c.contains("/archive.zip"));
         assert_eq!(c.len(), 1);
     }
 
     #[test]
     fn find_container_paths_deep_nesting() {
-        let mut m = Map::new();
-        m.insert(
-            EMBEDDED_RESOURCE_PATH_KEY.to_owned(),
-            json!("/a.zip/b.tar/c.txt"),
-        );
-        let c = find_container_paths([m].iter());
+        let c = find_container_paths(["/a.zip/b.tar/c.txt"]);
         assert!(c.contains("/a.zip"));
         assert!(c.contains("/a.zip/b.tar"));
         assert_eq!(c.len(), 2);
@@ -1284,7 +1282,7 @@ mod tests {
         assert_eq!(docs[0].source_path, source);
         assert!(!docs[0].metadata.contains_key("X-TIKA:content"));
 
-        // No /unpack/all call for a simple document.
+        // No /unpack call for a simple document.
         let reqs = server
             .received_requests()
             .await
@@ -1455,7 +1453,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
-            .and(path("/unpack/all"))
+            .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(zip_bytes)
@@ -1495,7 +1493,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
-            .and(path("/unpack/all"))
+            .and(path("/unpack"))
             .respond_with(ResponseTemplate::new(204))
             .mount(&server)
             .await;
@@ -1529,7 +1527,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
-            .and(path("/unpack/all"))
+            .and(path("/unpack"))
             .respond_with(ResponseTemplate::new(500).set_body_string("error"))
             .mount(&server)
             .await;
@@ -1559,8 +1557,10 @@ mod tests {
 
     #[tokio::test]
     async fn extract_depth_limit_exceeded() -> anyhow::Result<()> {
+        // Outer /unpack returns inner.zip as a direct child.
+        let outer_zip = make_zip_bytes(&[("inner.zip", b"fake zip data")]).await?;
+        // Inner /unpack on inner.zip returns inner.txt.
         let inner_zip = make_zip_bytes(&[("inner.txt", b"deep")]).await?;
-        let outer_zip = make_zip_bytes(&[("inner.zip", &inner_zip)]).await?;
 
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
@@ -1572,8 +1572,9 @@ mod tests {
             ])))
             .mount(&server)
             .await;
+        // First /unpack (outer) returns inner.zip.
         Mock::given(method("PUT"))
-            .and(path("/unpack/all"))
+            .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(outer_zip)
@@ -1582,11 +1583,12 @@ mod tests {
             .up_to_n_times(1)
             .mount(&server)
             .await;
+        // Second /unpack (inner.zip) returns inner.txt.
         Mock::given(method("PUT"))
-            .and(path("/unpack/all"))
+            .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_bytes(make_zip_bytes(&[("inner.txt", b"deep")]).await?)
+                    .set_body_bytes(inner_zip)
                     .insert_header("Content-Type", "application/zip"),
             )
             .mount(&server)
@@ -1656,7 +1658,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
-            .and(path("/unpack/all"))
+            .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(zip_bytes)
@@ -1685,8 +1687,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_subdir_structure_preserved() -> anyhow::Result<()> {
-        let zip_bytes = make_zip_bytes(&[("subdir/file.txt", b"nested")]).await?;
+    async fn extract_attachment_source_path_is_extracted_file() -> anyhow::Result<()> {
+        let zip_bytes = make_zip_bytes(&[("file.txt", b"nested")]).await?;
 
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
@@ -1695,13 +1697,13 @@ mod tests {
                 {"X-TIKA:content": "container"},
                 {
                     "X-TIKA:content": "nested",
-                    "X-TIKA:embedded_resource_path": "/subdir/file.txt",
+                    "X-TIKA:embedded_resource_path": "/file.txt",
                 }
             ])))
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
-            .and(path("/unpack/all"))
+            .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(zip_bytes)
@@ -1722,7 +1724,13 @@ mod tests {
 
         assert_eq!(docs.len(), 2);
         assert!(docs[1].source_path.exists());
-        assert!(docs[1].source_path.to_string_lossy().contains("subdir"));
+        assert_ne!(docs[1].source_path, source);
+        let name = docs[1]
+            .source_path
+            .file_name()
+            .context("should have filename")?
+            .to_string_lossy();
+        assert_eq!(name, "file.txt");
         Ok(())
     }
 
@@ -1744,7 +1752,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
-            .and(path("/unpack/all"))
+            .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(zip_bytes)
@@ -1773,6 +1781,187 @@ mod tests {
             panic!("expected Single for {AUM_EXTRACTED_FROM_KEY}");
         };
         assert!(extracted_from.contains("email.eml"));
+        Ok(())
+    }
+
+    /// With `/unpack` (direct children only), nested containers are handled
+    /// by recursive unpack calls.  The outer email yields `attach.eml` as a
+    /// direct child, and a second `/unpack` call on that file yields
+    /// `document.pdf`.
+    #[tokio::test]
+    async fn extract_nested_container_recursive_unpack() -> anyhow::Result<()> {
+        // Outer /unpack returns only the direct child.
+        let outer_zip = make_zip_bytes(&[("attach.eml", b"inner email" as &[u8])]).await?;
+        // Inner /unpack on attach.eml returns its child.
+        let inner_zip = make_zip_bytes(&[("document.pdf", b"pdf content")]).await?;
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/rmeta/text"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"X-TIKA:content": "outer email"},
+                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/attach.eml"},
+                {
+                    "X-TIKA:content": "pdf text",
+                    "X-TIKA:embedded_resource_path": "/attach.eml/document.pdf",
+                },
+            ])))
+            .mount(&server)
+            .await;
+        // First /unpack call (for outer email) returns attach.eml.
+        Mock::given(method("PUT"))
+            .and(path("/unpack"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(outer_zip)
+                    .insert_header("Content-Type", "application/zip"),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Second /unpack call (for attach.eml) returns document.pdf.
+        Mock::given(method("PUT"))
+            .and(path("/unpack"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(inner_zip)
+                    .insert_header("Content-Type", "application/zip"),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        let tmp = TempDir::new()?;
+        let source = tmp.path().join("email.eml");
+        tokio::fs::write(&source, b"raw").await?;
+
+        let extractor = make_extractor(&tmp, &server.uri())?;
+        let docs = extractor
+            .extract(&source, None)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        // All three documents should be produced: container + 2 attachments.
+        assert_eq!(docs.len(), 3, "expected container + 2 attachments");
+
+        // Both attachments must have their own file on disk — neither should
+        // fall back to the container's source_path.
+        assert!(
+            docs[1].source_path.exists(),
+            "attach.eml must exist on disk"
+        );
+        assert_ne!(
+            docs[1].source_path, source,
+            "attach.eml source must not be the container"
+        );
+        assert!(
+            docs[2].source_path.exists(),
+            "document.pdf must exist on disk"
+        );
+        assert_ne!(
+            docs[2].source_path, source,
+            "document.pdf source must not be the container"
+        );
+        Ok(())
+    }
+
+    /// Reproduce real-world scenario: email with attachments named `embedded-1`
+    /// and `embedded-2` (Tika default names for unnamed MIME parts), each
+    /// containing a nested PDF.
+    #[tokio::test]
+    async fn extract_email_with_embedded_default_names() -> anyhow::Result<()> {
+        // Outer /unpack returns two direct children.
+        let outer_zip = make_zip_bytes(&[
+            ("embedded-1", b"mime part 1" as &[u8]),
+            ("embedded-2", b"mime part 2"),
+        ])
+        .await?;
+        // Inner /unpack on embedded-1 returns invoice.pdf.
+        let inner_zip_1 = make_zip_bytes(&[("invoice.pdf", b"pdf1")]).await?;
+        // Inner /unpack on embedded-2 returns report.pdf.
+        let inner_zip_2 = make_zip_bytes(&[("report.pdf", b"pdf2")]).await?;
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/rmeta/text"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"X-TIKA:content": "email body"},
+                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/embedded-1"},
+                {
+                    "X-TIKA:content": "invoice text",
+                    "X-TIKA:embedded_resource_path": "/embedded-1/invoice.pdf",
+                },
+                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/embedded-2"},
+                {
+                    "X-TIKA:content": "report text",
+                    "X-TIKA:embedded_resource_path": "/embedded-2/report.pdf",
+                },
+            ])))
+            .mount(&server)
+            .await;
+
+        // First /unpack (outer email) returns embedded-1 and embedded-2.
+        Mock::given(method("PUT"))
+            .and(path("/unpack"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(outer_zip)
+                    .insert_header("Content-Type", "application/zip"),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Second /unpack (embedded-1) returns invoice.pdf.
+        Mock::given(method("PUT"))
+            .and(path("/unpack"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(inner_zip_1)
+                    .insert_header("Content-Type", "application/zip"),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Third /unpack (embedded-2) returns report.pdf.
+        Mock::given(method("PUT"))
+            .and(path("/unpack"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(inner_zip_2)
+                    .insert_header("Content-Type", "application/zip"),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        let tmp = TempDir::new()?;
+        let source = tmp.path().join("email.eml");
+        tokio::fs::write(&source, b"raw email").await?;
+
+        let extractor = make_extractor(&tmp, &server.uri())?;
+        let docs = extractor
+            .extract(&source, None)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        // 5 documents: container + 2 intermediate + 2 PDFs.
+        assert_eq!(
+            docs.len(),
+            5,
+            "expected 1 container + 2 intermediate + 2 PDFs"
+        );
+
+        // All embedded documents must have their own file on disk.
+        for (i, doc) in docs.iter().enumerate().skip(1) {
+            assert!(
+                doc.source_path.exists(),
+                "doc[{i}] source_path must exist on disk"
+            );
+            assert_ne!(
+                doc.source_path, source,
+                "doc[{i}] source must not be the container"
+            );
+        }
         Ok(())
     }
 }
