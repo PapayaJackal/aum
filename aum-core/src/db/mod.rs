@@ -7,12 +7,12 @@
 //! # Usage
 //!
 //! ```no_run
-//! use std::path::Path;
 //! use std::sync::Arc;
 //! use aum_core::db::{init_pool, SqlxJobRepository};
 //!
 //! # async fn example() {
-//! let pool = init_pool("sqlite:data/aum.db", 16, Path::new("migrations"))
+//! static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+//! let pool = init_pool("sqlite:data/aum.db", 16, &MIGRATOR)
 //!     .await
 //!     .expect("db init");
 //! let jobs = Arc::new(SqlxJobRepository::new(pool));
