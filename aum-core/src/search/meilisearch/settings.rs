@@ -55,8 +55,10 @@ pub(super) static SEARCHABLE_ATTRS: &[&str] = &["display_path", "content"];
 /// Name of the Meilisearch embedder used for hybrid/vector search.
 pub(super) const EMBEDDER_NAME: &str = "default";
 
-/// Timeout for general index settings update tasks.
-pub(super) const TASK_TIMEOUT: Duration = Duration::from_secs(60);
+/// Effectively-infinite timeout so the SDK never gives up on a task.
+/// The meilisearch-sdk defaults `None` to only 5 s, so we must pass an
+/// explicit large value.
+const NEVER_TIMEOUT: Duration = Duration::from_secs(86_400);
 
 // ---------------------------------------------------------------------------
 // Settings builders
@@ -90,18 +92,15 @@ pub(super) fn embedder_settings(dimension: u32) -> HashMap<String, Embedder> {
 
 /// Wait for a Meilisearch task to reach a terminal state.
 ///
-/// Pass `None` for `timeout` to wait indefinitely.
-///
-/// Returns `Ok(())` on success, `Err(SearchError::TaskFailed)` if the task
-/// ends in a failed state, and `Err(SearchError::TaskTimeout)` if it doesn't
-/// finish within `timeout`.
-pub(super) async fn wait_for_task(
-    task_info: TaskInfo,
-    client: &Client,
-    timeout: Option<Duration>,
-) -> Result<(), SearchError> {
+/// Waits effectively indefinitely (24 h) so that large indexing operations
+/// are never cut short by a timeout.
+pub(super) async fn wait_for_task(task_info: TaskInfo, client: &Client) -> Result<(), SearchError> {
     let completed = task_info
-        .wait_for_completion(client, Some(Duration::from_millis(100)), timeout)
+        .wait_for_completion(
+            client,
+            Some(Duration::from_millis(100)),
+            Some(NEVER_TIMEOUT),
+        )
         .await
         .map_err(|_| SearchError::TaskTimeout)?;
 

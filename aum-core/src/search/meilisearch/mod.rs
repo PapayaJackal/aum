@@ -32,7 +32,7 @@ use batching::{MAX_PAYLOAD_BYTES, split_by_payload_size};
 use filter::build_filter_string;
 use meta::build_doc_body;
 use parse::{merge_facets, parse_hit};
-use settings::{EMBEDDER_NAME, TASK_TIMEOUT, base_settings, embedder_settings, wait_for_task};
+use settings::{EMBEDDER_NAME, base_settings, embedder_settings, wait_for_task};
 
 // ---------------------------------------------------------------------------
 // Facet field names for search facets parameter
@@ -225,7 +225,7 @@ impl SearchBackend for MeilisearchBackend {
             .delete()
             .await
             .map_err(SearchError::Meilisearch)?;
-        wait_for_task(task, &self.client, Some(TASK_TIMEOUT)).await
+        wait_for_task(task, &self.client).await
     }
 
     #[instrument(skip(self), fields(index))]
@@ -358,7 +358,7 @@ impl SearchBackend for MeilisearchBackend {
             .add_or_update(&docs, Some("id"))
             .await
             .map_err(SearchError::Meilisearch)?;
-        wait_for_task(task, &self.client, None).await?;
+        wait_for_task(task, &self.client).await?;
 
         // Return the number of failed updates. Meilisearch tasks are all-or-nothing:
         // if wait_for_task succeeded above, all documents were updated successfully.
@@ -467,14 +467,14 @@ async fn initialize_index(
         .set_settings(&base_settings())
         .await
         .map_err(SearchError::Meilisearch)?;
-    wait_for_task(task, client, Some(TASK_TIMEOUT)).await?;
+    wait_for_task(task, client).await?;
 
     if let Some(dim) = vector_dimension {
         let task = idx
             .set_settings(&Settings::new().with_embedders(embedder_settings(dim)))
             .await
             .map_err(SearchError::Meilisearch)?;
-        wait_for_task(task, client, Some(TASK_TIMEOUT)).await?;
+        wait_for_task(task, client).await?;
     }
     Ok(())
 }
@@ -505,7 +505,7 @@ async fn index_sub_batches(
             .add_or_replace(batch, Some("id"))
             .await
             .map_err(SearchError::Meilisearch)?;
-        match wait_for_task(task, client, None).await {
+        match wait_for_task(task, client).await {
             Ok(()) => indexed += batch.len() as u64,
             Err(SearchError::TaskFailed { .. }) => failed += batch.len() as u64,
             Err(e) => return Err(e),
