@@ -113,6 +113,7 @@ pub fn build_tika_pool(
 ) -> anyhow::Result<Arc<InstancePool<TikaExtractor>>> {
     let instances = config.effective_tika_instances();
 
+    let clustered = instances.len() > 1;
     let descs = instances
         .iter()
         .map(|inst| -> anyhow::Result<InstanceDesc<TikaExtractor>> {
@@ -125,6 +126,17 @@ pub fn build_tika_pool(
                 max_depth: config.ingest.max_extract_depth,
                 request_timeout_secs: u64::from(config.tika.request_timeout),
                 max_content_length: config.ingest.max_content_length,
+                // In clustered mode, pool-level failover handles retries across
+                // instances, so per-request backoff retries are disabled.  In
+                // single-instance mode, per-request exponential backoff is the
+                // only retry mechanism available.
+                max_retries: if clustered {
+                    0
+                } else {
+                    config.tika.max_retries
+                },
+                retry_initial_backoff_ms: config.tika.retry_initial_backoff_ms,
+                retry_max_backoff_ms: config.tika.retry_max_backoff_ms,
             })
             .context("failed to build Tika extractor")?;
             Ok(InstanceDesc {

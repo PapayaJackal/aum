@@ -215,7 +215,15 @@ async fn stream_file<E: Extractor + 'static>(
         .canonicalize()
         .unwrap_or_else(|_| file_path.to_owned());
 
-    let stream = pool.run_stream(|extractor| extractor.extract(file_path, Some(record_error)));
+    // In clustered mode (multiple Tika instances) the pool retries the
+    // extraction on a different instance when the first one fails before
+    // producing any documents.  The max_retries is capped internally to
+    // the number of alternative instances available.
+    #[allow(clippy::cast_possible_truncation)]
+    let instance_retries = pool.len().saturating_sub(1) as u32;
+    let stream = pool.run_stream_with_retry(instance_retries, |extractor| {
+        extractor.extract(file_path, Some(record_error))
+    });
     tokio::pin!(stream);
 
     let mut doc_index: u64 = 0;

@@ -192,6 +192,12 @@ pub struct TikaExtractorConfig {
     pub request_timeout_secs: u64,
     /// Maximum character count of document content to retain; 0 means unlimited.
     pub max_content_length: u64,
+    /// Maximum number of retry attempts for transient Tika failures (0 disables retries).
+    pub max_retries: u32,
+    /// Initial backoff delay in milliseconds for retries (doubled on each attempt).
+    pub retry_initial_backoff_ms: u64,
+    /// Maximum backoff delay in milliseconds (caps the exponential growth).
+    pub retry_max_backoff_ms: u64,
 }
 
 /// Document extractor backed by Apache Tika's HTTP API.
@@ -301,19 +307,69 @@ impl TikaExtractor {
         accept: &'static str,
         map_error: fn(PathBuf, reqwest::Error) -> ExtractionError,
     ) -> Result<reqwest::Response, ExtractionError> {
-        let file = tokio::fs::File::open(file_path)
-            .await
-            .map_err(|e| io_error(file_path, e))?;
+        let max_retries = self.config.max_retries;
         let mut headers = self.tika_headers();
         headers.insert(ACCEPT, HeaderValue::from_static(accept));
 
-        self.client
-            .put(self.tika_url(endpoint))
-            .headers(headers)
-            .body(stream_file_body(file))
-            .send()
-            .await
-            .map_err(|e| map_error(file_path.to_path_buf(), e))
+        for attempt in 0..=max_retries {
+            // Re-open the file on each attempt since the body stream is consumed.
+            let file = tokio::fs::File::open(file_path)
+                .await
+                .map_err(|e| io_error(file_path, e))?;
+
+            let result = self
+                .client
+                .put(self.tika_url(endpoint))
+                .headers(headers.clone())
+                .body(stream_file_body(file))
+                .send()
+                .await;
+
+            match result {
+                Ok(resp) if resp.status().is_server_error() => {
+                    if attempt < max_retries {
+                        let backoff = self.retry_backoff(attempt);
+                        tracing::warn!(
+                            path = %file_path.display(),
+                            endpoint,
+                            status = resp.status().as_u16(),
+                            attempt = attempt + 1,
+                            max_retries,
+                            backoff_ms = backoff.as_millis(),
+                            "retryable HTTP status from Tika, backing off",
+                        );
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                    return Ok(resp);
+                }
+                Ok(resp) => return Ok(resp),
+                Err(e) if is_retryable_reqwest_error(&e) && attempt < max_retries => {
+                    let backoff = self.retry_backoff(attempt);
+                    tracing::warn!(
+                        path = %file_path.display(),
+                        endpoint,
+                        error = %e,
+                        attempt = attempt + 1,
+                        max_retries,
+                        backoff_ms = backoff.as_millis(),
+                        "retryable connection error from Tika, backing off",
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
+                Err(e) => return Err(map_error(file_path.to_path_buf(), e)),
+            }
+        }
+
+        unreachable!("retry loop should return before exhausting iterations");
+    }
+
+    /// Compute the capped exponential backoff duration for a given attempt.
+    fn retry_backoff(&self, attempt: u32) -> std::time::Duration {
+        let base = self.config.retry_initial_backoff_ms;
+        let max = self.config.retry_max_backoff_ms;
+        let backoff_ms = base.saturating_mul(1u64 << attempt.min(31)).min(max);
+        std::time::Duration::from_millis(backoff_ms)
     }
 
     async fn check_rmeta_status(
@@ -763,6 +819,14 @@ fn resolve_extracted_from(file_path: &Path, erp: &str) -> PathBuf {
     }
 }
 
+/// Whether a reqwest error is transient and worth retrying.
+///
+/// Connection resets, timeouts, and request-level errors are all symptoms of
+/// Tika being temporarily unavailable (e.g. restarting after `HIT_MAX_FILES`).
+fn is_retryable_reqwest_error(e: &reqwest::Error) -> bool {
+    e.is_connect() || e.is_timeout() || e.is_request()
+}
+
 /// Serde visitor that sends each JSON array element through a channel.
 ///
 /// Used by [`TikaExtractor::spawn_rmeta_parser`] to stream Tika's
@@ -1063,6 +1127,9 @@ mod tests {
             max_depth: 5,
             request_timeout_secs: 10,
             max_content_length: 0,
+            max_retries: 0,
+            retry_initial_backoff_ms: 100,
+            retry_max_backoff_ms: 1000,
         })
         .context("make_extractor")
     }
@@ -1931,6 +1998,102 @@ mod tests {
                 "doc[{i}] source must not be the container"
             );
         }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Retry tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn send_tika_request_retries_on_503() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+
+        // First two calls return 503, third returns 200.
+        Mock::given(method("PUT"))
+            .and(path("/rmeta/text"))
+            .respond_with(wiremock::ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rmeta/text"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(json!([{"X-TIKA:content": "hello"}])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let tmp = TempDir::new()?;
+        let source = tmp.path().join("doc.txt");
+        tokio::fs::write(&source, b"data").await?;
+
+        let extractor = TikaExtractor::new(TikaExtractorConfig {
+            max_retries: 5,
+            retry_initial_backoff_ms: 10,
+            retry_max_backoff_ms: 50,
+            ..make_extractor(&tmp, &server.uri())?.config
+        })?;
+
+        let docs = extractor
+            .extract(&source, None)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].content, "hello");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_tika_request_exhausts_retries_on_persistent_503() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/rmeta/text"))
+            .respond_with(wiremock::ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let tmp = TempDir::new()?;
+        let source = tmp.path().join("doc.txt");
+        tokio::fs::write(&source, b"data").await?;
+
+        let extractor = TikaExtractor::new(TikaExtractorConfig {
+            max_retries: 2,
+            retry_initial_backoff_ms: 10,
+            retry_max_backoff_ms: 50,
+            ..make_extractor(&tmp, &server.uri())?.config
+        })?;
+
+        let result: Result<Vec<_>, _> = extractor.extract(&source, None).try_collect().await;
+
+        assert!(
+            matches!(result, Err(ExtractionError::RmetaHttp { status: 503, .. })),
+            "expected RmetaHttp 503, got {result:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_backoff_is_capped() -> anyhow::Result<()> {
+        let tmp = TempDir::new()?;
+        let extractor = TikaExtractor::new(TikaExtractorConfig {
+            max_retries: 50,
+            retry_initial_backoff_ms: 1000,
+            retry_max_backoff_ms: 30000,
+            ..make_extractor(&tmp, "http://localhost:1")?.config
+        })?;
+
+        // attempt 0: 1000ms, attempt 1: 2000ms, ..., attempt 4: 16000ms, attempt 5: 30000ms cap
+        assert_eq!(extractor.retry_backoff(0).as_millis(), 1000);
+        assert_eq!(extractor.retry_backoff(1).as_millis(), 2000);
+        assert_eq!(extractor.retry_backoff(4).as_millis(), 16000);
+        assert_eq!(extractor.retry_backoff(5).as_millis(), 30000);
+        assert_eq!(extractor.retry_backoff(10).as_millis(), 30000);
+        assert_eq!(extractor.retry_backoff(31).as_millis(), 30000);
         Ok(())
     }
 }

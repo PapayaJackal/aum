@@ -407,6 +407,106 @@ impl<T: Send + Sync> InstancePool<T> {
 
         Box::pin(stream)
     }
+    /// Execute a streaming operation with instance-level failover.
+    ///
+    /// Like [`run_stream`](Self::run_stream), but when the stream yields an
+    /// error as its very first item (before any successful results), the pool
+    /// selects a different instance and retries. This handles the case where
+    /// a Tika instance is temporarily down (e.g. restarting after
+    /// `HIT_MAX_FILES`) and another instance in the cluster can serve the
+    /// request immediately.
+    ///
+    /// `max_retries` limits the number of failover attempts. In single-instance
+    /// pools this is effectively a no-op — the error is yielded immediately.
+    ///
+    /// The closure must be [`Fn`] (not `FnOnce`) so it can be called on each
+    /// retry attempt.
+    pub fn run_stream_with_retry<'a, F, S, R, E>(
+        &'a self,
+        max_retries: u32,
+        f: F,
+    ) -> BoxStream<'a, Result<R, E>>
+    where
+        F: Fn(&'a T) -> S + Send + 'a,
+        S: futures::Stream<Item = Result<R, E>> + Send + 'a,
+        R: Send + 'a,
+        E: std::fmt::Display + Send + 'a,
+    {
+        let stream = async_stream::stream! {
+            // Cap retries to number of other instances available.
+            #[allow(clippy::cast_possible_truncation)]
+            let effective_retries = max_retries.min(
+                self.instances.len().saturating_sub(1) as u32
+            );
+            let mut last_error: Option<E> = None;
+
+            for attempt in 0..=effective_retries {
+                let instance = self.select_instance();
+                let permit = instance.semaphore.clone().acquire_owned().await.ok();
+
+                let inner = f(&instance.client);
+                futures::pin_mut!(inner);
+
+                let first = inner.next().await;
+                match first {
+                    Some(Ok(item)) => {
+                        // First item succeeded — commit to this instance.
+                        yield Ok(item);
+
+                        let mut had_error = false;
+                        while let Some(item) = inner.next().await {
+                            if item.is_err() {
+                                had_error = true;
+                            }
+                            yield item;
+                        }
+
+                        if had_error {
+                            self.record_failure(instance);
+                        } else {
+                            self.record_success(instance);
+                        }
+
+                        drop(permit);
+                        return;
+                    }
+                    Some(Err(e)) => {
+                        self.record_failure(instance);
+                        drop(permit);
+
+                        if attempt < effective_retries {
+                            tracing::warn!(
+                                service = %self.config.service,
+                                instance = %instance.url,
+                                attempt = attempt + 1,
+                                max_retries = effective_retries,
+                                error = %e,
+                                "stream failed before producing results, retrying on different instance",
+                            );
+                            last_error = Some(e);
+                            continue;
+                        }
+
+                        yield Err(e);
+                        return;
+                    }
+                    None => {
+                        // Empty stream — treat as success.
+                        self.record_success(instance);
+                        drop(permit);
+                        return;
+                    }
+                }
+            }
+
+            // All retries exhausted (should not reach here normally, but be safe).
+            if let Some(e) = last_error {
+                yield Err(e);
+            }
+        };
+
+        Box::pin(stream)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -951,6 +1051,115 @@ mod tests {
         for h in handles {
             h.await.context("task panicked")?;
         }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // run_stream_with_retry tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn stream_retry_succeeds_on_second_instance() -> anyhow::Result<()> {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let pool = InstancePool::new(vec![desc("a", 4), desc("b", 4)], test_config("test"))?;
+
+        let call_count_clone = Arc::clone(&call_count);
+        let items: Vec<Result<String, String>> = pool
+            .run_stream_with_retry(1, move |client| {
+                let n = call_count_clone.fetch_add(1, Ordering::SeqCst);
+                let label = client.label.clone();
+                if n == 0 {
+                    // First call fails immediately.
+                    futures::stream::iter(vec![Err::<String, String>("boom".into())])
+                } else {
+                    // Second call succeeds.
+                    futures::stream::iter(vec![Ok(label)])
+                }
+            })
+            .collect()
+            .await;
+
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stream_retry_no_retry_on_single_instance() -> anyhow::Result<()> {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let pool = InstancePool::new(vec![desc("a", 4)], test_config("test"))?;
+
+        let call_count_clone = Arc::clone(&call_count);
+        let items: Vec<Result<i32, String>> = pool
+            .run_stream_with_retry(5, move |_| {
+                call_count_clone.fetch_add(1, Ordering::SeqCst);
+                futures::stream::iter(vec![Err::<i32, String>("boom".into())])
+            })
+            .collect()
+            .await;
+
+        // Only one attempt — single instance means no failover targets.
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stream_retry_passes_through_on_success() -> anyhow::Result<()> {
+        let pool = InstancePool::new(vec![desc("a", 4), desc("b", 4)], test_config("test"))?;
+
+        let items: Vec<Result<i32, String>> = pool
+            .run_stream_with_retry(1, |_| futures::stream::iter(vec![Ok(1), Ok(2), Ok(3)]))
+            .collect()
+            .await;
+
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().all(Result::is_ok));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stream_retry_yields_error_when_all_instances_fail() -> anyhow::Result<()> {
+        let pool = InstancePool::new(
+            vec![desc("a", 4), desc("b", 4), desc("c", 4)],
+            test_config("test"),
+        )?;
+
+        let items: Vec<Result<i32, String>> = pool
+            .run_stream_with_retry(2, |_| {
+                futures::stream::iter(vec![Err::<i32, String>("boom".into())])
+            })
+            .collect()
+            .await;
+
+        // Tried all 3 instances, all failed → yields the last error.
+        assert_eq!(items.len(), 1);
+        assert!(items[0].is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stream_retry_mid_stream_error_not_retried() -> anyhow::Result<()> {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let pool = InstancePool::new(vec![desc("a", 4), desc("b", 4)], test_config("test"))?;
+
+        let call_count_clone = Arc::clone(&call_count);
+        let items: Vec<Result<i32, String>> = pool
+            .run_stream_with_retry(1, move |_| {
+                call_count_clone.fetch_add(1, Ordering::SeqCst);
+                // First item succeeds, second fails — should NOT retry because
+                // we already committed to this instance.
+                futures::stream::iter(vec![Ok(1), Err("mid-stream".into())])
+            })
+            .collect()
+            .await;
+
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert_eq!(items.len(), 2);
+        assert!(items[0].is_ok());
+        assert!(items[1].is_err());
         Ok(())
     }
 }

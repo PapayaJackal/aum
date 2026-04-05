@@ -280,6 +280,15 @@ pub struct TikaConfig {
     /// Tesseract language code(s) to use for OCR (e.g. "eng", "eng+fra").
     #[config_default = "eng"]
     pub ocr_language: String,
+    /// Maximum number of retry attempts for transient Tika failures (0 disables retries).
+    #[config_default = "5"]
+    pub max_retries: u32,
+    /// Initial backoff delay in milliseconds for retries (doubled on each attempt).
+    #[config_default = "1000"]
+    pub retry_initial_backoff_ms: u64,
+    /// Maximum backoff delay in milliseconds (caps the exponential growth).
+    #[config_default = "30000"]
+    pub retry_max_backoff_ms: u64,
 }
 
 /// Configuration for text embedding generation used in semantic search.
