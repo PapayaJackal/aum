@@ -608,15 +608,16 @@ async fn fetch_document_file(
     Ok((doc, file_path))
 }
 
-/// Validate a `source_path`: resolve to canonical path and ensure it's a regular file.
+/// Validate a `source_path`: reject symlinks and ensure it's a regular file.
 fn safe_file_path(source_path: &str) -> Result<std::path::PathBuf, ApiError> {
-    let canonical = Path::new(source_path)
-        .canonicalize()
+    let path = Path::new(source_path);
+    let meta = path
+        .symlink_metadata()
         .map_err(|_| ApiError::NotFound("Source file not found on disk".into()))?;
-    if !canonical.is_file() {
+    if meta.is_symlink() || !meta.is_file() {
         return Err(ApiError::NotFound("Source file not found on disk".into()));
     }
-    Ok(canonical)
+    Ok(path.to_path_buf())
 }
 
 /// Download the original file for a document.
