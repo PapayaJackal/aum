@@ -58,9 +58,6 @@ pub(super) const EMBEDDER_NAME: &str = "default";
 /// Timeout for general index settings update tasks.
 pub(super) const TASK_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Timeout for embedding update tasks (longer to allow large batch writes).
-pub(super) const EMBED_TASK_TIMEOUT: Duration = Duration::from_secs(300);
-
 // ---------------------------------------------------------------------------
 // Settings builders
 // ---------------------------------------------------------------------------
@@ -91,7 +88,9 @@ pub(super) fn embedder_settings(dimension: u32) -> HashMap<String, Embedder> {
 // Task waiting
 // ---------------------------------------------------------------------------
 
-/// Wait for a Meilisearch task to reach a terminal state within `timeout`.
+/// Wait for a Meilisearch task to reach a terminal state.
+///
+/// Pass `None` for `timeout` to wait indefinitely.
 ///
 /// Returns `Ok(())` on success, `Err(SearchError::TaskFailed)` if the task
 /// ends in a failed state, and `Err(SearchError::TaskTimeout)` if it doesn't
@@ -99,10 +98,10 @@ pub(super) fn embedder_settings(dimension: u32) -> HashMap<String, Embedder> {
 pub(super) async fn wait_for_task(
     task_info: TaskInfo,
     client: &Client,
-    timeout: Duration,
+    timeout: Option<Duration>,
 ) -> Result<(), SearchError> {
     let completed = task_info
-        .wait_for_completion(client, Some(Duration::from_millis(100)), Some(timeout))
+        .wait_for_completion(client, Some(Duration::from_millis(100)), timeout)
         .await
         .map_err(|_| SearchError::TaskTimeout)?;
 
