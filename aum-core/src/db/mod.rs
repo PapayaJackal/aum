@@ -55,18 +55,12 @@ pub use tracker::JobTracker;
 #[cfg(test)]
 pub(crate) async fn test_pool() -> anyhow::Result<sqlx::AnyPool> {
     use sqlx::any::AnyPoolOptions;
+    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
     sqlx::any::install_default_drivers();
     let pool = AnyPoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await?;
-    sqlx::migrate::Migrator::new(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("migrations")
-            .as_path(),
-    )
-    .await?
-    .run(&pool)
-    .await?;
+    MIGRATOR.run(&pool).await?;
     Ok(pool)
 }

@@ -36,7 +36,6 @@ document search platform, look at
 - User invitations for onboarding new users via link
 - Public mode for anonymous read-only access to search
 - CLI-first administration
-- Prometheus metrics
 - All application state stored in a single portable SQLite database
 
 ## Requirements
@@ -87,6 +86,69 @@ Ingest a directory of documents:
 ./target/release/aum ingest <index> /path/to/documents
 ```
 
+## NixOS
+
+A Nix flake is provided for building aum and running it as a NixOS service.
+
+### Building
+
+```sh
+nix build
+./result/bin/aum --help
+```
+
+The first build requires discovering the npm dependency hash. Run
+`nix build .#frontend` — it will fail and print the correct hash; paste it
+into the `fetchNpmDeps.hash` field in `flake.nix`, then run `nix build` again.
+
+### NixOS module
+
+Add the flake as an input and enable the module:
+
+```nix
+# flake.nix
+inputs.aum.url = "github:PapayaJackal/aum";
+
+# nixosConfiguration
+{ inputs, ... }: {
+  imports = [ inputs.aum.nixosModules.default ];
+
+  services.aum = {
+    enable = true;
+    settings = {
+      server.base_url = "https://search.example.com";
+      server.port = 8000;
+      meilisearch.url = "http://localhost:7700";
+      auth.public_mode = false;
+    };
+  };
+}
+```
+
+The module creates an `aum` system user, writes the configuration to
+`/etc/aum/aum.toml`, and runs `aum serve` as a systemd service with
+`WorkingDirectory=/var/lib/aum`.
+
+An `aum` wrapper is also added to `environment.systemPackages` so that CLI
+commands (`aum ingest`, `aum user create`, etc.) automatically target the
+same data directory as the service.
+
+### Secrets
+
+Do not put API keys or passwords in `services.aum.settings` — the Nix store
+is world-readable. Pass secrets as environment variables instead:
+
+```nix
+systemd.services.aum.serviceConfig.EnvironmentFile = "/run/secrets/aum";
+```
+
+The secrets file should contain `AUM_*` assignments, for example:
+
+```sh
+AUM_MEILISEARCH__API_KEY=sk-...
+AUM_EMBEDDINGS__API_KEY=sk-...
+```
+
 ## Configuration
 
 aum reads configuration from these sources, in order of priority:
@@ -117,7 +179,6 @@ Key settings:
 - `AUM_LOG_LEVEL` -- Log level (default: `INFO`)
 - `AUM_LOG_FORMAT` -- `json` or `console` (default: `json`)
 - `AUM_PORT` -- Server port (default: `8000`)
-- `AUM_METRICS_PORT` -- Prometheus metrics port (default: `9090`)
 
 ## CLI reference
 
@@ -221,62 +282,3 @@ Run the test suite:
 ```bash
 cargo test
 ```
-
-## Prometheus metrics
-
-aum exposes Prometheus metrics on a separate port (default 9090) at
-`/metrics`. The metrics server starts automatically with `aum serve`.
-
-### Ingest
-
-- `aum_documents_ingested_total` (counter, labels: `backend`) -- Documents successfully ingested.
-- `aum_documents_failed_total` (counter, labels: `error_type`) -- Documents that failed during ingestion.
-- `aum_ingest_duration_seconds` (histogram, labels: `stage`) -- Time to process a single document, broken down by pipeline stage.
-- `aum_ingest_jobs_active` (gauge) -- Number of currently running ingest jobs.
-
-### Index management
-
-- `aum_indexes_recreated_total` (counter, labels: `index`) -- Times an index was recreated due to a mapping change.
-
-### Search
-
-- `aum_search_requests_total` (counter, labels: `type`) -- Total search requests by search type (text, hybrid).
-- `aum_search_latency_seconds` (histogram, labels: `type`, `backend`) -- Search request latency.
-
-### Extraction
-
-- `aum_extraction_duration_seconds` (histogram) -- Time to extract text from a document via Tika.
-- `aum_extraction_errors_total` (counter, labels: `error_type`) -- Extraction failures by error type.
-
-### Embedding
-
-- `aum_embedding_duration_seconds` (histogram, labels: `backend`) -- Time to embed a batch of documents.
-- `aum_embedding_requests_total` (counter, labels: `backend`) -- Total embedding API requests.
-- `aum_embedding_docs_processed_total` (counter) -- Documents successfully embedded.
-- `aum_embedding_docs_failed_total` (counter) -- Documents that failed embedding.
-- `aum_embedding_jobs_active` (gauge) -- Number of currently running embedding jobs.
-
-### Authentication
-
-- `aum_auth_requests_total` (counter, labels: `method`) -- Authentication attempts by method (local, OAuth).
-- `aum_auth_failures_total` (counter, labels: `reason`) -- Failed authentication attempts by reason.
-- `aum_auth_rate_limited_total` (counter) -- Login attempts rejected by the rate limiter.
-
-### Documents
-
-- `aum_document_views_total` (counter) -- Document detail page views.
-- `aum_document_downloads_total` (counter) -- Document file downloads.
-- `aum_document_previews_total` (counter, labels: `content_type`) -- Document preview requests.
-- `aum_thread_lookups_total` (counter) -- Email thread reconstruction lookups.
-
-### Instance pool
-
-- `aum_pool_requests_total` (counter, labels: `service`, `url`) -- Requests dispatched to pooled service instances.
-- `aum_pool_errors_total` (counter, labels: `service`, `url`, `error`) -- Errors from pooled instances.
-- `aum_pool_request_duration_seconds` (histogram, labels: `service`, `url`) -- Request latency per instance.
-- `aum_pool_instance_healthy` (gauge, labels: `service`, `url`) -- Health status per instance (1 = healthy).
-- `aum_pool_instance_in_flight` (gauge, labels: `service`, `url`) -- In-flight requests per instance.
-
-### Build
-
-- `aum_build_info` (info) -- Build and version metadata.

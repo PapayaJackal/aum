@@ -1,8 +1,7 @@
 //! Database pool initialisation for the aum db layer.
 
-use std::path::Path;
-
 use sqlx::any::{AnyPoolOptions, install_default_drivers};
+use sqlx::migrate::Migrator;
 use sqlx::{AnyPool, Executor as _};
 
 use super::error::{DbError, DbResult};
@@ -32,23 +31,19 @@ fn detect_backend(url: &str) -> DbResult<DbBackend> {
 #[allow(clippy::doc_markdown)] // SQLite, PostgreSQL, MySQL, MariaDB are proper nouns
 /// Initialise a connection pool and run pending migrations.
 ///
+/// Pass the static migrator produced by `sqlx::migrate!("./migrations")`.
+///
 /// The backend is determined from the URL scheme:
 /// - `sqlite:` — SQLite with WAL mode and foreign-key enforcement
 /// - `postgres:` / `postgresql:` — PostgreSQL
 /// - `mysql:` / `mariadb:` — MySQL / MariaDB
 ///
-/// `migrations_dir` must contain the SQL migration files for the selected
-/// backend. The directory is resolved at runtime, not embedded at compile time,
-/// so callers should pass an absolute path or a path relative to the process
-/// working directory.
+/// The `migrator` should be the static value from `sqlx::migrate!("./migrations")`.
+/// Migration SQL is embedded at compile time via the proc-macro.
 ///
 /// # Errors
 /// Returns [`DbError`] if the pool cannot connect, PRAGMAs fail, or migrations fail.
-pub async fn init_pool(
-    url: &str,
-    max_connections: u32,
-    migrations_dir: &Path,
-) -> DbResult<AnyPool> {
+pub async fn init_pool(url: &str, max_connections: u32, migrator: &Migrator) -> DbResult<AnyPool> {
     install_default_drivers();
 
     let backend = detect_backend(url)?;
@@ -67,10 +62,7 @@ pub async fn init_pool(
         .connect(url)
         .await?;
 
-    sqlx::migrate::Migrator::new(migrations_dir)
-        .await?
-        .run(&pool)
-        .await?;
+    migrator.run(&pool).await?;
 
     tracing::info!(url = url, "database pool initialised");
     Ok(pool)
@@ -85,14 +77,15 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+
     #[tokio::test]
     async fn test_init_pool_creates_sqlite_db_and_runs_migrations() -> anyhow::Result<()> {
         let dir = TempDir::new()?;
         let db_path = dir.path().join("aum.db");
         let url = format!("sqlite:{}?mode=rwc", db_path.display());
-        let migrations_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
 
-        let pool = init_pool(&url, 4, &migrations_dir).await?;
+        let pool = init_pool(&url, 4, &MIGRATOR).await?;
 
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM jobs")
             .fetch_one(&pool)
@@ -105,8 +98,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unsupported_scheme_returns_error() {
-        let migrations_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
-        let result = init_pool("ftp://localhost/db", 1, &migrations_dir).await;
+        let result = init_pool("ftp://localhost/db", 1, &MIGRATOR).await;
         assert!(matches!(result, Err(DbError::UnsupportedBackend(_))));
     }
 }

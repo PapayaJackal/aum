@@ -71,11 +71,11 @@ pub fn bootstrap() -> config::AumConfig {
 /// Calls [`std::process::exit`] with status 1 if the pool cannot be initialised or migrations
 /// fail.
 pub async fn bootstrap_db(config: &config::AumConfig) -> sqlx::AnyPool {
-    let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
     let url = prepare_sqlite_url(&config.database_url());
 
-    db::init_pool(&url, config.database.max_connections, &migrations_dir)
+    db::init_pool(&url, config.database.max_connections, &MIGRATOR)
         .await
         .unwrap_or_else(|e| {
             eprintln!("error: failed to open database: {e}");
