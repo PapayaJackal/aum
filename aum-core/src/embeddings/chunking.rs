@@ -122,14 +122,13 @@ fn split_long_paragraph(text: &str, max_chars: usize, overlap_chars: usize) -> V
             } else {
                 max_chars
             };
-            let bytes = sent.as_bytes();
             let mut i = 0;
-            while i < bytes.len() {
-                let end = (i + max_chars).min(bytes.len());
-                // Adjust to a valid UTF-8 boundary.
-                let end = find_char_boundary(&sent, end);
+            while i < sent.len() {
+                let end = sent.floor_char_boundary((i + max_chars).min(sent.len()));
                 chunks.push(sent[i..end].to_owned());
-                i += step;
+                // Snap to a char boundary in the same direction as `end`
+                // (down) so no bytes are skipped between chunks.
+                i = sent.floor_char_boundary(i + step);
             }
             continue;
         }
@@ -205,18 +204,6 @@ fn take_sentence_overlap(sentences: &[String], overlap_chars: usize) -> (Vec<Str
     }
     result.reverse();
     (result, total)
-}
-
-/// Return the largest index ≤ *pos* that lies on a UTF-8 character boundary.
-fn find_char_boundary(s: &str, pos: usize) -> usize {
-    if pos >= s.len() {
-        return s.len();
-    }
-    let mut p = pos;
-    while p > 0 && !s.is_char_boundary(p) {
-        p -= 1;
-    }
-    p
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +285,17 @@ mod tests {
         let result = chunk_text(&long_sent, 20, 5);
         for chunk in &result {
             assert!(chunk.len() <= 20, "chunk too long: {}", chunk.len());
+        }
+    }
+
+    #[test]
+    fn hard_split_multibyte_cjk_no_panic() {
+        // Each CJK character is 3 bytes in UTF-8. A step that lands inside
+        // a multi-byte character must not panic.
+        let text = "深圳市千鸟祥云技术有限公司Android提示网络连接错误完全有效果";
+        let result = chunk_text(text, 20, 5);
+        for chunk in &result {
+            assert!(chunk.len() <= 20, "chunk too long: {} bytes", chunk.len());
         }
     }
 
