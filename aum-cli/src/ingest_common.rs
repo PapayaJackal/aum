@@ -9,6 +9,7 @@ use aum_core::embeddings::{EmbedSnapshot, Embedder, OllamaEmbedder, OpenAiEmbedd
 use aum_core::extraction::TikaExtractor;
 use aum_core::extraction::tika::TikaExtractorConfig;
 use aum_core::ingest::{EmbedLock, IngestLock};
+use aum_core::models::EmbeddingModelInfo;
 use aum_core::models::OcrSettings;
 use aum_core::pool::{InstanceDesc, InstancePool, InstancePoolConfig};
 use aum_core::search::{AumBackend, SearchBackend as _};
@@ -212,6 +213,19 @@ pub async fn initialize_backend(
         .initialize(index_name, vector_dimension)
         .await
         .with_context(|| format!("failed to initialise index '{index_name}'"))
+}
+
+/// Build an [`EmbeddingModelInfo`] from the current config and actual embedder
+/// dimension (which may differ from config if the backend reported a different
+/// size).
+pub fn embedding_model_info(config: &AumConfig, actual_dimension: u32) -> EmbeddingModelInfo {
+    EmbeddingModelInfo {
+        model: config.embeddings.model.clone(),
+        backend: config.embeddings.backend.clone(),
+        dimension: i64::from(actual_dimension),
+        context_length: i64::from(config.embeddings.context_length),
+        query_prefix: config.embeddings.query_prefix.clone(),
+    }
 }
 
 // ---------------------------------------------------------------------------

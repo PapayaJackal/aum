@@ -323,6 +323,17 @@ impl SearchBackend for AumBackend {
             AumBackend::_None(n) => match *n {},
         }
     }
+
+    async fn clear_embeddings(&self, index: &str) -> Result<(), SearchError> {
+        match self {
+            #[cfg(feature = "meilisearch")]
+            AumBackend::Meilisearch(b) => b.clear_embeddings(index).await,
+            #[cfg(feature = "elasticsearch")]
+            AumBackend::Elasticsearch(b) => b.clear_embeddings(index).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            AumBackend::_None(n) => match *n {},
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -554,6 +554,37 @@ impl SearchBackend for ElasticsearchBackend {
 
         Ok(found)
     }
+
+    #[instrument(skip(self), fields(index))]
+    async fn clear_embeddings(&self, index: &str) -> Result<(), SearchError> {
+        let body = json!({
+            "query": { "term": { "has_embeddings": true } },
+            "script": {
+                "source": "ctx._source.has_embeddings = false; ctx._source.remove('chunks')",
+                "lang": "painless"
+            }
+        });
+        let resp = self
+            .client
+            .update_by_query(elasticsearch::UpdateByQueryParts::Index(&[index]))
+            .body(body)
+            .send()
+            .await
+            .map_err(SearchError::Elasticsearch)?;
+
+        let status = resp.status_code();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_else(|_| "unknown".to_owned());
+            return Err(SearchError::Internal(format!(
+                "clear_embeddings failed: HTTP {status}: {text}"
+            )));
+        }
+
+        let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let updated = body.get("updated").and_then(Value::as_u64).unwrap_or(0);
+        tracing::info!(index, updated, "cleared embeddings from all documents");
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

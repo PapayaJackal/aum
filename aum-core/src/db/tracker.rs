@@ -270,13 +270,9 @@ impl JobTracker {
     pub async fn set_embedding_model(
         &self,
         index_name: &str,
-        model: &str,
-        backend: &str,
-        dimension: i64,
+        info: &EmbeddingModelInfo,
     ) -> DbResult<()> {
-        self.embeddings
-            .set_embedding_model(index_name, model, backend, dimension)
-            .await
+        self.embeddings.set_embedding_model(index_name, info).await
     }
 
     /// Remove the embedding model record for an index.
@@ -301,6 +297,7 @@ mod tests {
     use futures::TryStreamExt as _;
 
     use super::*;
+    use crate::config::EmbeddingsBackend;
     use crate::db::test_pool;
     use crate::models::{ErrorFilter, JobProgress, JobType};
 
@@ -533,15 +530,23 @@ mod tests {
 
         assert!(t.get_embedding_model("my_idx").await?.is_none());
 
-        t.set_embedding_model("my_idx", "arctic-embed", "ollama", 1024)
-            .await?;
+        let model_info = EmbeddingModelInfo {
+            model: "arctic-embed".to_owned(),
+            backend: EmbeddingsBackend::Ollama,
+            dimension: 1024,
+            context_length: 8192,
+            query_prefix: "query: ".to_owned(),
+        };
+        t.set_embedding_model("my_idx", &model_info).await?;
         let info = t
             .get_embedding_model("my_idx")
             .await?
             .ok_or_else(|| anyhow::anyhow!("expected model"))?;
         assert_eq!(info.model, "arctic-embed");
-        assert_eq!(info.backend, "ollama");
+        assert_eq!(info.backend, EmbeddingsBackend::Ollama);
         assert_eq!(info.dimension, 1024);
+        assert_eq!(info.context_length, 8192);
+        assert_eq!(info.query_prefix, "query: ");
 
         t.clear_embedding_model("my_idx").await?;
         assert!(t.get_embedding_model("my_idx").await?.is_none());

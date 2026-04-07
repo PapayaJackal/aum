@@ -14,8 +14,8 @@ use aum_core::search::AumBackend;
 
 use crate::ingest_common::{
     CommonIngestArgs, acquire_embed_lock, acquire_ingest_lock, build_embedder_pool,
-    build_tika_pool, effective_ocr_settings, initialize_backend, render_embed_progress,
-    render_progress, resolve_ocr_override,
+    build_tika_pool, effective_ocr_settings, embedding_model_info, initialize_backend,
+    render_embed_progress, render_progress, resolve_ocr_override,
 };
 use crate::output::print_job_summary;
 
@@ -115,13 +115,9 @@ async fn resume_embed(
 
     if completed_job.processed > 0 {
         let dimension = pool.first_client().dimension();
+        let info = embedding_model_info(config, dimension);
         tracker
-            .set_embedding_model(
-                &job.index_name,
-                &config.embeddings.model,
-                &config.embeddings.backend.to_string(),
-                i64::from(dimension),
-            )
+            .set_embedding_model(&job.index_name, &info)
             .await
             .context("failed to store embedding model metadata")?;
     }

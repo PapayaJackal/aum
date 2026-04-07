@@ -386,6 +386,54 @@ impl SearchBackend for MeilisearchBackend {
             .collect();
         Ok(ids)
     }
+
+    #[instrument(skip(self), fields(index))]
+    async fn clear_embeddings(&self, index: &str) -> Result<(), SearchError> {
+        use futures::TryStreamExt as _;
+
+        const BATCH_SIZE: usize = 500;
+        let mut stream = scroll_cursor(
+            &self.client,
+            index.to_owned(),
+            "has_embeddings = true".to_owned(),
+            BATCH_SIZE,
+        );
+
+        let idx = self.client.index(index);
+        let mut total_cleared: u64 = 0;
+
+        while let Some(batch) = stream.try_next().await? {
+            let docs: Vec<Value> = batch
+                .iter()
+                .map(|r| {
+                    json!({
+                        "id": r.doc_id.clone(),
+                        "has_embeddings": false,
+                        "_vectors": { EMBEDDER_NAME: null },
+                    })
+                })
+                .collect();
+
+            if docs.is_empty() {
+                continue;
+            }
+
+            let count = docs.len() as u64;
+            let task = idx
+                .add_or_update(&docs, Some("id"))
+                .await
+                .map_err(SearchError::Meilisearch)?;
+            wait_for_task(task, &self.client).await?;
+            total_cleared += count;
+        }
+
+        tracing::info!(
+            index,
+            total_cleared,
+            "cleared embeddings from all documents"
+        );
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

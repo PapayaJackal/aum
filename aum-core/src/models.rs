@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::config::EmbeddingsBackend;
+
 // ---------------------------------------------------------------------------
 // Serde helper: ISO 8601 round-trip for DateTime<Utc> stored as SQLite TEXT
 // ---------------------------------------------------------------------------
@@ -205,10 +207,14 @@ pub enum ErrorFilter<'a> {
 pub struct EmbeddingModelInfo {
     /// Embedding model name (e.g. `snowflake-arctic-embed2`).
     pub model: String,
-    /// Backend provider (e.g. `ollama`, `openai`).
-    pub backend: String,
+    /// Backend provider (e.g. `Ollama`, `OpenAi`).
+    pub backend: EmbeddingsBackend,
     /// Vector dimension (e.g. 768, 1024).
     pub dimension: i64,
+    /// Maximum token context length used when chunking for this model.
+    pub context_length: i64,
+    /// Prefix prepended to query strings before embedding.
+    pub query_prefix: String,
 }
 
 // ---------------------------------------------------------------------------

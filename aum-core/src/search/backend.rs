@@ -152,4 +152,10 @@ pub trait SearchBackend: Send + Sync {
         index: &str,
         doc_ids: &[String],
     ) -> Result<HashSet<String>, SearchError>;
+
+    /// Reset all documents in the index to the unembedded state.
+    ///
+    /// Used when re-embedding with a different model so that
+    /// `scroll_unembedded` will return every document.
+    async fn clear_embeddings(&self, index: &str) -> Result<(), SearchError>;
 }

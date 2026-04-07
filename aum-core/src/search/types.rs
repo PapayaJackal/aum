@@ -137,4 +137,7 @@ pub enum SearchError {
         /// Error message from the failed task.
         error: String,
     },
+    /// A generic internal error not covered by a backend-specific variant.
+    #[error("{0}")]
+    Internal(String),
 }

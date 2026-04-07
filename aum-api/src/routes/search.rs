@@ -323,6 +323,7 @@ async fn embed_query(
     indices: &[String],
     query: &str,
 ) -> Result<Vec<f32>, ApiError> {
+    use aum_core::config::EmbeddingsBackend;
     use aum_core::db::IndexEmbeddingRepository as _;
     use aum_core::embeddings::Embedder as _;
     use aum_core::embeddings::{OllamaEmbedder, OpenAiEmbedder};
@@ -373,25 +374,32 @@ async fn embed_query(
         ));
     };
 
-    // Build embedder and embed the query.
-    let prefixed = format!("{}{}", state.config.embeddings.query_prefix, query);
-    let cfg = &state.config.embeddings;
+    // Build an embedder config from the stored per-index metadata, using the
+    // global config only for infrastructure settings (URLs, API keys).
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "dimension and context_length are always small positive values"
+    )]
+    let query_cfg = aum_core::config::EmbeddingsConfig {
+        model: info.model.clone(),
+        backend: info.backend.clone(),
+        dimension: info.dimension as u32,
+        context_length: info.context_length as u32,
+        query_prefix: info.query_prefix.clone(),
+        ..state.config.embeddings.clone()
+    };
 
-    let vector: Vec<f32> = match info.backend.as_str() {
-        "ollama" => {
-            OllamaEmbedder::new(cfg, &cfg.ollama_url)
-                .embed_query(&prefixed)
+    let vector: Vec<f32> = match info.backend {
+        EmbeddingsBackend::Ollama => {
+            OllamaEmbedder::new(&query_cfg, &query_cfg.ollama_url)
+                .embed_query(query)
                 .await
         }
-        "openai" => {
-            OpenAiEmbedder::new(cfg, &cfg.api_url)
-                .embed_query(&prefixed)
+        EmbeddingsBackend::OpenAi => {
+            OpenAiEmbedder::new(&query_cfg, &query_cfg.api_url)
+                .embed_query(query)
                 .await
-        }
-        other => {
-            return Err(ApiError::Internal(format!(
-                "Unknown embedding backend: '{other}'"
-            )));
         }
     }
     .map_err(|e| {

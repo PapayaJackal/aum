@@ -211,11 +211,13 @@ fn build_embedder(
     embed_config.model.clone_from(&model_info.model);
     embed_config.dimension = u32::try_from(model_info.dimension)
         .map_err(|_| anyhow::anyhow!("invalid embedding dimension: {}", model_info.dimension))?;
+    embed_config.context_length = u32::try_from(model_info.context_length)
+        .map_err(|_| anyhow::anyhow!("invalid context length: {}", model_info.context_length))?;
+    embed_config
+        .query_prefix
+        .clone_from(&model_info.query_prefix);
 
-    let backend: EmbeddingsBackend = model_info
-        .backend
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!("{e}"))?;
+    let backend = model_info.backend.clone();
     embed_config.backend = backend.clone();
 
     let url = match backend {

@@ -31,7 +31,7 @@ pub struct ConfigDoc {
 // ---------------------------------------------------------------------------
 
 /// Backend used to generate text embeddings for semantic search.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum EmbeddingsBackend {
     /// Use a locally-running Ollama instance.

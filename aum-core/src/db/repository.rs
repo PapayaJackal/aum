@@ -131,9 +131,7 @@ pub trait IndexEmbeddingRepository: Send + Sync {
     async fn set_embedding_model(
         &self,
         index_name: &str,
-        model: &str,
-        backend: &str,
-        dimension: i64,
+        info: &EmbeddingModelInfo,
     ) -> DbResult<()>;
 
     /// Remove the embedding model record for an index, if it exists.
