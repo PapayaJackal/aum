@@ -158,14 +158,18 @@ pub fn build_tika_pool(
 /// For Ollama backends, pulls the configured model on each server before
 /// returning so that the first embed request does not fail with a 404.
 ///
+/// `workers_override` overrides `embeddings.embed_workers` for the fallback
+/// single-instance concurrency (ignored when `embeddings.instances` is set explicitly).
+///
 /// # Errors
 ///
 /// Returns an error if no embedder instances can be constructed, the pool is
 /// empty, or an Ollama model pull fails.
 pub async fn build_embedder_pool(
     config: &AumConfig,
+    workers_override: Option<u32>,
 ) -> anyhow::Result<Arc<InstancePool<Box<dyn Embedder>>>> {
-    let instances = config.effective_embedder_instances();
+    let instances = config.effective_embedder_instances(workers_override);
 
     let mut descs: Vec<InstanceDesc<Box<dyn Embedder>>> = Vec::with_capacity(instances.len());
     for inst in &instances {

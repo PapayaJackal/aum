@@ -88,7 +88,7 @@ async fn resume_embed(
     );
 
     let _lock = acquire_embed_lock(config, &job.index_name)?;
-    let pool = build_embedder_pool(config)
+    let pool = build_embedder_pool(config, None)
         .await
         .context("failed to build embedder pool")?;
 

@@ -321,6 +321,9 @@ pub struct EmbeddingsConfig {
     /// For Qwen3-Embedding use: "Instruct: <task>\nQuery:"
     #[config_default = "Instruct: Given a search query in any language, retrieve relevant documents regardless of the document's language\nQuery:"]
     pub query_prefix: String,
+    /// Number of concurrent embedding requests per instance (used when `instances` is empty).
+    #[config_default = "4"]
+    pub embed_workers: u32,
     /// List of embedder instances for parallel embedding. If empty, falls back to `ollama_url` or `api_url`.
     #[config_default = "[]"]
     pub instances: Vec<EmbedderInstance>,
@@ -423,7 +426,8 @@ pub struct IngestConfig {
     /// Number of documents to process per database transaction during ingest.
     #[config_default = "1000"]
     pub batch_size: u32,
-    /// Maximum number of concurrent ingest worker tasks.
+    /// Maximum number of concurrent ingest worker tasks; also used as the fallback
+    /// concurrency for the single Tika instance when `tika.instances` is empty.
     #[config_default = "<number of logical CPUs>"]
     #[config_default_expr = "::std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(4)"]
     pub max_workers: u32,
@@ -543,11 +547,15 @@ impl AumConfig {
     ///
     /// If `embeddings.instances` is empty, falls back to a single instance
     /// using `embeddings.ollama_url` (Ollama) or `embeddings.api_url` (OpenAI)
-    /// with concurrency set to `ingest.max_workers` so that one slow embedding
-    /// request cannot starve the entire worker pool.
+    /// with concurrency set to `embeddings.embed_workers` (or `workers_override`
+    /// if provided). `workers_override` is ignored when `embeddings.instances`
+    /// is set explicitly, so per-instance concurrency is never silently replaced.
     #[allow(clippy::doc_markdown)]
     #[must_use]
-    pub fn effective_embedder_instances(&self) -> Vec<EmbedderInstance> {
+    pub fn effective_embedder_instances(
+        &self,
+        workers_override: Option<u32>,
+    ) -> Vec<EmbedderInstance> {
         if !self.embeddings.instances.is_empty() {
             return self.embeddings.instances.clone();
         }
@@ -557,7 +565,7 @@ impl AumConfig {
         };
         vec![EmbedderInstance {
             url,
-            concurrency: self.ingest.max_workers,
+            concurrency: workers_override.unwrap_or(self.embeddings.embed_workers),
         }]
     }
 }
@@ -852,10 +860,10 @@ mod tests {
     fn test_effective_embedder_fallback_ollama() {
         let mut cfg = AumConfig::default();
         cfg.embeddings.ollama_url = "http://custom-ollama:11434".into();
-        let instances = cfg.effective_embedder_instances();
+        let instances = cfg.effective_embedder_instances(None);
         assert_eq!(instances.len(), 1);
         assert_eq!(instances[0].url, "http://custom-ollama:11434");
-        assert_eq!(instances[0].concurrency, cfg.ingest.max_workers);
+        assert_eq!(instances[0].concurrency, cfg.embeddings.embed_workers);
     }
 
     #[test]
@@ -863,7 +871,7 @@ mod tests {
         let mut cfg = AumConfig::default();
         cfg.embeddings.backend = EmbeddingsBackend::OpenAi;
         cfg.embeddings.api_url = "https://api.openai.com/v1".into();
-        let instances = cfg.effective_embedder_instances();
+        let instances = cfg.effective_embedder_instances(None);
         assert_eq!(instances.len(), 1);
         assert_eq!(instances[0].url, "https://api.openai.com/v1");
     }
@@ -881,7 +889,7 @@ mod tests {
                 concurrency: 3,
             },
         ];
-        let instances = cfg.effective_embedder_instances();
+        let instances = cfg.effective_embedder_instances(None);
         assert_eq!(instances.len(), 2);
         assert_eq!(instances[0].url, "http://e1:11434");
         assert_eq!(instances[1].concurrency, 3);

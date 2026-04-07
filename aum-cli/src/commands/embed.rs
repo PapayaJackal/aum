@@ -33,6 +33,9 @@ pub struct EmbedArgs {
     /// vectors and re-embeds every document with the currently configured model.
     #[arg(long)]
     pub force: bool,
+    /// Number of concurrent embedding requests (overrides `embeddings.embed_workers` in config).
+    #[arg(long)]
+    pub workers: Option<u32>,
 }
 
 /// # Errors
@@ -104,7 +107,7 @@ pub async fn run(
             .context("failed to clear embedding metadata")?;
     }
 
-    let pool = build_embedder_pool(config)
+    let pool = build_embedder_pool(config, args.workers)
         .await
         .context("failed to build embedder pool")?;
 
