@@ -145,6 +145,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::search::constants::{FACET_CREATED, FACET_FILE_TYPE};
 
     #[test]
     fn parse_basic_hit() -> anyhow::Result<()> {
@@ -214,9 +215,11 @@ mod tests {
             "meta_created_year": { "2023": 10 },
         });
         let facets = parse_facet_distribution(&raw);
-        let file_type = facets.get("File Type").context("File Type facet missing")?;
+        let file_type = facets
+            .get(FACET_FILE_TYPE)
+            .context("File Type facet missing")?;
         assert_eq!(file_type.get("application/pdf"), Some(&5u64));
-        let created = facets.get("Created").context("Created facet missing")?;
+        let created = facets.get(FACET_CREATED).context("Created facet missing")?;
         assert_eq!(created.get("2023"), Some(&10u64));
         Ok(())
     }
@@ -225,18 +228,18 @@ mod tests {
     fn merge_facets_sums_counts() -> anyhow::Result<()> {
         let mut a = FacetMap::new();
         a.insert(
-            "File Type".into(),
+            FACET_FILE_TYPE.into(),
             [("PDF".to_owned(), 3u64)].into_iter().collect(),
         );
         let mut b = FacetMap::new();
         b.insert(
-            "File Type".into(),
+            FACET_FILE_TYPE.into(),
             [("PDF".to_owned(), 2u64), ("Text".to_owned(), 1u64)]
                 .into_iter()
                 .collect(),
         );
         let merged = merge_facets(a, b);
-        let ft = merged.get("File Type").context("File Type missing")?;
+        let ft = merged.get(FACET_FILE_TYPE).context("File Type missing")?;
         assert_eq!(ft.get("PDF"), Some(&5u64));
         assert_eq!(ft.get("Text"), Some(&1u64));
         Ok(())

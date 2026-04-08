@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::search::constants::{DATE_FACETS, MIMETYPE_ALIASES};
+use crate::search::constants::{DATE_FACETS, FACET_FILE_TYPE, MIMETYPE_ALIASES};
 use crate::search::types::SearchResult;
 use crate::search::utils::string_field;
 
@@ -140,7 +140,7 @@ fn inject_facet_meta(
             continue;
         };
 
-        let normalised: Value = if *label == "File Type" {
+        let normalised: Value = if *label == FACET_FILE_TYPE {
             match val.as_str() {
                 Some(mime) => {
                     let alias = MIMETYPE_ALIASES.get(mime).copied().unwrap_or(mime);
@@ -169,6 +169,8 @@ fn inject_facet_meta(
 mod tests {
     use anyhow::Context as _;
     use serde_json::json;
+
+    use crate::search::constants::{FACET_CREATED, FACET_FILE_TYPE};
 
     use super::*;
 
@@ -235,11 +237,14 @@ mod tests {
         });
         let result = parse_hit(&hit, "aum").context("should parse hit")?;
         assert_eq!(
-            result.metadata.get("File Type").and_then(|v| v.as_str()),
+            result
+                .metadata
+                .get(FACET_FILE_TYPE)
+                .and_then(|v| v.as_str()),
             Some("PDF")
         );
         assert_eq!(
-            result.metadata.get("Created").and_then(|v| v.as_str()),
+            result.metadata.get(FACET_CREATED).and_then(|v| v.as_str()),
             Some("2023")
         );
         Ok(())

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use crate::search::constants::{
-    DATE_FACETS, HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG, REVERSE_MIMETYPE_ALIASES,
+    DATE_FACETS, FACET_FILE_TYPE, HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG, REVERSE_MIMETYPE_ALIASES,
 };
 use crate::search::types::{FacetMap, FilterMap, SortSpec};
 
@@ -21,6 +21,7 @@ use crate::search::types::{FacetMap, FilterMap, SortSpec};
 pub(super) static ES_FACET_FIELDS: &[(&str, &str)] = &[
     ("Created", "meta.created"),
     ("File Type", "meta.content_type"),
+    ("Document Type", "meta.document_type"),
     ("Creator", "meta.creator"),
     ("Email Addresses", "meta.email_addresses"),
 ];
@@ -31,6 +32,7 @@ pub(super) static ES_FACET_FIELDS: &[(&str, &str)] = &[
 pub(super) static ES_FACET_META_KEYS: &[(&str, &str)] = &[
     ("Created", "created"),
     ("File Type", "content_type"),
+    ("Document Type", "document_type"),
     ("Creator", "creator"),
     ("Email Addresses", "email_addresses"),
 ];
@@ -88,7 +90,7 @@ pub(super) fn build_filter_clauses(filters: &FilterMap) -> Vec<Value> {
                 // More than just "format" means we have actual bounds.
                 clauses.push(json!({ "range": { es_field: Value::Object(range) } }));
             }
-        } else if label == "File Type" {
+        } else if label == FACET_FILE_TYPE {
             let raw_types: Vec<Value> = values
                 .iter()
                 .map(|alias| {
@@ -269,6 +271,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::search::constants::{
+        DOC_TYPE_ATTACHMENT, FACET_CREATED, FACET_DOCUMENT_TYPE, FACET_FILE_TYPE,
+    };
     use crate::search::types::SortSpec;
 
     #[test]
@@ -280,7 +285,7 @@ mod tests {
     #[test]
     fn filter_clauses_file_type_maps_alias_to_mime() -> anyhow::Result<()> {
         let mut f = FilterMap::new();
-        f.insert("File Type".into(), vec!["PDF".into()]);
+        f.insert(FACET_FILE_TYPE.into(), vec!["PDF".into()]);
         let clauses = build_filter_clauses(&f);
         assert_eq!(clauses.len(), 1);
         let terms = clauses[0].get("terms").context("missing terms")?;
@@ -296,13 +301,36 @@ mod tests {
     #[test]
     fn filter_clauses_date_range() -> anyhow::Result<()> {
         let mut f = FilterMap::new();
-        f.insert("Created".into(), vec!["from:2020".into(), "to:2023".into()]);
+        f.insert(
+            FACET_CREATED.into(),
+            vec!["from:2020".into(), "to:2023".into()],
+        );
         let clauses = build_filter_clauses(&f);
         assert_eq!(clauses.len(), 1);
         let range = clauses[0].get("range").context("missing range")?;
         let created = range.get("meta.created").context("missing meta.created")?;
         assert_eq!(created.get("gte").and_then(|v| v.as_str()), Some("2020"));
         assert_eq!(created.get("lte").and_then(|v| v.as_str()), Some("2023"));
+        Ok(())
+    }
+
+    #[test]
+    fn filter_clauses_document_type() -> anyhow::Result<()> {
+        let mut f = FilterMap::new();
+        f.insert(FACET_DOCUMENT_TYPE.into(), vec![DOC_TYPE_ATTACHMENT.into()]);
+        let clauses = build_filter_clauses(&f);
+        assert_eq!(clauses.len(), 1);
+        let terms = clauses[0].get("terms").context("missing terms")?;
+        let types = terms
+            .get("meta.document_type")
+            .context("missing meta.document_type")?
+            .as_array()
+            .context("not an array")?;
+        assert!(
+            types
+                .iter()
+                .any(|v| v.as_str() == Some(DOC_TYPE_ATTACHMENT))
+        );
         Ok(())
     }
 
@@ -349,7 +377,7 @@ mod tests {
             }
         });
         let facets = parse_facets(&resp);
-        let created = facets.get("Created").context("missing Created facet")?;
+        let created = facets.get(FACET_CREATED).context("missing Created facet")?;
         assert_eq!(created.get("2023"), Some(&10u64));
         assert_eq!(created.get("2022"), Some(&5u64));
         Ok(())
@@ -368,7 +396,9 @@ mod tests {
             }
         });
         let facets = parse_facets(&resp);
-        let file_type = facets.get("File Type").context("missing File Type facet")?;
+        let file_type = facets
+            .get(FACET_FILE_TYPE)
+            .context("missing File Type facet")?;
         assert_eq!(file_type.get("application/pdf"), Some(&3u64));
         // Zero-count buckets are excluded.
         assert!(!file_type.contains_key("text/plain"));

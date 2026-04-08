@@ -11,7 +11,8 @@ use aum_core::embeddings::{Embedder, OllamaEmbedder, OpenAiEmbedder};
 use aum_core::models::EmbeddingModelInfo;
 use aum_core::search::SearchBackend;
 use aum_core::search::constants::{
-    FACET_CREATED, FACET_CREATOR, FACET_EMAIL_ADDRESSES, FACET_FILE_TYPE,
+    DOC_TYPE_ATTACHMENT, DOC_TYPE_PARENT, FACET_CREATED, FACET_CREATOR, FACET_DOCUMENT_TYPE,
+    FACET_EMAIL_ADDRESSES, FACET_FILE_TYPE,
 };
 use aum_core::search::types::{FilterMap, SearchRequest, SearchResult, SortSpec};
 
@@ -44,6 +45,9 @@ pub struct SearchArgs {
     /// Filter results created up to this year (inclusive, e.g. 2023).
     #[arg(long)]
     pub created_to: Option<String>,
+    /// Filter by document type: "parent" or "attachment".
+    #[arg(long = "doc-type")]
+    pub doc_type: Vec<String>,
     /// Sort by field: date:asc, date:desc, size:asc, size:desc.
     #[arg(long)]
     pub sort: Option<String>,
@@ -75,20 +79,7 @@ pub async fn run(
         .filter(|s| !s.is_empty())
         .collect();
 
-    let mut filters = FilterMap::new();
-    if !args.file_types.is_empty() {
-        filters.insert(FACET_FILE_TYPE.to_owned(), args.file_types.clone());
-    }
-    if !args.creator.is_empty() {
-        filters.insert(FACET_CREATOR.to_owned(), args.creator.clone());
-    }
-    if !args.email.is_empty() {
-        filters.insert(FACET_EMAIL_ADDRESSES.to_owned(), args.email.clone());
-    }
-    let year_filter = build_year_filter(args.created_from.as_deref(), args.created_to.as_deref());
-    if !year_filter.is_empty() {
-        filters.insert(FACET_CREATED.to_owned(), year_filter);
-    }
+    let filters = build_filters(args);
 
     let sort = parse_sort(args.sort.as_deref());
 
@@ -303,6 +294,41 @@ fn json_str_array(val: Option<&serde_json::Value>) -> Vec<&str> {
         Some(serde_json::Value::String(s)) => vec![s.as_str()],
         _ => vec![],
     }
+}
+
+/// Build the filter map from CLI arguments.
+fn build_filters(args: &SearchArgs) -> FilterMap {
+    let mut filters = FilterMap::new();
+    if !args.file_types.is_empty() {
+        filters.insert(FACET_FILE_TYPE.to_owned(), args.file_types.clone());
+    }
+    if !args.creator.is_empty() {
+        filters.insert(FACET_CREATOR.to_owned(), args.creator.clone());
+    }
+    if !args.email.is_empty() {
+        filters.insert(FACET_EMAIL_ADDRESSES.to_owned(), args.email.clone());
+    }
+    if !args.doc_type.is_empty() {
+        let mapped: Vec<String> = args
+            .doc_type
+            .iter()
+            .map(|v| {
+                if v.eq_ignore_ascii_case("parent") {
+                    DOC_TYPE_PARENT.to_owned()
+                } else if v.eq_ignore_ascii_case("attachment") {
+                    DOC_TYPE_ATTACHMENT.to_owned()
+                } else {
+                    v.clone()
+                }
+            })
+            .collect();
+        filters.insert(FACET_DOCUMENT_TYPE.to_owned(), mapped);
+    }
+    let year_filter = build_year_filter(args.created_from.as_deref(), args.created_to.as_deref());
+    if !year_filter.is_empty() {
+        filters.insert(FACET_CREATED.to_owned(), year_filter);
+    }
+    filters
 }
 
 /// Parse a sort string like "date:asc" into a `SortSpec`.

@@ -89,6 +89,17 @@ pub(super) fn as_single_string(val: &MetadataValue) -> Option<String> {
     }
 }
 
+/// Return the document type label based on whether the document was extracted
+/// from another file (attachment) or is a top-level parent document.
+pub(super) fn document_type_label(extracted_from: &str) -> &'static str {
+    use crate::search::constants::{DOC_TYPE_ATTACHMENT, DOC_TYPE_PARENT};
+    if extracted_from.is_empty() {
+        DOC_TYPE_PARENT
+    } else {
+        DOC_TYPE_ATTACHMENT
+    }
+}
+
 /// Convert a `MetadataValue` to a list of strings.
 ///
 /// Borrows the underlying `Vec` for the `List` arm to avoid cloning.

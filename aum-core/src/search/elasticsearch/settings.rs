@@ -22,6 +22,7 @@ pub(super) static META_FIELD_TYPES: &[(&str, &str)] = &[
     ("message_id", "keyword"),
     ("in_reply_to", "keyword"),
     ("references", "keyword"),
+    ("document_type", "keyword"),
 ];
 
 // ---------------------------------------------------------------------------

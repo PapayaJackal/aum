@@ -1,6 +1,8 @@
 //! Meilisearch filter expression builder.
 
-use crate::search::constants::{DATE_FACETS, FACET_FIELDS, REVERSE_MIMETYPE_ALIASES};
+use crate::search::constants::{
+    DATE_FACETS, FACET_FIELDS, FACET_FILE_TYPE, REVERSE_MIMETYPE_ALIASES,
+};
 use crate::search::types::FilterMap;
 
 // ---------------------------------------------------------------------------
@@ -66,7 +68,7 @@ fn build_facet_filter(label: &str, values: &[String]) -> Option<String> {
 /// For "File Type" facets, reverse-maps the alias (e.g. "Word") to the raw
 /// MIME type(s). For all other facets returns the value unchanged.
 fn resolve_filter_values(label: &str, value: &str) -> Vec<String> {
-    if label == "File Type"
+    if label == FACET_FILE_TYPE
         && let Some(&raw) = REVERSE_MIMETYPE_ALIASES.get(value)
     {
         return vec![raw.to_owned()];
@@ -127,6 +129,9 @@ mod tests {
     use anyhow::Context as _;
 
     use super::*;
+    use crate::search::constants::{
+        DOC_TYPE_PARENT, FACET_CREATED, FACET_DOCUMENT_TYPE, FACET_FILE_TYPE,
+    };
 
     #[test]
     fn escape_double_quotes() {
@@ -146,7 +151,7 @@ mod tests {
     #[test]
     fn single_file_type_filter() -> anyhow::Result<()> {
         let mut f = FilterMap::new();
-        f.insert("File Type".into(), vec!["PDF".into()]);
+        f.insert(FACET_FILE_TYPE.into(), vec!["PDF".into()]);
         let result = build_filter_string(&f).context("should produce filter")?;
         assert!(result.contains("meta_content_type"));
         assert!(result.contains("application/pdf"));
@@ -156,7 +161,7 @@ mod tests {
     #[test]
     fn date_filter_exact_year() -> anyhow::Result<()> {
         let mut f = FilterMap::new();
-        f.insert("Created".into(), vec!["2023".into()]);
+        f.insert(FACET_CREATED.into(), vec!["2023".into()]);
         let result = build_filter_string(&f).context("should produce filter")?;
         assert_eq!(result, "meta_created_year = 2023");
         Ok(())
@@ -165,10 +170,23 @@ mod tests {
     #[test]
     fn date_filter_from_to() -> anyhow::Result<()> {
         let mut f = FilterMap::new();
-        f.insert("Created".into(), vec!["from:2020".into(), "to:2023".into()]);
+        f.insert(
+            FACET_CREATED.into(),
+            vec!["from:2020".into(), "to:2023".into()],
+        );
         let result = build_filter_string(&f).context("should produce filter")?;
         assert!(result.contains("meta_created_year >= 2020"));
         assert!(result.contains("meta_created_year <= 2023"));
+        Ok(())
+    }
+
+    #[test]
+    fn document_type_filter() -> anyhow::Result<()> {
+        let mut f = FilterMap::new();
+        f.insert(FACET_DOCUMENT_TYPE.into(), vec![DOC_TYPE_PARENT.into()]);
+        let result = build_filter_string(&f).context("should produce filter")?;
+        assert!(result.contains("meta_document_type"));
+        assert!(result.contains(DOC_TYPE_PARENT));
         Ok(())
     }
 

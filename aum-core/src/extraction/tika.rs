@@ -1106,7 +1106,7 @@ mod tests {
     use anyhow::Context as _;
     use serde_json::json;
     use tempfile::TempDir;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_bytes, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use futures::TryStreamExt as _;
@@ -1608,20 +1608,22 @@ mod tests {
             ])))
             .mount(&server)
             .await;
-        // First /unpack (outer) returns inner.zip.
+        // Match unpack calls by request body (the file content sent to Tika).
+        // First /unpack sends the source file ("data") → returns inner.zip.
         Mock::given(method("PUT"))
             .and(path("/unpack"))
+            .and(body_bytes(b"data" as &[u8]))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(outer_zip)
                     .insert_header("Content-Type", "application/zip"),
             )
-            .up_to_n_times(1)
             .mount(&server)
             .await;
-        // Second /unpack (inner.zip) returns inner.txt.
+        // Second /unpack sends extracted inner.zip ("fake zip data") → returns inner.txt.
         Mock::given(method("PUT"))
             .and(path("/unpack"))
+            .and(body_bytes(b"fake zip data" as &[u8]))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(inner_zip)
@@ -1844,26 +1846,27 @@ mod tests {
             ])))
             .mount(&server)
             .await;
-        // First /unpack call (for outer email) returns attach.eml.
+        // Match unpack calls by request body (the file content sent to Tika).
+        // First /unpack sends the source file ("raw") → returns attach.eml.
         Mock::given(method("PUT"))
             .and(path("/unpack"))
+            .and(body_bytes(b"raw" as &[u8]))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(outer_zip)
                     .insert_header("Content-Type", "application/zip"),
             )
-            .up_to_n_times(1)
             .mount(&server)
             .await;
-        // Second /unpack call (for attach.eml) returns document.pdf.
+        // Second /unpack sends extracted attach.eml ("inner email") → returns document.pdf.
         Mock::given(method("PUT"))
             .and(path("/unpack"))
+            .and(body_bytes(b"inner email" as &[u8]))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(inner_zip)
                     .insert_header("Content-Type", "application/zip"),
             )
-            .up_to_n_times(1)
             .mount(&server)
             .await;
 
@@ -1936,37 +1939,38 @@ mod tests {
             .mount(&server)
             .await;
 
-        // First /unpack (outer email) returns embedded-1 and embedded-2.
+        // Match unpack calls by request body (the file content sent to Tika).
+        // First /unpack sends the source file ("raw email") → returns both children.
         Mock::given(method("PUT"))
             .and(path("/unpack"))
+            .and(body_bytes(b"raw email" as &[u8]))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(outer_zip)
                     .insert_header("Content-Type", "application/zip"),
             )
-            .up_to_n_times(1)
             .mount(&server)
             .await;
-        // Second /unpack (embedded-1) returns invoice.pdf.
+        // Second /unpack sends extracted embedded-1 ("mime part 1") → returns invoice.pdf.
         Mock::given(method("PUT"))
             .and(path("/unpack"))
+            .and(body_bytes(b"mime part 1" as &[u8]))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(inner_zip_1)
                     .insert_header("Content-Type", "application/zip"),
             )
-            .up_to_n_times(1)
             .mount(&server)
             .await;
-        // Third /unpack (embedded-2) returns report.pdf.
+        // Third /unpack sends extracted embedded-2 ("mime part 2") → returns report.pdf.
         Mock::given(method("PUT"))
             .and(path("/unpack"))
+            .and(body_bytes(b"mime part 2" as &[u8]))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(inner_zip_2)
                     .insert_header("Content-Type", "application/zip"),
             )
-            .up_to_n_times(1)
             .mount(&server)
             .await;
 

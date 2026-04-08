@@ -8,7 +8,9 @@ use serde_json::{Map, Value, json};
 
 use crate::extraction::{AUM_DISPLAY_PATH_KEY, AUM_EXTRACTED_FROM_KEY};
 use crate::models::Document;
-use crate::search::meta::{IndexedMeta, as_single_string, extract_indexed_meta};
+use crate::search::meta::{
+    IndexedMeta, as_single_string, document_type_label, extract_indexed_meta,
+};
 
 // ---------------------------------------------------------------------------
 // ES-specific meta builder
@@ -77,7 +79,7 @@ pub(super) fn build_nested_meta(meta: &IndexedMeta) -> Map<String, Value> {
 /// source in a bulk index operation.
 pub(super) fn build_doc_body(doc_id: &str, document: &Document) -> (String, Value) {
     let meta = extract_indexed_meta(&document.metadata);
-    let nested_meta = build_nested_meta(&meta);
+    let mut nested_meta = build_nested_meta(&meta);
 
     let display_path = document
         .metadata
@@ -90,6 +92,11 @@ pub(super) fn build_doc_body(doc_id: &str, document: &Document) -> (String, Valu
         .get(AUM_EXTRACTED_FROM_KEY)
         .and_then(as_single_string)
         .unwrap_or_default();
+
+    nested_meta.insert(
+        "document_type".into(),
+        Value::String(document_type_label(&extracted_from).into()),
+    );
 
     // Serialize the full raw metadata blob (stored but not indexed).
     // MetadataValue derives Serialize with #[serde(untagged)] so this
@@ -123,6 +130,7 @@ mod tests {
 
     use super::*;
     use crate::models::{Document, MetadataValue};
+    use crate::search::constants::{DOC_TYPE_ATTACHMENT, DOC_TYPE_PARENT};
 
     fn meta(pairs: &[(&str, &str)]) -> HashMap<String, MetadataValue> {
         pairs
@@ -177,6 +185,46 @@ mod tests {
         assert_eq!(obj["has_embeddings"], Value::Bool(false));
         assert!(obj.contains_key("meta"));
         assert!(obj.contains_key("metadata"));
+        Ok(())
+    }
+
+    #[test]
+    fn parent_document_type_when_no_extracted_from() -> anyhow::Result<()> {
+        let doc = Document {
+            source_path: PathBuf::from("/tmp/test.pdf"),
+            content: String::new(),
+            metadata: HashMap::new(),
+        };
+        let (_, body) = build_doc_body("doc1", &doc);
+        let meta_obj = body
+            .as_object()
+            .and_then(|o| o.get("meta"))
+            .and_then(|v| v.as_object())
+            .context("meta should be object")?;
+        assert_eq!(
+            meta_obj.get("document_type").and_then(|v| v.as_str()),
+            Some(DOC_TYPE_PARENT)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attachment_document_type_when_extracted_from_set() -> anyhow::Result<()> {
+        let doc = Document {
+            source_path: PathBuf::from("/tmp/email.eml/attachment.pdf"),
+            content: String::new(),
+            metadata: meta(&[("_aum_extracted_from", "email.eml")]),
+        };
+        let (_, body) = build_doc_body("doc2", &doc);
+        let meta_obj = body
+            .as_object()
+            .and_then(|o| o.get("meta"))
+            .and_then(|v| v.as_object())
+            .context("meta should be object")?;
+        assert_eq!(
+            meta_obj.get("document_type").and_then(|v| v.as_str()),
+            Some(DOC_TYPE_ATTACHMENT)
+        );
         Ok(())
     }
 

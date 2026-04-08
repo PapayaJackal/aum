@@ -147,6 +147,12 @@ pub const FACET_CREATOR: &str = "Creator";
 pub const FACET_EMAIL_ADDRESSES: &str = "Email Addresses";
 /// Facet label for document creation year (maps to `meta_created_year`).
 pub const FACET_CREATED: &str = "Created";
+/// Facet label for document type: parent vs attachment (maps to `meta_document_type`).
+pub const FACET_DOCUMENT_TYPE: &str = "Document Type";
+/// Document type value for top-level (non-embedded) documents.
+pub const DOC_TYPE_PARENT: &str = "Parent Document";
+/// Document type value for embedded/extracted attachments.
+pub const DOC_TYPE_ATTACHMENT: &str = "Attachment";
 
 /// Maps facet display labels to their indexed Meilisearch field names.
 pub static FACET_FIELDS: phf::Map<&'static str, &'static str> = phf::phf_map! {
@@ -154,6 +160,7 @@ pub static FACET_FIELDS: phf::Map<&'static str, &'static str> = phf::phf_map! {
     "File Type" => "meta_content_type",
     "Creator" => "meta_creator",
     "Email Addresses" => "meta_email_addresses",
+    "Document Type" => "meta_document_type",
 };
 
 /// Canonical display order for facet panels: Created, File Type, Creator, Email Addresses.
@@ -161,6 +168,7 @@ pub static FACET_FIELDS: phf::Map<&'static str, &'static str> = phf::phf_map! {
 pub const FACET_ORDER: &[&str] = &[
     FACET_CREATED,
     FACET_FILE_TYPE,
+    FACET_DOCUMENT_TYPE,
     FACET_CREATOR,
     FACET_EMAIL_ADDRESSES,
 ];

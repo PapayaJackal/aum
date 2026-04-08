@@ -23,6 +23,7 @@ pub(super) static FILTERABLE_ATTRS: &[&str] = &[
     "meta_file_size",
     "meta_email_addresses",
     "has_embeddings",
+    "meta_document_type",
     "extracted_from",
     "display_path",
     "meta_message_id",

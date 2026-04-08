@@ -9,7 +9,9 @@ use tracing::warn;
 
 use crate::extraction::{AUM_DISPLAY_PATH_KEY, AUM_EXTRACTED_FROM_KEY};
 use crate::models::Document;
-use crate::search::meta::{IndexedMeta, as_single_string, extract_indexed_meta};
+use crate::search::meta::{
+    IndexedMeta, as_single_string, document_type_label, extract_indexed_meta,
+};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -124,6 +126,10 @@ pub(super) fn build_doc_body(doc_id: &str, document: &Document) -> Value {
         Value::String(document.source_path.to_string_lossy().into_owned()),
     );
     flat.insert("display_path".into(), Value::String(display_path));
+    flat.insert(
+        "meta_document_type".into(),
+        Value::String(document_type_label(&extracted_from).into()),
+    );
     flat.insert("extracted_from".into(), Value::String(extracted_from));
     flat.insert("content".into(), Value::String(document.content.clone()));
     flat.insert("has_embeddings".into(), Value::Bool(false));
@@ -146,6 +152,7 @@ mod tests {
 
     use super::*;
     use crate::models::MetadataValue;
+    use crate::search::constants::{DOC_TYPE_ATTACHMENT, DOC_TYPE_PARENT};
 
     fn meta_map(pairs: &[(&str, &str)]) -> HashMap<String, MetadataValue> {
         pairs
@@ -205,6 +212,40 @@ mod tests {
         };
         let flat = build_flat_meta(&m);
         assert!(!flat.contains_key("meta_file_size"));
+    }
+
+    #[test]
+    fn parent_document_type_when_no_extracted_from() -> anyhow::Result<()> {
+        use std::path::PathBuf;
+        let doc = Document {
+            source_path: PathBuf::from("/tmp/test.pdf"),
+            content: String::new(),
+            metadata: HashMap::new(),
+        };
+        let body = build_doc_body("doc1", &doc);
+        let obj = body.as_object().context("body should be object")?;
+        assert_eq!(
+            obj.get("meta_document_type").and_then(|v| v.as_str()),
+            Some(DOC_TYPE_PARENT)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attachment_document_type_when_extracted_from_set() -> anyhow::Result<()> {
+        use std::path::PathBuf;
+        let doc = Document {
+            source_path: PathBuf::from("/tmp/email.eml/attachment.pdf"),
+            content: String::new(),
+            metadata: meta_map(&[("_aum_extracted_from", "email.eml")]),
+        };
+        let body = build_doc_body("doc2", &doc);
+        let obj = body.as_object().context("body should be object")?;
+        assert_eq!(
+            obj.get("meta_document_type").and_then(|v| v.as_str()),
+            Some(DOC_TYPE_ATTACHMENT)
+        );
+        Ok(())
     }
 
     #[test]
