@@ -38,11 +38,11 @@ phf = { workspace = true }
 meilisearch-sdk = { workspace = true, optional = true }
 elasticsearch = { workspace = true, optional = true }
 fs2 = { workspace = true }
-tempfile = "3"
-regex = "1.12.3"
-argon2 = "0.5.3"
-base64ct = "1"
+tempfile = { workspace = true }
+regex = { workspace = true }
+argon2 = { workspace = true }
+base64ct = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-wiremock = "0.6"
+wiremock = { workspace = true }

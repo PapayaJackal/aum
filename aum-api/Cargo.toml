@@ -32,8 +32,8 @@ chrono = { workspace = true }
 futures = { workspace = true }
 anyhow = { workspace = true }
 tokio-util.workspace = true
-rust-embed = { version = "8.11.0", optional = true }
-indexmap = { version = "2.13.1", features = ["serde"] }
+rust-embed = { workspace = true, optional = true }
+indexmap = { workspace = true }
 
 [features]
 bundle-frontend = ["dep:rust-embed"]
