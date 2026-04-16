@@ -10,18 +10,18 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
-    "dompurify": "^3.3.3",
+    "dompurify": "^3.4.0",
     "pdfjs-dist": "^5.6.205",
-    "svelte": "^5.55.0"
+    "svelte": "^5.55.4"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tailwindcss/vite": "^4.2.2",
-    "prettier": "^3.5.3",
-    "prettier-plugin-svelte": "^3.4.0",
-    "svelte-check": "^4.4.5",
+    "prettier": "^3.8.3",
+    "prettier-plugin-svelte": "^3.5.1",
+    "svelte-check": "^4.4.6",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
-    "vite": "^8.0.3"
+    "vite": "^8.0.8"
   }
 }
