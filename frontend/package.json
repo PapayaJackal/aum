@@ -12,7 +12,7 @@
   "dependencies": {
     "dompurify": "^3.3.3",
     "pdfjs-dist": "^5.6.205",
-    "svelte": "^5.55.0"
+    "svelte": "^5.55.4"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
