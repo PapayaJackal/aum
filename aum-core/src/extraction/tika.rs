@@ -1137,6 +1137,7 @@ mod tests {
     async fn make_zip_bytes(files: &[(&str, &[u8])]) -> anyhow::Result<Vec<u8>> {
         use async_zip::base::write::ZipFileWriter;
         use async_zip::{Compression, ZipEntryBuilder};
+        use tokio::io::AsyncWriteExt as _;
 
         let tmp = tempfile::NamedTempFile::new().context("tempfile")?;
         let std_file = tmp.as_file().try_clone().context("clone")?;
@@ -1149,7 +1150,13 @@ mod tests {
                 .await
                 .context("write entry")?;
         }
-        writer.close().await.context("close zip")?;
+        // `ZipFileWriter::close` finishes via `write_all` without flushing;
+        // `tokio::fs::File` keeps the last write in a detached blocking task, so
+        // reading the path immediately can race and see a truncated file.
+        let compat = writer.close().await.context("close zip")?;
+        let mut tokio_file = compat.into_inner();
+        tokio_file.shutdown().await.context("shutdown")?;
+        drop(tokio_file);
         tokio::fs::read(tmp.path()).await.context("read zip")
     }
 
