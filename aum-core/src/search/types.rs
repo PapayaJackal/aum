@@ -116,10 +116,11 @@ pub enum SearchError {
     #[cfg(feature = "meilisearch")]
     #[error("meilisearch error: {0}")]
     Meilisearch(#[from] meilisearch_sdk::errors::Error),
-    /// The Elasticsearch client returned an error.
-    #[cfg(feature = "elasticsearch")]
-    #[error("elasticsearch error: {0}")]
-    Elasticsearch(elasticsearch::Error),
+    #[allow(clippy::doc_markdown)]
+    /// The OpenSearch client returned an error.
+    #[cfg(feature = "opensearch")]
+    #[error("opensearch error: {0}")]
+    OpenSearch(opensearch::Error),
     /// JSON serialisation or deserialisation failed.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),

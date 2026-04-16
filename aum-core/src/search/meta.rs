@@ -1,6 +1,6 @@
 //! Shared metadata extraction for search backends.
 //!
-//! Both the Meilisearch and Elasticsearch backends extract the same curated
+//! Both the Meilisearch and `OpenSearch` backends extract the same curated
 //! set of fields from raw Tika metadata. This module holds the shared logic
 //! so each backend only needs to provide its own document body builder.
 

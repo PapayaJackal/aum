@@ -68,17 +68,18 @@ impl std::str::FromStr for EmbeddingsBackend {
 #[serde(rename_all = "lowercase")]
 pub enum SearchBackendType {
     /// Use Meilisearch as the search backend.
-    #[default]
     Meilisearch,
-    /// Use Elasticsearch as the search backend.
-    Elasticsearch,
+    #[allow(clippy::doc_markdown)]
+    /// Use OpenSearch as the search backend.
+    #[default]
+    OpenSearch,
 }
 
 impl fmt::Display for SearchBackendType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SearchBackendType::Meilisearch => write!(f, "meilisearch"),
-            SearchBackendType::Elasticsearch => write!(f, "elasticsearch"),
+            SearchBackendType::OpenSearch => write!(f, "opensearch"),
         }
     }
 }
@@ -89,9 +90,9 @@ impl std::str::FromStr for SearchBackendType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "meilisearch" => Ok(Self::Meilisearch),
-            "elasticsearch" => Ok(Self::Elasticsearch),
+            "opensearch" => Ok(Self::OpenSearch),
             other => Err(format!(
-                "unknown backend '{other}'; valid values: meilisearch, elasticsearch"
+                "unknown backend '{other}'; valid values: meilisearch, opensearch"
             )),
         }
     }
@@ -243,18 +244,17 @@ pub struct MeilisearchConfig {
     pub crop_length: u32,
 }
 
-/// Configuration for the Elasticsearch search backend.
-#[cfg(feature = "elasticsearch")]
+#[allow(clippy::doc_markdown)]
+/// Configuration for the OpenSearch search backend.
+#[cfg(feature = "opensearch")]
 #[derive(Debug, Clone, Serialize, Deserialize, ConfigDocs, ConfigDefault, ConfigValues)]
 #[serde(default)]
-#[config_section = "elasticsearch"]
-pub struct ElasticsearchConfig {
-    /// URL of the Elasticsearch instance.
+#[config_section = "opensearch"]
+pub struct OpenSearchConfig {
+    #[allow(clippy::doc_markdown)]
+    /// URL of the OpenSearch instance.
     #[config_default = "http://localhost:9200"]
     pub url: String,
-    /// Use Reciprocal Rank Fusion (RRF) for hybrid search instead of combined scoring.
-    #[config_default = "false"]
-    pub rrf: bool,
     /// Maximum analyzed offset for highlighting, in bytes.
     #[config_default = "10000000"]
     pub max_highlight_offset: u64,
@@ -306,7 +306,7 @@ pub struct EmbeddingsConfig {
     #[config_default = "qwen3-embedding:0.6b"]
     pub model: String,
     /// Dimension of the embedding vectors produced by the model.
-    #[config_default = "256"]
+    #[config_default = "1024"]
     pub dimension: u32,
     /// Number of text chunks to embed in a single batch request.
     #[config_default = "50"]
@@ -453,14 +453,15 @@ pub struct AumConfig {
     pub data: DataConfig,
     /// Log output settings.
     pub log: LoggingConfig,
-    /// Which search backend to use: "meilisearch" or "elasticsearch".
+    /// Which search backend to use: "meilisearch" or "opensearch".
     pub search_backend: SearchBackendType,
     /// Meilisearch connection settings.
     #[cfg(feature = "meilisearch")]
     pub meilisearch: MeilisearchConfig,
-    /// Elasticsearch connection settings.
-    #[cfg(feature = "elasticsearch")]
-    pub elasticsearch: ElasticsearchConfig,
+    #[allow(clippy::doc_markdown)]
+    /// OpenSearch connection settings.
+    #[cfg(feature = "opensearch")]
+    pub opensearch: OpenSearchConfig,
     /// Database connection settings.
     pub database: DatabaseConfig,
     /// Document ingest pipeline settings.
@@ -489,8 +490,8 @@ impl AumConfig {
         ];
         #[cfg(feature = "meilisearch")]
         sections.push(MeilisearchConfig::config_docs());
-        #[cfg(feature = "elasticsearch")]
-        sections.push(ElasticsearchConfig::config_docs());
+        #[cfg(feature = "opensearch")]
+        sections.push(OpenSearchConfig::config_docs());
         sections.extend([
             IngestConfig::config_docs(),
             TikaConfig::config_docs(),
@@ -636,11 +637,11 @@ pub fn format_config(config: &AumConfig) -> String {
         MeilisearchConfig::config_docs(),
         config.meilisearch.config_values(),
     );
-    #[cfg(feature = "elasticsearch")]
+    #[cfg(feature = "opensearch")]
     write_section(
         &mut out,
-        ElasticsearchConfig::config_docs(),
-        config.elasticsearch.config_values(),
+        OpenSearchConfig::config_docs(),
+        config.opensearch.config_values(),
     );
     write_section(
         &mut out,
@@ -1013,8 +1014,8 @@ mod tests {
         ];
         #[cfg(feature = "meilisearch")]
         expected_sections.push("meilisearch");
-        #[cfg(feature = "elasticsearch")]
-        expected_sections.push("elasticsearch");
+        #[cfg(feature = "opensearch")]
+        expected_sections.push("opensearch");
         for doc in AumConfig::config_docs() {
             assert!(
                 expected_sections.contains(&doc.section),

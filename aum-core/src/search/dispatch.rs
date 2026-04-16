@@ -21,19 +21,21 @@ use crate::search::types::{
 // AumBackend enum
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::doc_markdown)]
 /// A concrete, owned search backend that can be either Meilisearch or
-/// Elasticsearch, selected at runtime based on [`AumConfig::search_backend`].
+/// OpenSearch, selected at runtime based on [`AumConfig::search_backend`].
 ///
 /// Implements [`SearchBackend`], [`BatchSink`], and [`ExistenceChecker`].
 pub enum AumBackend {
     /// Meilisearch backend.
     #[cfg(feature = "meilisearch")]
     Meilisearch(super::MeilisearchBackend),
-    /// Elasticsearch backend.
-    #[cfg(feature = "elasticsearch")]
-    Elasticsearch(super::ElasticsearchBackend),
+    #[allow(clippy::doc_markdown)]
+    /// OpenSearch backend.
+    #[cfg(feature = "opensearch")]
+    OpenSearch(super::OpenSearchBackend),
     /// Fallback for builds where no feature was enabled.
-    #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+    #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
     _None(std::convert::Infallible),
 }
 
@@ -61,13 +63,13 @@ impl AumBackend {
                 #[cfg(not(feature = "meilisearch"))]
                 return Err(SearchError::BackendNotCompiled("meilisearch"));
             }
-            SearchBackendType::Elasticsearch => {
-                #[cfg(feature = "elasticsearch")]
-                return Ok(AumBackend::Elasticsearch(super::ElasticsearchBackend::new(
-                    &config.elasticsearch,
+            SearchBackendType::OpenSearch => {
+                #[cfg(feature = "opensearch")]
+                return Ok(AumBackend::OpenSearch(super::OpenSearchBackend::new(
+                    &config.opensearch,
                 )?));
-                #[cfg(not(feature = "elasticsearch"))]
-                return Err(SearchError::BackendNotCompiled("elasticsearch"));
+                #[cfg(not(feature = "opensearch"))]
+                return Err(SearchError::BackendNotCompiled("opensearch"));
             }
         }
     }
@@ -87,9 +89,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.initialize(index, vector_dimension).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.initialize(index, vector_dimension).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.initialize(index, vector_dimension).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -102,9 +104,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.index_batch(index, docs).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.index_batch(index, docs).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.index_batch(index, docs).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -116,9 +118,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.search_text(request),
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.search_text(request),
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.search_text(request),
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -132,9 +134,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.search_hybrid(request, vector, semantic_ratio),
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.search_hybrid(request, vector, semantic_ratio),
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.search_hybrid(request, vector, semantic_ratio),
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -148,9 +150,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.count(indices, query, filters).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.count(indices, query, filters).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.count(indices, query, filters).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -163,9 +165,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.get_document(index, doc_id).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.get_document(index, doc_id).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.get_document(index, doc_id).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -178,9 +180,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.find_by_display_path(index, display_path).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.find_by_display_path(index, display_path).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.find_by_display_path(index, display_path).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -189,9 +191,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.delete_index(index).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.delete_index(index).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.delete_index(index).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -200,9 +202,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.doc_count(index).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.doc_count(index).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.doc_count(index).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -215,9 +217,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.find_attachments(index, display_path),
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.find_attachments(index, display_path),
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.find_attachments(index, display_path),
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -232,11 +234,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.find_thread(index, message_id, in_reply_to, references),
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => {
-                b.find_thread(index, message_id, in_reply_to, references)
-            }
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.find_thread(index, message_id, in_reply_to, references),
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -245,9 +245,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.list_indices().await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.list_indices().await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.list_indices().await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -256,9 +256,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.count_unembedded(index).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.count_unembedded(index).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.count_unembedded(index).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -271,9 +271,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.scroll_unembedded(index, batch_size),
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.scroll_unembedded(index, batch_size),
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.scroll_unembedded(index, batch_size),
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -286,9 +286,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.update_embeddings(index, updates).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.update_embeddings(index, updates).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.update_embeddings(index, updates).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -302,9 +302,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.scroll_documents(index, doc_ids, batch_size),
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.scroll_documents(index, doc_ids, batch_size),
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.scroll_documents(index, doc_ids, batch_size),
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -317,9 +317,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.get_existing_doc_ids(index, doc_ids).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.get_existing_doc_ids(index, doc_ids).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.get_existing_doc_ids(index, doc_ids).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -328,9 +328,9 @@ impl SearchBackend for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.clear_embeddings(index).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.clear_embeddings(index).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.clear_embeddings(index).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -352,9 +352,9 @@ impl BatchSink for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.flush_batch(index, job_id, batch, record_error).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.flush_batch(index, job_id, batch, record_error).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.flush_batch(index, job_id, batch, record_error).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }
@@ -370,9 +370,9 @@ impl ExistenceChecker for AumBackend {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.get_existing(index, doc_ids).await,
-            #[cfg(feature = "elasticsearch")]
-            AumBackend::Elasticsearch(b) => b.get_existing(index, doc_ids).await,
-            #[cfg(not(any(feature = "meilisearch", feature = "elasticsearch")))]
+            #[cfg(feature = "opensearch")]
+            AumBackend::OpenSearch(b) => b.get_existing(index, doc_ids).await,
+            #[cfg(not(any(feature = "meilisearch", feature = "opensearch")))]
             AumBackend::_None(n) => match *n {},
         }
     }

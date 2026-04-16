@@ -1,13 +1,14 @@
 services:
-  meilisearch:
-    restart: "always"
-    image: docker.io/getmeili/meilisearch:v1.40.0
-    environment:
-      - MEILI_NO_ANALYTICS=true
-    ports:
-      - "7700:7700"
-    volumes:
-      - meili-data:/meili_data
+  # Alternative: Meilisearch backend (set AUM_SEARCH_BACKEND=meilisearch)
+  # meilisearch:
+  #   restart: "always"
+  #   image: docker.io/getmeili/meilisearch:v1.40.0
+  #   environment:
+  #     - MEILI_NO_ANALYTICS=true
+  #   ports:
+  #     - "7700:7700"
+  #   volumes:
+  #     - meili-data:/meili_data
 
   tika:
     restart: "always"
@@ -15,17 +16,27 @@ services:
     ports:
       - "9998:9998"
 
-  # Alternative: Elasticsearch backend (set AUM_SEARCH_BACKEND=elasticsearch)
-  # elasticsearch:
-  #   restart: "always"
-  #   image: docker.elastic.co/elasticsearch/elasticsearch:9.3.2
-  #   environment:
-  #     - discovery.type=single-node
-  #     - xpack.security.enabled=false
-  #   ports:
-  #     - "9200:9200"
-  #   volumes:
-  #     - es-data:/usr/share/elasticsearch/data
+  opensearch:
+    restart: "always"
+    image: docker.io/opensearchproject/opensearch:3.6.0
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Tr0ub4dor&3xKq9fLp
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - search.insights.top_queries.exporter.type=none
+      - search.insights.top_queries.latency.enabled=false
+      - search.insights.top_queries.cpu.enabled=false
+      - search.insights.top_queries.memory.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
 
   # Run Ollama on the host for GPU acceleration (`ollama serve`).
   # ollama:
@@ -38,5 +49,5 @@ services:
   #     - OLLAMA_NUM_PARALLEL=8
 
 volumes:
-  meili-data:
-  # es-data:
+  opensearch-data:
+  # meili-data:

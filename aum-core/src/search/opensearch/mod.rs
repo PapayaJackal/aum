@@ -1,4 +1,4 @@
-//! Elasticsearch search backend: [`ElasticsearchBackend`] and trait implementations.
+//! `OpenSearch` search backend: [`OpenSearchBackend`] and trait implementations.
 
 mod meta;
 mod parse;
@@ -8,19 +8,19 @@ mod settings;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use elasticsearch::Elasticsearch;
-use elasticsearch::http::request::JsonBody;
-use elasticsearch::http::transport::Transport;
-use elasticsearch::indices::{
-    IndicesCreateParts, IndicesDeleteParts, IndicesExistsParts, IndicesGetMappingParts,
-};
-use elasticsearch::{BulkParts, CountParts, GetParts, MgetParts, SearchParts};
 use futures::Future;
 use futures::stream::{self, BoxStream, StreamExt as _};
+use opensearch::OpenSearch;
+use opensearch::http::request::JsonBody;
+use opensearch::http::transport::Transport;
+use opensearch::indices::{
+    IndicesCreateParts, IndicesDeleteParts, IndicesExistsParts, IndicesGetMappingParts,
+};
+use opensearch::{BulkParts, CountParts, GetParts, MgetParts, SearchParts};
 use serde_json::{Value, json};
 use tracing::instrument;
 
-use crate::config::ElasticsearchConfig;
+use crate::config::OpenSearchConfig;
 use crate::extraction::RecordErrorFn;
 use crate::ingest::sink::{BatchSink, ExistenceChecker};
 use crate::models::Document;
@@ -29,14 +29,20 @@ use crate::search::types::{
     BatchIndexResult, FacetMap, FilterMap, SearchError, SearchRequest, SearchResult, SortSpec,
 };
 
+use meta::build_doc_body;
+use parse::{parse_hit, parse_hits};
+use query::{
+    build_facet_aggs, build_filter_clauses, build_highlight, build_knn_query, build_sort_clause,
+    build_text_query, parse_facets,
+};
+use settings::{META_FIELD_TYPES, build_index_body};
+
 // ---------------------------------------------------------------------------
 // Per-query size limits
 // ---------------------------------------------------------------------------
 
 const ATTACHMENTS_SEARCH_LIMIT: usize = 200;
 const THREAD_SEARCH_LIMIT: usize = 100;
-
-use meta::build_doc_body;
 
 // ---------------------------------------------------------------------------
 // Stream helpers
@@ -55,36 +61,34 @@ where
         })
         .boxed()
 }
-use parse::{parse_hit, parse_hits};
-use query::{
-    build_facet_aggs, build_filter_clauses, build_highlight, build_knn_body, build_sort_clause,
-    build_text_query, parse_facets,
-};
-use settings::{META_FIELD_TYPES, build_index_body};
 
 // ---------------------------------------------------------------------------
 // Backend struct
 // ---------------------------------------------------------------------------
 
-/// Elasticsearch implementation of [`SearchBackend`], [`BatchSink`], and
+#[allow(clippy::doc_markdown)]
+/// OpenSearch implementation of [`SearchBackend`], [`BatchSink`], and
 /// [`ExistenceChecker`].
-pub struct ElasticsearchBackend {
-    client: Elasticsearch,
-    rrf: bool,
+pub struct OpenSearchBackend {
+    client: OpenSearch,
     max_highlight_offset: u64,
 }
 
-impl ElasticsearchBackend {
+#[allow(clippy::doc_markdown)]
+/// Name of the search pipeline registered on every aum OpenSearch index to
+/// perform RRF fusion between the BM25 and k-NN sub-queries of a hybrid query.
+const RRF_PIPELINE: &str = "aum-rrf-pipeline";
+
+impl OpenSearchBackend {
     /// Create a new backend from config.
     ///
     /// # Errors
     /// Returns an error if the transport cannot be built (invalid URL).
-    pub fn new(config: &ElasticsearchConfig) -> Result<Self, SearchError> {
-        let transport = Transport::single_node(&config.url).map_err(SearchError::Elasticsearch)?;
-        let client = Elasticsearch::new(transport);
+    pub fn new(config: &OpenSearchConfig) -> Result<Self, SearchError> {
+        let transport = Transport::single_node(&config.url).map_err(SearchError::OpenSearch)?;
+        let client = OpenSearch::new(transport);
         Ok(Self {
             client,
-            rrf: config.rrf,
             max_highlight_offset: config.max_highlight_offset,
         })
     }
@@ -95,7 +99,7 @@ impl ElasticsearchBackend {
 // ---------------------------------------------------------------------------
 
 #[async_trait::async_trait]
-impl SearchBackend for ElasticsearchBackend {
+impl SearchBackend for OpenSearchBackend {
     #[instrument(skip(self), fields(index))]
     async fn initialize(
         &self,
@@ -137,9 +141,9 @@ impl SearchBackend for ElasticsearchBackend {
             .body(body)
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
-        let resp_body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let resp_body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
 
         let (indexed, failed) = parse_bulk_response(&resp_body, doc_count);
         Ok(BatchIndexResult {
@@ -154,7 +158,7 @@ impl SearchBackend for ElasticsearchBackend {
         request: SearchRequest<'a>,
     ) -> BoxStream<'a, Result<SearchResult, SearchError>> {
         results_stream(async move {
-            let results = execute_text_search(
+            execute_text_search(
                 &self.client,
                 request.indices,
                 request.query,
@@ -165,8 +169,7 @@ impl SearchBackend for ElasticsearchBackend {
                 request.include_facets,
                 self.max_highlight_offset,
             )
-            .await;
-            results
+            .await
         })
     }
 
@@ -174,10 +177,12 @@ impl SearchBackend for ElasticsearchBackend {
         &'a self,
         request: SearchRequest<'a>,
         vector: &'a [f32],
+        // Ignored: RRF fusion is performed by the search pipeline (rank_constant
+        // fixed at 60), not by a tunable weighted blend.
         _semantic_ratio: f32,
     ) -> BoxStream<'a, Result<SearchResult, SearchError>> {
         results_stream(async move {
-            let results = execute_hybrid_search(
+            execute_hybrid_search(
                 &self.client,
                 request.indices,
                 request.query,
@@ -187,11 +192,9 @@ impl SearchBackend for ElasticsearchBackend {
                 request.filters,
                 request.sort.as_ref(),
                 request.include_facets,
-                self.rrf,
                 self.max_highlight_offset,
             )
-            .await;
-            results
+            .await
         })
     }
 
@@ -220,9 +223,9 @@ impl SearchBackend for ElasticsearchBackend {
             .body(body)
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
-        let resp_body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let resp_body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
 
         let total = resp_body
             .get("hits")
@@ -246,13 +249,13 @@ impl SearchBackend for ElasticsearchBackend {
             .get(GetParts::IndexId(index, doc_id))
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
         if resp.status_code() == 404 {
             return Ok(None);
         }
 
-        let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
 
         // Reframe the get response as a search hit for parse_hit.
         let hit = json!({
@@ -281,8 +284,8 @@ impl SearchBackend for ElasticsearchBackend {
             .body(body)
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
-        let json: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
+        let json: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
         let (results, _) = parse_hits(&json);
         Ok(results.into_iter().next())
     }
@@ -295,16 +298,16 @@ impl SearchBackend for ElasticsearchBackend {
             .delete(IndicesDeleteParts::Index(&[index]))
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
         if resp.status_code() == 404 {
-            tracing::info!(index, "elasticsearch index not found, nothing to delete");
+            tracing::info!(index, "opensearch index not found, nothing to delete");
             return Ok(());
         }
 
         resp.error_for_status_code()
-            .map_err(SearchError::Elasticsearch)?;
-        tracing::info!(index, "deleted elasticsearch index");
+            .map_err(SearchError::OpenSearch)?;
+        tracing::info!(index, "deleted opensearch index");
         Ok(())
     }
 
@@ -315,9 +318,9 @@ impl SearchBackend for ElasticsearchBackend {
             .count(CountParts::Index(&[index]))
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
-        let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
 
         Ok(body.get("count").and_then(Value::as_u64).unwrap_or(0))
     }
@@ -374,12 +377,12 @@ impl SearchBackend for ElasticsearchBackend {
         let resp = self
             .client
             .indices()
-            .get(elasticsearch::indices::IndicesGetParts::Index(&["*"]))
+            .get(opensearch::indices::IndicesGetParts::Index(&["*"]))
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
-        let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
 
         let mut names: Vec<String> = body
             .as_object()
@@ -402,9 +405,9 @@ impl SearchBackend for ElasticsearchBackend {
             .body(json!({ "query": { "term": { "has_embeddings": false } } }))
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
-        let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
 
         Ok(body.get("count").and_then(Value::as_u64).unwrap_or(0))
     }
@@ -435,7 +438,7 @@ impl SearchBackend for ElasticsearchBackend {
                     Ok(hits) => {
                         let exhausted = hits.is_empty();
                         let new_cursor = hits.last().map(|h| h.doc_id.clone());
-                        Some((Ok(hits), (new_cursor.or(cursor), exhausted)))
+                        Some((Ok(hits), (new_cursor, exhausted)))
                     }
                 }
             }
@@ -472,9 +475,9 @@ impl SearchBackend for ElasticsearchBackend {
             .body(body)
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
-        let resp_body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let resp_body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
 
         let failures = count_bulk_failures(&resp_body);
 
@@ -492,7 +495,7 @@ impl SearchBackend for ElasticsearchBackend {
         }
         let client = self.client.clone();
         let index = index.to_owned();
-        let doc_ids: Arc<[String]> = doc_ids.to_vec().into();
+        let doc_ids: Arc<[String]> = Arc::from(doc_ids);
 
         let stream = stream::unfold((0usize, false), move |(offset, done)| {
             let client = client.clone();
@@ -537,9 +540,9 @@ impl SearchBackend for ElasticsearchBackend {
             .source("false")
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
-        let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
 
         let found: HashSet<String> = body
             .get("docs")
@@ -566,11 +569,11 @@ impl SearchBackend for ElasticsearchBackend {
         });
         let resp = self
             .client
-            .update_by_query(elasticsearch::UpdateByQueryParts::Index(&[index]))
+            .update_by_query(opensearch::UpdateByQueryParts::Index(&[index]))
             .body(body)
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
 
         let status = resp.status_code();
         if !status.is_success() {
@@ -580,7 +583,7 @@ impl SearchBackend for ElasticsearchBackend {
             )));
         }
 
-        let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+        let body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
         let updated = body.get("updated").and_then(Value::as_u64).unwrap_or(0);
         tracing::info!(index, updated, "cleared embeddings from all documents");
         Ok(())
@@ -592,7 +595,7 @@ impl SearchBackend for ElasticsearchBackend {
 // ---------------------------------------------------------------------------
 
 #[async_trait::async_trait]
-impl BatchSink for ElasticsearchBackend {
+impl BatchSink for OpenSearchBackend {
     #[instrument(skip(self, batch, record_error), fields(index, batch_len = batch.len()))]
     async fn flush_batch(
         &self,
@@ -604,7 +607,7 @@ impl BatchSink for ElasticsearchBackend {
         match self.index_batch(index, batch).await {
             Ok(result) => (result.indexed, result.failed),
             Err(e) => {
-                tracing::error!(job_id, error = %e, "elasticsearch batch indexing failed");
+                tracing::error!(job_id, error = %e, "opensearch batch indexing failed");
                 for (id, _doc) in batch {
                     record_error(std::path::Path::new(id), "IndexError", &e.to_string());
                 }
@@ -619,7 +622,7 @@ impl BatchSink for ElasticsearchBackend {
 // ---------------------------------------------------------------------------
 
 #[async_trait::async_trait]
-impl ExistenceChecker for ElasticsearchBackend {
+impl ExistenceChecker for OpenSearchBackend {
     #[instrument(skip(self, doc_ids), fields(index, id_count = doc_ids.len()))]
     async fn get_existing(&self, index: &str, doc_ids: &[String]) -> HashSet<String> {
         self.get_existing_doc_ids(index, doc_ids)
@@ -639,39 +642,41 @@ impl ExistenceChecker for ElasticsearchBackend {
 // ---------------------------------------------------------------------------
 
 async fn initialize_index(
-    client: &Elasticsearch,
+    client: &OpenSearch,
     name: &str,
     vector_dimension: Option<u32>,
     max_highlight_offset: u64,
 ) -> Result<(), SearchError> {
+    ensure_rrf_pipeline(client).await?;
+
     // Check whether the index already exists.
     let exists_resp = client
         .indices()
         .exists(IndicesExistsParts::Index(&[name]))
         .send()
         .await
-        .map_err(SearchError::Elasticsearch)?;
+        .map_err(SearchError::OpenSearch)?;
 
     if exists_resp.status_code().is_success() {
         if mapping_matches(client, name).await {
             tracing::info!(
                 index = name,
-                "elasticsearch index already exists with correct mapping"
+                "opensearch index already exists with correct mapping"
             );
             return Ok(());
         }
         tracing::warn!(
             index = name,
-            "elasticsearch index has stale mapping, recreating"
+            "opensearch index has stale mapping, recreating"
         );
         let del = client
             .indices()
             .delete(IndicesDeleteParts::Index(&[name]))
             .send()
             .await
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
         del.error_for_status_code()
-            .map_err(SearchError::Elasticsearch)?;
+            .map_err(SearchError::OpenSearch)?;
     }
 
     let body = build_index_body(vector_dimension, max_highlight_offset);
@@ -681,21 +686,63 @@ async fn initialize_index(
         .body(body)
         .send()
         .await
-        .map_err(SearchError::Elasticsearch)?;
+        .map_err(SearchError::OpenSearch)?;
 
     resp.error_for_status_code()
-        .map_err(SearchError::Elasticsearch)?;
+        .map_err(SearchError::OpenSearch)?;
 
     tracing::info!(
         index = name,
         vector = vector_dimension.is_some(),
-        "created elasticsearch index"
+        "created opensearch index"
     );
     Ok(())
 }
 
+#[allow(clippy::doc_markdown)]
+/// Register (or overwrite) the cluster-wide search pipeline that applies
+/// Reciprocal Rank Fusion to hybrid query results. Idempotent — `PUT` replaces
+/// any existing pipeline with the same name.
+///
+/// This uses OpenSearch 2.19's native RRF normalization technique so that
+/// hybrid search works out of the box without client-side fusion or paid
+/// features.
+async fn ensure_rrf_pipeline(client: &OpenSearch) -> Result<(), SearchError> {
+    let body = json!({
+        "description": "RRF fusion for aum hybrid search (BM25 + k-NN)",
+        "phase_results_processors": [
+            {
+                "score-ranker-processor": {
+                    "combination": {
+                        "technique": "rrf"
+                    }
+                }
+            }
+        ]
+    });
+
+    let path = format!("/_search/pipeline/{RRF_PIPELINE}");
+    let resp = client
+        .send::<JsonBody<Value>, ()>(
+            opensearch::http::Method::Put,
+            &path,
+            opensearch::http::headers::HeaderMap::new(),
+            None,
+            Some(JsonBody::new(body)),
+            None,
+        )
+        .await
+        .map_err(SearchError::OpenSearch)?;
+
+    resp.error_for_status_code()
+        .map_err(SearchError::OpenSearch)?;
+
+    tracing::info!(pipeline = RRF_PIPELINE, "registered RRF search pipeline");
+    Ok(())
+}
+
 /// Returns `true` if the existing index has the expected `meta.*` field types.
-async fn mapping_matches(client: &Elasticsearch, name: &str) -> bool {
+async fn mapping_matches(client: &OpenSearch, name: &str) -> bool {
     let resp = client
         .indices()
         .get_mapping(IndicesGetMappingParts::Index(&[name]))
@@ -745,7 +792,7 @@ async fn mapping_matches(client: &Elasticsearch, name: &str) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 async fn execute_text_search(
-    client: &Elasticsearch,
+    client: &OpenSearch,
     indices: &[String],
     query: &str,
     limit: usize,
@@ -779,7 +826,7 @@ async fn execute_text_search(
 
 #[allow(clippy::too_many_arguments)]
 async fn execute_hybrid_search(
-    client: &Elasticsearch,
+    client: &OpenSearch,
     indices: &[String],
     query: &str,
     vector: &[f32],
@@ -788,38 +835,23 @@ async fn execute_hybrid_search(
     filters: &FilterMap,
     sort: Option<&SortSpec>,
     include_facets: bool,
-    rrf: bool,
     max_highlight_offset: u64,
 ) -> Result<Vec<SearchResult>, SearchError> {
     let filter_clauses = build_filter_clauses(filters);
     let text_query = build_text_query(query, &filter_clauses);
-    let knn = build_knn_body(vector, limit, &filter_clauses);
+    let knn_query = build_knn_query(vector, limit, &filter_clauses);
     let highlight = build_highlight(max_highlight_offset);
 
-    let mut body = if rrf {
-        json!({
-            "retriever": {
-                "rrf": {
-                    "retrievers": [
-                        { "standard": { "query": text_query } },
-                        { "knn": knn }
-                    ],
-                    "rank_window_size": limit * 5
-                }
-            },
-            "size":      limit,
-            "from":      offset,
-            "highlight": highlight,
-        })
-    } else {
-        json!({
-            "query":     text_query,
-            "knn":       knn,
-            "size":      limit,
-            "from":      offset,
-            "highlight": highlight,
-        })
-    };
+    let mut body = json!({
+        "query": {
+            "hybrid": {
+                "queries": [text_query, knn_query]
+            }
+        },
+        "size":      limit,
+        "from":      offset,
+        "highlight": highlight,
+    });
 
     if let Some(clause) = sort.and_then(build_sort_clause) {
         body["sort"] = clause;
@@ -829,13 +861,29 @@ async fn execute_hybrid_search(
     }
 
     let index_names: Vec<&str> = indices.iter().map(String::as_str).collect();
-    let (hits, _total) = send_search(client, &index_names, body).await?;
+    let path = format!("/{}/_search", index_names.join(","));
+    let query = [("search_pipeline", RRF_PIPELINE)];
+    let resp = client
+        .send::<JsonBody<Value>, _>(
+            opensearch::http::Method::Post,
+            &path,
+            opensearch::http::headers::HeaderMap::new(),
+            Some(&query),
+            Some(JsonBody::new(body)),
+            None,
+        )
+        .await
+        .map_err(SearchError::OpenSearch)?;
+
+    let body = read_search_body(resp).await?;
+    let (hits, _total) = parse_hits(&body);
     Ok(hits)
 }
 
-/// Send a raw JSON body to ES search and parse the response.
+#[allow(clippy::doc_markdown)]
+/// Send a raw JSON body to OpenSearch search and parse the response.
 async fn send_search(
-    client: &Elasticsearch,
+    client: &OpenSearch,
     indices: &[&str],
     body: Value,
 ) -> Result<(Vec<SearchResult>, u64), SearchError> {
@@ -844,16 +892,37 @@ async fn send_search(
         .body(body)
         .send()
         .await
-        .map_err(SearchError::Elasticsearch)?;
+        .map_err(SearchError::OpenSearch)?;
 
-    let body: Value = resp.json().await.map_err(SearchError::Elasticsearch)?;
+    let body = read_search_body(resp).await?;
 
     Ok(parse_hits(&body))
 }
 
+/// Read an `OpenSearch` search response body, surfacing non-2xx statuses as
+/// errors instead of silently returning an error document that would parse
+/// into zero hits.
+async fn read_search_body(
+    resp: opensearch::http::response::Response,
+) -> Result<Value, SearchError> {
+    let status = resp.status_code();
+    let body: Value = resp.json().await.map_err(SearchError::OpenSearch)?;
+    if !status.is_success() {
+        let detail = body
+            .get("error")
+            .and_then(|e| e.get("reason"))
+            .and_then(Value::as_str)
+            .map_or_else(|| body.to_string(), str::to_owned);
+        return Err(SearchError::Internal(format!(
+            "opensearch search failed: HTTP {status}: {detail}"
+        )));
+    }
+    Ok(body)
+}
+
 /// Send a raw search body and return `Vec<SearchResult>` (ignoring total).
 async fn search_raw(
-    client: &Elasticsearch,
+    client: &OpenSearch,
     indices: &[&str],
     body: Value,
 ) -> Result<Vec<SearchResult>, SearchError> {
@@ -865,24 +934,10 @@ async fn search_raw(
 // Unembedded pagination
 // ---------------------------------------------------------------------------
 
-async fn fetch_unembedded_page(
-    client: &Elasticsearch,
-    index: &str,
-    limit: usize,
-    offset: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    let body = json!({
-        "query": { "term": { "has_embeddings": false } },
-        "size":  limit,
-        "from":  offset,
-    });
-    search_raw(client, &[index], body).await
-}
-
 /// Fetch a page of unembedded documents using cursor-based `search_after`
 /// pagination, sorted by `_id`.
 async fn fetch_unembedded_cursor(
-    client: &Elasticsearch,
+    client: &OpenSearch,
     index: &str,
     limit: usize,
     search_after: Option<&str>,
@@ -902,7 +957,8 @@ async fn fetch_unembedded_cursor(
 // Bulk response parsing
 // ---------------------------------------------------------------------------
 
-/// Count indexed / failed documents from an Elasticsearch bulk response.
+#[allow(clippy::doc_markdown)]
+/// Count indexed / failed documents from an OpenSearch bulk response.
 ///
 /// Returns `(indexed, failed)`.
 fn parse_bulk_response(resp: &Value, total: u64) -> (u64, u64) {
@@ -914,7 +970,8 @@ fn parse_bulk_response(resp: &Value, total: u64) -> (u64, u64) {
     (total.saturating_sub(failed), failed)
 }
 
-/// Count failed items in an Elasticsearch bulk response.
+#[allow(clippy::doc_markdown)]
+/// Count failed items in an OpenSearch bulk response.
 fn count_bulk_failures(resp: &Value) -> u64 {
     resp.get("items")
         .and_then(|v| v.as_array())

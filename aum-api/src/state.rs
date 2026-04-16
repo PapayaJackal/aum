@@ -14,7 +14,8 @@ pub struct AppState {
     pub config: Arc<AumConfig>,
     /// Authentication and authorization service.
     pub auth: AuthService,
-    /// Search backend (Meilisearch or Elasticsearch).
+    #[allow(clippy::doc_markdown)]
+    /// Search backend (Meilisearch or OpenSearch).
     pub backend: Arc<AumBackend>,
     /// Embedding model metadata repository.
     pub embeddings_repo: Arc<SqlxIndexEmbeddingRepository>,

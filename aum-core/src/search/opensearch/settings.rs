@@ -1,4 +1,4 @@
-//! Elasticsearch index mapping builders.
+//! `OpenSearch` index mapping builders.
 
 use serde_json::{Value, json};
 
@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 // Meta field type registry
 // ---------------------------------------------------------------------------
 
-/// Expected ES type for every field in the `meta` object.
+#[allow(clippy::doc_markdown)]
+/// Expected OpenSearch type for every field in the `meta` object.
 ///
 /// This is the single source of truth: [`build_index_body`] generates the
 /// mapping from it, and [`super::mapping_matches`] validates live indexes against it.
@@ -29,7 +30,8 @@ pub(super) static META_FIELD_TYPES: &[(&str, &str)] = &[
 // Mapping builder
 // ---------------------------------------------------------------------------
 
-/// Build the full Elasticsearch index creation body (settings + mappings).
+#[allow(clippy::doc_markdown)]
+/// Build the full OpenSearch index creation body (settings + mappings).
 ///
 /// Includes optional `chunks` nested field for dense vector storage when
 /// `vector_dimension` is provided, and a `has_embeddings` boolean field that
@@ -60,6 +62,9 @@ pub(super) fn build_index_body(vector_dimension: Option<u32>, max_highlight_offs
         },
         "extracted_from": { "type": "keyword" },
         "content":        { "type": "text", "analyzer": "standard" },
+        // Raw Tika metadata blob — stored in _source for display in the web UI
+        // but not indexed (so its inner keys don't count against the field-count
+        // limit regardless of how many properties Tika emits).
         "metadata":       { "type": "object", "enabled": false },
         "has_embeddings": { "type": "boolean" },
         "meta": {
@@ -69,24 +74,30 @@ pub(super) fn build_index_body(vector_dimension: Option<u32>, max_highlight_offs
         },
     });
 
+    let mut settings = json!({
+        "highlight.max_analyzed_offset": max_highlight_offset,
+    });
+
     if let Some(dim) = vector_dimension {
         properties["chunks"] = json!({
             "type": "nested",
             "properties": {
                 "embedding": {
-                    "type": "dense_vector",
-                    "dims": dim,
-                    "index": true,
-                    "similarity": "cosine"
+                    "type": "knn_vector",
+                    "dimension": dim,
+                    "method": {
+                        "engine": "lucene",
+                        "name": "hnsw",
+                        "space_type": "cosinesimil"
+                    }
                 }
             }
         });
+        settings["index.knn"] = json!(true);
     }
 
     json!({
-        "settings": {
-            "highlight.max_analyzed_offset": max_highlight_offset
-        },
+        "settings": settings,
         "mappings": {
             "properties": properties
         }

@@ -1,8 +1,8 @@
-//! Elasticsearch-specific document body construction.
+//! `OpenSearch`-specific document body construction.
 //!
 //! Metadata extraction is handled by [`crate::search::meta`]; this module
 //! converts the resulting [`IndexedMeta`] into the nested `meta` object layout
-//! that Elasticsearch expects.
+//! that `OpenSearch` expects.
 
 use serde_json::{Map, Value, json};
 
@@ -13,12 +13,13 @@ use crate::search::meta::{
 };
 
 // ---------------------------------------------------------------------------
-// ES-specific meta builder
+// OpenSearch-specific meta builder
 // ---------------------------------------------------------------------------
 
-/// Build the nested `meta` object for Elasticsearch from curated metadata.
+#[allow(clippy::doc_markdown)]
+/// Build the nested `meta` object for OpenSearch from curated metadata.
 ///
-/// Elasticsearch supports nested objects natively, so we use `meta.created`,
+/// OpenSearch supports nested objects natively, so we use `meta.created`,
 /// `meta.content_type`, etc. (unlike Meilisearch which uses flat `meta_*` keys).
 /// `file_size` is stored as a long integer when parseable.
 pub(super) fn build_nested_meta(meta: &IndexedMeta) -> Map<String, Value> {
@@ -70,10 +71,27 @@ pub(super) fn build_nested_meta(meta: &IndexedMeta) -> Map<String, Value> {
             ),
         );
     }
+    for (key, list) in [
+        ("email_from", &meta.email_from),
+        ("email_to", &meta.email_to),
+        ("email_cc", &meta.email_cc),
+        ("email_bcc", &meta.email_bcc),
+    ] {
+        if !list.is_empty() {
+            m.insert(
+                key.into(),
+                Value::Array(list.iter().cloned().map(Value::String).collect()),
+            );
+        }
+    }
+    if let Some(v) = &meta.email_subject {
+        m.insert("email_subject".into(), Value::String(v.clone()));
+    }
     m
 }
 
-/// Build the full JSON document body for Elasticsearch indexing.
+#[allow(clippy::doc_markdown)]
+/// Build the full JSON document body for OpenSearch indexing.
 ///
 /// Returns `(doc_id, body)` where `body` is ready to be passed as the document
 /// source in a bulk index operation.
@@ -98,11 +116,10 @@ pub(super) fn build_doc_body(doc_id: &str, document: &Document) -> (String, Valu
         Value::String(document_type_label(&extracted_from).into()),
     );
 
-    // Serialize the full raw metadata blob (stored but not indexed).
-    // MetadataValue derives Serialize with #[serde(untagged)] so this
-    // produces the same JSON as the manual conversion.
-    let raw_metadata =
-        serde_json::to_value(&document.metadata).unwrap_or(Value::Object(Map::new()));
+    // Raw Tika metadata for display in the web UI, minus internal `_aum_*`
+    // keys (display_path / extracted_from are already top-level fields) and
+    // anything that would collide with the canonical `meta.*` keys.
+    let raw_metadata = serialize_raw_metadata(document);
 
     let body = json!({
         "source_path":    document.source_path.to_string_lossy(),
@@ -115,6 +132,20 @@ pub(super) fn build_doc_body(doc_id: &str, document: &Document) -> (String, Valu
     });
 
     (doc_id.to_owned(), body)
+}
+
+/// Serialize `document.metadata` to JSON, skipping internal `_aum_*` keys so
+/// they never reach the search index or downstream API responses.
+fn serialize_raw_metadata(document: &Document) -> Value {
+    let mut out = Map::new();
+    for (k, v) in &document.metadata {
+        if k.starts_with("_aum_") {
+            continue;
+        }
+        let serialized = serde_json::to_value(v).unwrap_or(Value::Null);
+        out.insert(k.clone(), serialized);
+    }
+    Value::Object(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +217,61 @@ mod tests {
         assert!(obj.contains_key("meta"));
         assert!(obj.contains_key("metadata"));
         Ok(())
+    }
+
+    #[test]
+    fn build_doc_body_excludes_internal_aum_keys() -> anyhow::Result<()> {
+        let doc = Document {
+            source_path: PathBuf::from("/tmp/test.pdf"),
+            content: String::new(),
+            metadata: meta(&[
+                ("_aum_display_path", "some/display/path.pdf"),
+                ("_aum_extracted_from", "parent.eml"),
+                ("pdf:num_pages", "12"),
+            ]),
+        };
+        let (_, body) = build_doc_body("doc1", &doc);
+        let obj = body.as_object().context("body should be object")?;
+        let metadata_obj = obj
+            .get("metadata")
+            .and_then(Value::as_object)
+            .context("metadata should be object")?;
+        assert!(!metadata_obj.contains_key("_aum_display_path"));
+        assert!(!metadata_obj.contains_key("_aum_extracted_from"));
+        // Non-internal Tika fields are preserved so the UI can display them.
+        assert!(metadata_obj.contains_key("pdf:num_pages"));
+        Ok(())
+    }
+
+    #[test]
+    fn build_nested_meta_includes_email_display_fields() {
+        let m = IndexedMeta {
+            email_from: vec!["Alice <alice@example.com>".into()],
+            email_to: vec!["bob@example.com".into()],
+            email_subject: Some("Hello".into()),
+            ..Default::default()
+        };
+        let nested = build_nested_meta(&m);
+        assert_eq!(
+            nested
+                .get("email_from")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str()),
+            Some("Alice <alice@example.com>")
+        );
+        assert_eq!(
+            nested
+                .get("email_to")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str()),
+            Some("bob@example.com")
+        );
+        assert_eq!(
+            nested.get("email_subject").and_then(|v| v.as_str()),
+            Some("Hello")
+        );
     }
 
     #[test]

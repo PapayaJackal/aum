@@ -72,6 +72,7 @@ const EXCLUDED_META_PREFIXES: &[&str] = &[
     "meta:",
     "cp:",
     "extended-properties:",
+    "_aum_",
 ];
 
 /// Build the search router.
@@ -204,9 +205,12 @@ pub async fn search(
     }
 
     let indices = resolve_indices(&params.index, &state.config.server.default_index);
-    for idx in &indices {
-        check_index_access(&state, user.as_ref(), idx).await?;
-    }
+    futures::future::try_join_all(
+        indices
+            .iter()
+            .map(|idx| check_index_access(&state, user.as_ref(), idx)),
+    )
+    .await?;
 
     let filters: FilterMap = match &params.filters {
         Some(f) if !f.is_empty() => serde_json::from_str(f)
@@ -230,27 +234,28 @@ pub async fn search(
     // Hoist vector outside the match so it lives long enough for the stream.
     let vector;
     let ratio;
-    let mut stream = match params.search_type {
+    let stream = match params.search_type {
         SearchType::Text => state.backend.search_text(request),
         SearchType::Hybrid => {
             vector = embed_query(&state, &indices, &params.q).await?;
-            ratio = params
-                .semantic_ratio
-                .unwrap_or(state.config.meilisearch.semantic_ratio);
+            ratio = params.semantic_ratio.unwrap_or(0.5);
             state.backend.search_hybrid(request, &vector, ratio)
         }
     };
 
-    let mut results = Vec::new();
-    while let Some(item) = stream.next().await {
-        results.push(item?);
-    }
-    drop(stream);
+    let collect_fut = async move {
+        let mut results = Vec::new();
+        let mut stream = stream;
+        while let Some(item) = stream.next().await {
+            results.push(item?);
+        }
+        Ok::<Vec<SearchResult>, ApiError>(results)
+    };
+    let count_fut = state.backend.count(&indices, Some(&params.q), &filters);
 
-    let (total, facets) = state
-        .backend
-        .count(&indices, Some(&params.q), &filters)
-        .await?;
+    let (results, count_result) = tokio::join!(collect_fut, count_fut);
+    let results = results?;
+    let (total, facets) = count_result?;
     let facets = if include_facets {
         Some(simplify_facets(&facets))
     } else {

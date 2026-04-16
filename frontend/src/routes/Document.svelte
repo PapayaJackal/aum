@@ -51,6 +51,7 @@
     email_cc: "CC",
     email_bcc: "BCC",
     message_id: "Message ID",
+    document_type: "Document Type",
   };
 
   // Keys whose display name should appear in the priority section (default).

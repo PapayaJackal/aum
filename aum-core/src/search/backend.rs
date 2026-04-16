@@ -13,9 +13,10 @@ use crate::search::types::{
 // SearchBackend trait
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::doc_markdown)]
 /// Defines the interface that every search backend must implement.
 ///
-/// Implementations wrap a specific search engine (Meilisearch, Elasticsearch,
+/// Implementations wrap a specific search engine (Meilisearch, OpenSearch,
 /// etc.) and translate the generic operations below into engine-specific calls.
 #[async_trait::async_trait]
 pub trait SearchBackend: Send + Sync {

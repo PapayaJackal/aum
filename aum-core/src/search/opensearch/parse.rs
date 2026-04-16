@@ -1,20 +1,18 @@
-//! Parsing Elasticsearch search hits into domain types.
+//! Parsing `OpenSearch` search hits into domain types.
 
 use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::search::constants::{DATE_FACETS, FACET_FILE_TYPE, MIMETYPE_ALIASES};
 use crate::search::types::SearchResult;
 use crate::search::utils::string_field;
-
-use super::query::ES_FACET_META_KEYS;
 
 // ---------------------------------------------------------------------------
 // Hit parsing
 // ---------------------------------------------------------------------------
 
-/// Convert a raw Elasticsearch search hit into a [`SearchResult`].
+#[allow(clippy::doc_markdown)]
+/// Convert a raw OpenSearch search hit into a [`SearchResult`].
 ///
 /// Returns `None` if the hit is missing required fields (`_id`, `_source`).
 pub(super) fn parse_hit(hit: &Value, index_name: &str) -> Option<SearchResult> {
@@ -55,16 +53,23 @@ pub(super) fn parse_hit(hit: &Value, index_name: &str) -> Option<SearchResult> {
         .unwrap_or("")
         .to_owned();
 
-    // Build metadata map from the raw `metadata` blob.
+    // Start from the raw Tika metadata blob so the web UI can display every
+    // field Tika extracted, then layer the curated `meta.*` object on top so
+    // canonical keys (`content_type`, `created`, `email_subject`, ...) that
+    // the API and UI look up are always present with normalised names. The
+    // overlay also wins on conflicts, which matters for e.g. `content_type`
+    // where Tika emits `Content-Type` with an MIME param suffix. Internal
+    // `_aum_*` keys are filtered out at index time in `build_doc_body`.
     let mut metadata: HashMap<String, Value> = source
         .get("metadata")
         .and_then(|v| v.as_object())
         .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
-
-    // Inject facet-friendly keys from the typed `meta` object so the UI can
-    // use them for facet display and filtering.
-    inject_facet_meta(&mut metadata, source);
+    if let Some(meta_obj) = source.get("meta").and_then(|v| v.as_object()) {
+        for (k, v) in meta_obj {
+            metadata.insert(k.clone(), v.clone());
+        }
+    }
 
     Some(SearchResult {
         doc_id,
@@ -79,7 +84,8 @@ pub(super) fn parse_hit(hit: &Value, index_name: &str) -> Option<SearchResult> {
     })
 }
 
-/// Parse hits from a full Elasticsearch search response.
+#[allow(clippy::doc_markdown)]
+/// Parse hits from a full OpenSearch search response.
 ///
 /// Returns `(results, total_hits)`.
 pub(super) fn parse_hits(resp: &Value) -> (Vec<SearchResult>, u64) {
@@ -88,7 +94,7 @@ pub(super) fn parse_hits(resp: &Value) -> (Vec<SearchResult>, u64) {
     let total = hits_obj
         .and_then(|h| h.get("total"))
         .and_then(|t| {
-            // ES returns `{ "value": N, "relation": "eq" }` for total.
+            // OpenSearch returns `{ "value": N, "relation": "eq" }` for total.
             if let Some(obj) = t.as_object() {
                 obj.get("value").and_then(Value::as_u64)
             } else {
@@ -118,50 +124,6 @@ pub(super) fn parse_hits(resp: &Value) -> (Vec<SearchResult>, u64) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Inject facet display values from the `meta` nested object into `metadata`.
-///
-/// The UI expects facet values under their display label (e.g. `"File Type"`,
-/// `"Created"`). We extract the raw values from `meta.*` and normalise them:
-/// - MIME types are aliased to short labels (e.g. `"application/pdf"` → `"PDF"`)
-/// - Date values are truncated to the four-digit year
-fn inject_facet_meta(
-    metadata: &mut HashMap<String, Value>,
-    source: &serde_json::Map<String, Value>,
-) {
-    let Some(meta) = source.get("meta").and_then(|v| v.as_object()) else {
-        return;
-    };
-
-    for (label, meta_key) in ES_FACET_META_KEYS {
-        let Some(val) = meta.get(*meta_key) else {
-            continue;
-        };
-
-        let normalised: Value = if *label == FACET_FILE_TYPE {
-            match val.as_str() {
-                Some(mime) => {
-                    let alias = MIMETYPE_ALIASES.get(mime).copied().unwrap_or(mime);
-                    Value::String(alias.to_owned())
-                }
-                None => continue,
-            }
-        } else if DATE_FACETS.contains(label) {
-            match val.as_str() {
-                Some(date) if date.len() >= 4 => Value::String(date[..4].to_owned()),
-                _ => continue,
-            }
-        } else {
-            val.clone()
-        };
-
-        metadata.insert((*label).to_owned(), normalised);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -169,8 +131,6 @@ fn inject_facet_meta(
 mod tests {
     use anyhow::Context as _;
     use serde_json::json;
-
-    use crate::search::constants::{FACET_CREATED, FACET_FILE_TYPE};
 
     use super::*;
 
@@ -185,7 +145,6 @@ mod tests {
                 "extracted_from": "",
                 "content": "hello world",
                 "has_embeddings": false,
-                "metadata": {},
                 "meta": {}
             }
         });
@@ -207,7 +166,6 @@ mod tests {
                 "display_path": "a.txt",
                 "extracted_from": "",
                 "content": "full content here",
-                "metadata": {},
                 "meta": {}
             },
             "highlight": {
@@ -222,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_hit_injects_file_type_alias() -> anyhow::Result<()> {
+    fn parse_hit_exposes_meta_under_canonical_keys() -> anyhow::Result<()> {
         let hit = json!({
             "_id": "doc3",
             "_index": "aum",
@@ -232,20 +190,74 @@ mod tests {
                 "extracted_from": "",
                 "content": "",
                 "metadata": {},
-                "meta": { "content_type": "application/pdf", "created": "2023-01-01T00:00:00Z" }
+                "meta": {
+                    "content_type": "application/pdf",
+                    "created": "2023-01-01T00:00:00Z",
+                    "email_subject": "Hello",
+                    "email_from": ["Alice <alice@example.com>"],
+                }
             }
         });
         let result = parse_hit(&hit, "aum").context("should parse hit")?;
         assert_eq!(
-            result
-                .metadata
-                .get(FACET_FILE_TYPE)
-                .and_then(|v| v.as_str()),
-            Some("PDF")
+            result.metadata.get("content_type").and_then(|v| v.as_str()),
+            Some("application/pdf")
         );
         assert_eq!(
-            result.metadata.get(FACET_CREATED).and_then(|v| v.as_str()),
-            Some("2023")
+            result.metadata.get("created").and_then(|v| v.as_str()),
+            Some("2023-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            result
+                .metadata
+                .get("email_subject")
+                .and_then(|v| v.as_str()),
+            Some("Hello")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_hit_merges_raw_tika_with_canonical_meta() -> anyhow::Result<()> {
+        let hit = json!({
+            "_id": "doc3a",
+            "_index": "aum",
+            "_score": 1.0,
+            "_source": {
+                "display_path": "x.pdf",
+                "extracted_from": "",
+                "content": "",
+                "metadata": {
+                    "pdf:num_pages": "12",
+                    "xmp:CreatorTool": "Adobe Acrobat",
+                    "Content-Type": "application/pdf; charset=binary"
+                },
+                "meta": {
+                    "content_type": "application/pdf"
+                }
+            }
+        });
+        let result = parse_hit(&hit, "aum").context("should parse hit")?;
+        // Raw Tika fields are preserved for UI display.
+        assert_eq!(
+            result
+                .metadata
+                .get("pdf:num_pages")
+                .and_then(|v| v.as_str()),
+            Some("12")
+        );
+        assert_eq!(
+            result
+                .metadata
+                .get("xmp:CreatorTool")
+                .and_then(|v| v.as_str()),
+            Some("Adobe Acrobat")
+        );
+        // Canonical `content_type` (params stripped) is injected alongside the
+        // raw `Content-Type`, so the UI and preview route get a clean value.
+        assert_eq!(
+            result.metadata.get("content_type").and_then(|v| v.as_str()),
+            Some("application/pdf")
         );
         Ok(())
     }
@@ -258,11 +270,11 @@ mod tests {
                 "hits": [
                     {
                         "_id": "a", "_index": "idx", "_score": 1.0,
-                        "_source": { "display_path": "a", "extracted_from": "", "content": "", "metadata": {}, "meta": {} }
+                        "_source": { "display_path": "a", "extracted_from": "", "content": "", "meta": {} }
                     },
                     {
                         "_id": "b", "_index": "idx", "_score": 0.5,
-                        "_source": { "display_path": "b", "extracted_from": "", "content": "", "metadata": {}, "meta": {} }
+                        "_source": { "display_path": "b", "extracted_from": "", "content": "", "meta": {} }
                     }
                 ]
             }

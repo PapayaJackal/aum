@@ -9,8 +9,8 @@ pub mod meta;
 #[cfg(feature = "meilisearch")]
 pub mod meilisearch;
 
-#[cfg(feature = "elasticsearch")]
-pub mod elasticsearch;
+#[cfg(feature = "opensearch")]
+pub mod opensearch;
 
 pub mod types;
 pub mod utils;
@@ -21,8 +21,8 @@ pub use dispatch::AumBackend;
 #[cfg(feature = "meilisearch")]
 pub use meilisearch::MeilisearchBackend;
 
-#[cfg(feature = "elasticsearch")]
-pub use elasticsearch::ElasticsearchBackend;
+#[cfg(feature = "opensearch")]
+pub use opensearch::OpenSearchBackend;
 
 pub use types::{
     BatchIndexResult, FacetMap, FilterMap, SearchError, SearchResult, SortSpec, TruncationRecord,
