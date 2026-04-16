@@ -129,12 +129,15 @@ pub(super) fn build_sort_clause(sort: &SortSpec) -> Option<Value> {
 #[allow(clippy::doc_markdown)]
 /// Build an OpenSearch bool query for full-text search.
 ///
-/// Matches on `content` (boosted) and `display_path`, with optional filter
-/// clauses applied.
+/// Matches on `content` and `display_path`, with filename matches boosted above
+/// body matches so that a file named `budget.xlsx` ranks ahead of a document
+/// that merely mentions "budget" in its body. This mirrors the Meilisearch
+/// backend, where `display_path` is first in `searchable_attributes` and
+/// therefore wins ties via the `attribute` ranking rule.
 pub(super) fn build_text_query(query: &str, filter_clauses: &[Value]) -> Value {
     let should = json!([
-        { "match": { "content":      { "query": query, "operator": "and", "boost": 2 } } },
-        { "match": { "display_path": { "query": query, "operator": "and" } } },
+        { "match": { "content":      { "query": query, "operator": "and" } } },
+        { "match": { "display_path": { "query": query, "operator": "and", "boost": 2 } } },
     ]);
     if filter_clauses.is_empty() {
         json!({
@@ -290,6 +293,33 @@ mod tests {
     fn filter_clauses_empty_for_empty_map() {
         let clauses = build_filter_clauses(&FilterMap::new());
         assert!(clauses.is_empty());
+    }
+
+    #[test]
+    fn text_query_boosts_display_path_above_content() -> anyhow::Result<()> {
+        let q = build_text_query("budget", &[]);
+        let should = q
+            .pointer("/bool/should")
+            .and_then(Value::as_array)
+            .context("missing should clauses")?;
+
+        let content_boost = should
+            .iter()
+            .find_map(|c| c.pointer("/match/content/boost").and_then(Value::as_f64))
+            .unwrap_or(1.0);
+        let display_boost = should
+            .iter()
+            .find_map(|c| {
+                c.pointer("/match/display_path/boost")
+                    .and_then(Value::as_f64)
+            })
+            .unwrap_or(1.0);
+
+        assert!(
+            display_boost > content_boost,
+            "display_path boost ({display_boost}) should exceed content boost ({content_boost})",
+        );
+        Ok(())
     }
 
     #[test]

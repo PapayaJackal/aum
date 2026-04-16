@@ -35,7 +35,7 @@ use query::{
     build_facet_aggs, build_filter_clauses, build_highlight, build_knn_query, build_sort_clause,
     build_text_query, parse_facets,
 };
-use settings::{META_FIELD_TYPES, build_index_body};
+use settings::{META_FIELD_TYPES, PATH_ANALYZER, build_index_body};
 
 // ---------------------------------------------------------------------------
 // Per-query size limits
@@ -274,8 +274,11 @@ impl SearchBackend for OpenSearchBackend {
         index: &str,
         display_path: &str,
     ) -> Result<Option<SearchResult>, SearchError> {
+        // `display_path` is an analysed text field (tokenised on punctuation
+        // for filename search), so exact-match lookups must go through the
+        // `.keyword` subfield rather than the analysed terms.
         let body = json!({
-            "query": { "term": { "display_path": display_path } },
+            "query": { "term": { "display_path.keyword": display_path } },
             "size": 1,
         });
         let resp = self
@@ -741,7 +744,9 @@ async fn ensure_rrf_pipeline(client: &OpenSearch) -> Result<(), SearchError> {
     Ok(())
 }
 
-/// Returns `true` if the existing index has the expected `meta.*` field types.
+/// Returns `true` if the existing index has the expected `meta.*` field types
+/// *and* the custom `display_path` analyzer. A missing/stale analyzer forces a
+/// re-create so filename tokenisation stays in sync with the current schema.
 async fn mapping_matches(client: &OpenSearch, name: &str) -> bool {
     let resp = client
         .indices()
@@ -757,14 +762,29 @@ async fn mapping_matches(client: &OpenSearch, name: &str) -> bool {
         return false;
     };
 
-    let meta_props = body
+    let properties = body
         .get(name)
         .and_then(|idx| idx.get("mappings"))
-        .and_then(|m| m.get("properties"))
-        .and_then(|p| p.get("meta"))
         .and_then(|m| m.get("properties"));
 
-    let Some(meta_props) = meta_props else {
+    let Some(properties) = properties else {
+        return false;
+    };
+
+    let display_analyzer = properties
+        .get("display_path")
+        .and_then(|f| f.get("analyzer"))
+        .and_then(|t| t.as_str());
+    if display_analyzer != Some(PATH_ANALYZER) {
+        tracing::debug!(
+            expected = PATH_ANALYZER,
+            actual = ?display_analyzer,
+            "display_path analyzer mismatch"
+        );
+        return false;
+    }
+
+    let Some(meta_props) = properties.get("meta").and_then(|m| m.get("properties")) else {
         return false;
     };
 
