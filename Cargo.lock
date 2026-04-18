@@ -289,7 +289,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "aum-api"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "aum-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "aum-api",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "aum-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -373,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "aum-macros"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "proc-macro2",
  "quote",
