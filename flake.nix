@@ -113,7 +113,7 @@
         # running npm.  We inject a dummy dist/ so the check passes during the
         # dep-only compilation pass, where network and Node are unavailable.
         cargoArtifacts = craneLib.buildDepsOnly (commonCargoArgs // {
-          cargoExtraArgs = "--bin aum --features aum-core/meilisearch,aum-cli/bundle-frontend";
+          cargoExtraArgs = "--bin aum --features aum-cli/bundle-frontend";
 
           postUnpack = swaggerSetupHook + ''
             mkdir -p "$sourceRoot/frontend/dist"
@@ -127,7 +127,7 @@
         # embed it.  build.rs sees dist/ exists and skips npm again.
         aum = craneLib.buildPackage (commonCargoArgs // {
           inherit cargoArtifacts;
-          cargoExtraArgs = "--bin aum --features aum-core/meilisearch,aum-cli/bundle-frontend";
+          cargoExtraArgs = "--bin aum --features aum-cli/bundle-frontend";
 
           postUnpack = swaggerSetupHook;
 
