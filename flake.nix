@@ -40,7 +40,8 @@
 
         commonNativeBuildInputs = [ pkgs.pkg-config ];
         # libsqlite3-sys links to system sqlite (no 'bundled' feature).
-        commonBuildInputs = [ pkgs.sqlite ];
+        # openssl-sys is pulled in transitively and needs the system library.
+        commonBuildInputs = [ pkgs.sqlite pkgs.openssl ];
 
         # utoipa-swagger-ui's build.rs tries to download swagger-ui at compile
         # time.  Pre-fetch the zip and copy it into the writable build directory
@@ -79,7 +80,7 @@
           name = "aum-frontend-npm-deps";
           src = ./frontend;
           # Run `nix build .#frontend` with this fake hash to discover the real one.
-          hash = "sha256-5+JpzBGZ0tJctexrraRThC5SeNuCOPt2F69ub1zKif0=";
+          hash = "sha256-5MT8+DyWzNPTguqMaMrH42ZRn+zGmhYOSiBZXIkhaz0=";
         };
 
         frontend = pkgs.stdenv.mkDerivation {
