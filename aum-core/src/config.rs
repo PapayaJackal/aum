@@ -608,6 +608,8 @@ pub fn load_config_from(toml_path: &str) -> Result<AumConfig, figment::Error> {
 /// Each field is shown as `ENV_VAR=current_value` preceded by its description.
 #[must_use]
 pub fn format_config(config: &AumConfig) -> String {
+    use std::fmt::Write as _;
+
     fn write_section(out: &mut String, docs: &[ConfigDoc], values: Vec<String>) {
         use std::fmt::Write as _;
         for (doc, val) in docs.iter().zip(values) {
@@ -616,6 +618,11 @@ pub fn format_config(config: &AumConfig) -> String {
     }
 
     let mut out = String::new();
+    let _ = write!(
+        out,
+        "# Which search backend to use: \"meilisearch\" or \"opensearch\"\nAUM_SEARCH_BACKEND={}\n",
+        config.search_backend,
+    );
     write_section(
         &mut out,
         DataConfig::config_docs(),
@@ -956,6 +963,7 @@ mod tests {
         assert!(out.contains("AUM_MEILISEARCH__URL=http://localhost:7700"));
         assert!(out.contains("AUM_SERVER__PORT=8000"));
         assert!(out.contains("AUM_DATA__DIR=data"));
+        assert!(out.contains("AUM_SEARCH_BACKEND="));
         assert!(out.contains("AUM_DATABASE__URL="));
         assert!(out.contains("AUM_DATABASE__MAX_CONNECTIONS=16"));
     }
