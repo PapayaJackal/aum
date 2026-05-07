@@ -69,4 +69,4 @@ argon2 = "0.5.3"
 wiremock = "0.6"
 rust-embed = "8.11.0"
 indexmap = { version = "2.14.0", features = ["serde"] }
-rpassword = "7.4.0"
+rpassword = "7.5.2"
