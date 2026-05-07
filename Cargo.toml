@@ -32,7 +32,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
 tracing-futures = { version = "0.2", features = ["futures-03"] }
 sqlx = { version = "0.8.6", features = ["any", "sqlite", "postgres", "mysql", "runtime-tokio", "chrono"] }
-tokio = { version = "1.52.0", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.52.2", features = ["rt-multi-thread", "macros"] }
 thiserror = "2.0.18"
 async-trait = "0.1.89"
 futures = "0.3.32"
