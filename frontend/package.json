@@ -10,7 +10,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
-    "dompurify": "^3.4.0",
+    "dompurify": "^3.4.3",
     "pdfjs-dist": "^5.6.205",
     "svelte": "^5.55.4"
   },
