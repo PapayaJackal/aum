@@ -40,15 +40,15 @@ document search platform, look at
 
 ## Requirements
 
-- Rust 1.85+ (to build from source)
-- Meilisearch 1.x+
+- Rust 1.91+ (to build from source)
+- OpenSearch 2.x+, or Meilisearch 1.x+ with `--features meilisearch`
 - Apache Tika 3.x
 - Node.js 22+ (to build the frontend)
 - Optional: Ollama or an OpenAI-compatible API for embeddings
 
 ## Getting started
 
-Start the supporting services (Meilisearch and Tika) with Docker Compose:
+Start the supporting services (OpenSearch and Tika) with Docker Compose:
 
 ```sh
 docker compose up -d
@@ -159,26 +159,30 @@ aum reads configuration from these sources, in order of priority:
 
 Run `aum config` to print the resolved configuration.
 
+Environment variables map onto the configuration sections, with a double
+underscore separating the section from the setting: `AUM_<SECTION>__<KEY>`.
+A single underscore is silently ignored, so `AUM_DATA_DIR` has no effect
+while `AUM_DATA__DIR` does.
+
 Key settings:
 
-- `AUM_MEILI_URL` -- Meilisearch URL (default: `http://localhost:7700`)
-- `AUM_TIKA_SERVER_URL` -- Tika URL (default: `http://localhost:9998`)
-- `AUM_JWT_SECRET` -- JWT signing secret (at least 32 bytes). If not
-  set, a random one is generated on each restart and sessions will not
-  persist.
-- `AUM_DATA_DIR` -- Directory for the SQLite database and extracted files
+- `AUM_SEARCH_BACKEND` -- `opensearch` or `meilisearch` (default:
+  `opensearch`). This one is top-level and takes a single underscore.
+- `AUM_OPENSEARCH__URL` -- OpenSearch URL (default: `http://localhost:9200`)
+- `AUM_MEILISEARCH__URL` -- Meilisearch URL (default: `http://localhost:7700`)
+- `AUM_TIKA__SERVER_URL` -- Tika URL (default: `http://localhost:9998`)
+- `AUM_DATA__DIR` -- Directory for the SQLite database and extracted files
   (default: `data`)
-- `AUM_PUBLIC_MODE` -- Allow anonymous read-only search access (default:
-  `false`)
-- `AUM_PASSKEY_ENABLED` -- Enable WebAuthn/passkey registration and
-  authentication (default: `false`)
-- `AUM_PASSKEY_REQUIRED` -- Require all users to register a passkey
+- `AUM_SERVER__PORT` -- Server port (default: `8000`)
+- `AUM_SERVER__HOST` -- Address to bind (default: `0.0.0.0`)
+- `AUM_SERVER__BASE_URL` -- Public base URL (default:
+  `http://localhost:8000`)
+- `AUM_AUTH__PUBLIC_MODE` -- Allow anonymous read-only search access
   (default: `false`)
-- `AUM_WEBAUTHN_RP_ID` -- WebAuthn Relying Party ID, the domain users
-  access the site from (default: `localhost`)
-- `AUM_LOG_LEVEL` -- Log level (default: `INFO`)
-- `AUM_LOG_FORMAT` -- `json` or `console` (default: `json`)
-- `AUM_PORT` -- Server port (default: `8000`)
+- `AUM_AUTH__SESSION_EXPIRE_HOURS` -- Session lifetime in hours (default:
+  `168`)
+- `AUM_LOG__LEVEL` -- Log level (default: `INFO`)
+- `AUM_LOG__FORMAT` -- `json` or `console` (default: `console`)
 
 ## CLI reference
 
@@ -205,7 +209,6 @@ searching.
 - `aum user revoke <name> <index>` -- Revoke access to an index
 - `aum user token <name>` -- Generate an API token
 - `aum user invite <name>` -- Generate an invitation link (`--admin`, `--expires`)
-- `aum user reset-mfa <name>` -- Remove all passkeys for a user
 - `aum config` -- Print the resolved configuration
 
 Run any command with `--help` for full usage details.
@@ -247,7 +250,7 @@ ollama serve
 Enable embeddings and generate them:
 
 ```sh
-AUM_EMBEDDINGS_ENABLED=true aum embed <index>
+AUM_EMBEDDINGS__ENABLED=true aum embed <index>
 ```
 
 The default model is `qwen3-embedding:0.6b` (256 dimensions). aum will
@@ -262,17 +265,17 @@ aum embed <index> --backend ollama --model nomic-embed-text
 Set the API URL and key, then embed:
 
 ```sh
-export AUM_EMBEDDINGS_BACKEND=openai
-export AUM_EMBEDDINGS_API_URL=https://api.openai.com/v1/embeddings
-export AUM_EMBEDDINGS_API_KEY=sk-...
-export AUM_EMBEDDINGS_MODEL=text-embedding-3-small
-AUM_EMBEDDINGS_ENABLED=true aum embed <index>
+export AUM_EMBEDDINGS__BACKEND=openai
+export AUM_EMBEDDINGS__API_URL=https://api.openai.com/v1/embeddings
+export AUM_EMBEDDINGS__API_KEY=sk-...
+export AUM_EMBEDDINGS__MODEL=text-embedding-3-small
+AUM_EMBEDDINGS__ENABLED=true aum embed <index>
 ```
 
 This also works with any OpenAI-compatible endpoint (vLLM, LiteLLM,
 Together, etc).
 
-Once documents have embeddings, set `AUM_EMBEDDINGS_ENABLED=true` when
+Once documents have embeddings, set `AUM_EMBEDDINGS__ENABLED=true` when
 running the server to enable the hybrid search option in the UI.
 
 ## Testing
