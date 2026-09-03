@@ -1,24 +1,178 @@
+/* Display: Fraunces (wordmark, filenames). UI: IBM Plex Sans. Paths/keys: IBM Plex Mono. */
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
 @import "tailwindcss";
+@import "tw-animate-css";
 
-@theme {
-  --color-brand: #1a1a2e;
-  --color-brand-hover: #16213e;
-  --color-accent: #4a7cf7;
-  --color-accent-hover: #3a6ce7;
-  --color-highlight: #fff3b0;
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * "Reading room": warm paper ground, ink foreground, oxidised-verdigris accent,
+ * ochre highlighter for search marks. Tuned so long reading sessions over
+ * scanned documents stay comfortable.
+ */
+:root {
+  --radius: 0.375rem;
+
+  --background: oklch(0.966 0.011 85);
+  --foreground: oklch(0.248 0.018 62);
+
+  --card: oklch(0.992 0.006 85);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.992 0.006 85);
+  --popover-foreground: var(--foreground);
+
+  --primary: oklch(0.452 0.068 191);
+  --primary-foreground: oklch(0.98 0.008 85);
+
+  --secondary: oklch(0.928 0.014 82);
+  --secondary-foreground: oklch(0.33 0.02 62);
+
+  --muted: oklch(0.936 0.012 84);
+  --muted-foreground: oklch(0.522 0.021 66);
+
+  --accent: oklch(0.912 0.032 190);
+  --accent-foreground: oklch(0.33 0.045 195);
+
+  --destructive: oklch(0.514 0.158 27);
+  --destructive-foreground: oklch(0.98 0.008 85);
+
+  --border: oklch(0.878 0.014 80);
+  --input: oklch(0.878 0.014 80);
+  --ring: oklch(0.452 0.068 191);
+
+  /* Ochre highlighter, laid over paper like a felt-tip pass */
+  --highlight: oklch(0.885 0.132 88);
+  --highlight-foreground: oklch(0.28 0.04 70);
+  --highlight-active: oklch(0.82 0.16 62);
+
+  --chart-1: oklch(0.452 0.068 191);
+  --chart-2: oklch(0.62 0.11 62);
+  --chart-3: oklch(0.55 0.09 145);
+  --chart-4: oklch(0.58 0.12 28);
+  --chart-5: oklch(0.48 0.07 285);
+
+  --sidebar: oklch(0.948 0.012 84);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+.dark {
+  --background: oklch(0.192 0.011 68);
+  --foreground: oklch(0.918 0.014 84);
+
+  --card: oklch(0.232 0.013 68);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.242 0.013 68);
+  --popover-foreground: var(--foreground);
+
+  --primary: oklch(0.732 0.086 186);
+  --primary-foreground: oklch(0.19 0.02 190);
+
+  --secondary: oklch(0.288 0.014 68);
+  --secondary-foreground: oklch(0.9 0.014 84);
+
+  --muted: oklch(0.272 0.013 68);
+  --muted-foreground: oklch(0.688 0.018 80);
+
+  --accent: oklch(0.322 0.038 190);
+  --accent-foreground: oklch(0.88 0.05 188);
+
+  --destructive: oklch(0.63 0.17 28);
+  --destructive-foreground: oklch(0.98 0.008 85);
+
+  --border: oklch(0.322 0.014 68);
+  --input: oklch(0.342 0.014 68);
+  --ring: oklch(0.732 0.086 186);
+
+  --highlight: oklch(0.735 0.132 82);
+  --highlight-foreground: oklch(0.17 0.03 70);
+  --highlight-active: oklch(0.8 0.16 66);
+
+  --sidebar: oklch(0.216 0.012 68);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
 }
 
 @layer base {
-  body {
-    @apply m-0 font-sans bg-gray-100 text-gray-800;
+  * {
+    @apply border-border outline-ring/50;
   }
 
+  body {
+    @apply m-0 bg-background text-foreground font-sans antialiased;
+    /* Faint laid-paper grain: two offset gradients, cheap and static */
+    background-image:
+      repeating-linear-gradient(0deg, oklch(0 0 0 / 0.012) 0 1px, transparent 1px 3px),
+      repeating-linear-gradient(90deg, oklch(0 0 0 / 0.008) 0 1px, transparent 1px 4px);
+  }
+
+  /* Search hits read as a felt-tip pass over the page, not a coloured box */
   mark {
-    @apply bg-(--color-highlight) px-0.5 rounded-sm;
+    @apply bg-highlight text-highlight-foreground rounded-[2px] px-0.5;
+    box-decoration-break: clone;
   }
 }
 
-/* Range slider thumb styles (can't be expressed with Tailwind utilities) */
+@utility font-display {
+  font-family: var(--font-display);
+  font-variation-settings: "opsz" 32;
+}
+
+/* Range slider (semantic ratio) — pseudo-elements can't be done with utilities */
 .slider-track {
   @apply relative h-6;
 }
@@ -29,38 +183,17 @@
 
 .slider-track input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  @apply pointer-events-auto w-3.5 h-3.5 rounded-full bg-(--color-accent) border-2 border-white cursor-pointer relative z-1;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  @apply pointer-events-auto w-3.5 h-3.5 rounded-full bg-primary border-2 border-background cursor-pointer relative z-1;
 }
 
 .slider-track input[type="range"]::-moz-range-thumb {
-  @apply pointer-events-auto w-3.5 h-3.5 rounded-full bg-(--color-accent) border-2 border-white cursor-pointer;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  @apply pointer-events-auto w-3.5 h-3.5 rounded-full bg-primary border-2 border-background cursor-pointer;
 }
 
 .slider-track input[type="range"]::-webkit-slider-runnable-track {
-  @apply h-1 bg-gray-300 rounded;
+  @apply h-1 bg-border rounded;
 }
 
 .slider-track input[type="range"]::-moz-range-track {
-  @apply h-1 bg-gray-300 rounded;
-}
-
-/* Divider pseudo-elements for login "or" separator */
-.login-divider {
-  @apply text-center text-gray-400 my-4 relative;
-}
-
-.login-divider::before,
-.login-divider::after {
-  content: "";
-  @apply absolute top-1/2 w-2/5 h-px bg-gray-300;
-}
-
-.login-divider::before {
-  @apply left-0;
-}
-
-.login-divider::after {
-  @apply right-0;
+  @apply h-1 bg-border rounded;
 }

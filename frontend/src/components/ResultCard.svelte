@@ -3,6 +3,7 @@
   import { searchState } from "../lib/searchState.svelte";
   import { sanitizeHighlight, escapeHtml } from "../lib/highlight";
   import { mimeAlias } from "../lib/mime";
+  import { Badge } from "$lib/components/ui/badge/index.js";
 
   let { result, multiIndex = false }: { result: SearchResult; multiIndex: boolean } = $props();
 
@@ -68,45 +69,49 @@
 <button
   type="button"
   bind:this={buttonEl}
-  class="block w-full text-left font-[inherit] bg-white p-4 rounded-md shadow-sm no-underline text-inherit border-2 cursor-pointer transition-[box-shadow,border-color] duration-150 hover:shadow-md {isSelected
-    ? 'border-(--color-accent) bg-blue-50'
-    : 'border-transparent'}"
+  class="group relative block w-full cursor-pointer rounded-md border border-border/70 bg-card p-4 pl-5 text-left font-[inherit] text-inherit shadow-[0_1px_2px_oklch(0_0_0/0.04)] transition-[box-shadow,border-color,transform] duration-150 hover:-translate-y-px hover:shadow-[0_6px_18px_-10px_oklch(0_0_0/0.35)] {isSelected
+    ? 'border-primary/45 bg-accent/35'
+    : ''}"
   onclick={handleClick}
 >
-  <div class="flex justify-between items-center mb-2">
-    {#if hasPathHighlight}
-      <span class="font-semibold text-(--color-brand)">{@html hlFilename}</span>
-    {:else}
-      <span class="font-semibold text-(--color-brand)">{filename}</span>
-    {/if}
+  <!-- Ruled margin, like a card in a catalogue drawer -->
+  <span
+    aria-hidden="true"
+    class="absolute inset-y-2 left-2 w-px rounded-full transition-colors {isSelected
+      ? 'bg-primary'
+      : 'bg-border group-hover:bg-primary/45'}"
+  ></span>
+
+  <div class="mb-1.5 flex items-baseline justify-between gap-3">
+    <span class="font-display text-[0.975rem] leading-snug font-semibold text-foreground">
+      {#if hasPathHighlight}{@html hlFilename}{:else}{filename}{/if}
+    </span>
     {#if dateLabel}
-      <span class="text-xs text-gray-400 shrink-0" title="Score: {result.score.toFixed(3)}">{dateLabel}</span>
+      <span
+        class="shrink-0 font-mono text-[0.7rem] tabular-nums text-muted-foreground/80"
+        title="Score: {result.score.toFixed(3)}">{dateLabel}</span
+      >
     {/if}
   </div>
 
-  <p class="text-sm leading-relaxed text-gray-500 m-0 mb-2">{@html snippet}</p>
+  <p class="m-0 mb-2.5 text-sm leading-relaxed text-muted-foreground">{@html snippet}</p>
 
-  <div class="flex justify-between items-center text-xs text-gray-400 gap-2">
-    {#if hasPathHighlight}
-      <span
-        class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500"
-        title={index + "/" + result.display_path}>{@html safeIndex + "/" + hlDirPart + hlFilename}</span
-      >
-    {:else}
-      <span
-        class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500"
-        title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span
-      >
-    {/if}
-    <div class="flex gap-1 shrink-0">
+  <div class="flex items-center justify-between gap-2">
+    <span
+      class="min-w-0 overflow-hidden font-mono text-[0.7rem] text-ellipsis whitespace-nowrap text-muted-foreground/75"
+      title={index + "/" + result.display_path}
+    >
+      {#if hasPathHighlight}{@html safeIndex + "/" + hlDirPart + hlFilename}{:else}{index}/{dirPart}{filename}{/if}
+    </span>
+    <div class="flex shrink-0 items-center gap-1">
       {#if multiIndex && index}
-        <span class="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-xs shrink-0">{index}</span>
+        <Badge variant="outline" class="border-primary/30 font-mono text-[0.65rem] text-primary">{index}</Badge>
       {/if}
       {#if fileSize}
-        <span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-xs shrink-0">{fileSize}</span>
+        <Badge variant="secondary" class="font-mono text-[0.65rem] tabular-nums">{fileSize}</Badge>
       {/if}
       {#if fileType}
-        <span class="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded text-xs shrink-0">{fileType}</span>
+        <Badge variant="secondary" class="font-mono text-[0.65rem] tracking-wide uppercase">{fileType}</Badge>
       {/if}
     </div>
   </div>

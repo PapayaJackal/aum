@@ -18,6 +18,10 @@
   import IndexSelector from "../components/IndexSelector.svelte";
   import Document from "./Document.svelte";
   import KeyboardHelp from "../components/KeyboardHelp.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+  import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 
   let { header }: { header: Snippet<[() => ReturnType<Snippet>, () => void]> } = $props();
 
@@ -517,7 +521,7 @@
       placeholder="Search documents..."
       bind:value={searchState.query}
       bind:this={searchInputEl}
-      class="flex-1 px-3 py-[0.45rem] border-none rounded bg-white/95 text-gray-800 text-base min-w-0 focus:outline-2 focus:outline-(--color-accent)"
+      class="min-w-0 flex-1 rounded-md border border-primary-foreground/15 bg-background/95 px-3 py-1.5 text-base text-foreground shadow-inner transition-[box-shadow,border-color] placeholder:text-muted-foreground/70 focus:border-primary-foreground/40 focus:outline-none focus:ring-2 focus:ring-primary-foreground/25"
     />
     {#if indices.length > 0}
       <IndexSelector {indices} selectedIndices={searchState.selectedIndices} onchange={handleIndicesChange} />
@@ -526,12 +530,12 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="relative shrink-0" onmouseenter={showSlider} onmouseleave={hideSlider}>
         <label
-          class="flex items-center gap-1.5 text-xs text-white/90 select-none cursor-pointer px-2 py-[0.45rem]"
+          class="flex cursor-pointer items-center gap-1.5 px-2 py-1.5 font-mono text-[0.7rem] tracking-wider text-primary-foreground/80 uppercase select-none hover:text-primary-foreground"
           title="Combine keyword and semantic search"
         >
           <input
             type="checkbox"
-            class="accent-(--color-accent)"
+            class="accent-primary-foreground"
             checked={searchState.searchType === "hybrid"}
             onchange={(e) => {
               searchState.searchType = e.currentTarget.checked ? "hybrid" : "text";
@@ -543,7 +547,7 @@
         {#if searchState.searchType === "hybrid" && sliderVisible}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
-            class="absolute top-full right-0 mt-1 flex items-center gap-1.5 bg-(--color-brand) border border-white/20 rounded px-3 py-2 shadow-lg z-10 whitespace-nowrap text-[10px] text-white/70"
+            class="absolute top-full right-0 z-10 mt-1.5 flex items-center gap-2 rounded-md border border-border bg-popover px-3 py-2 font-mono text-[10px] tracking-wider text-muted-foreground uppercase whitespace-nowrap shadow-lg"
             onmouseenter={showSlider}
             onmouseleave={hideSlider}
           >
@@ -553,7 +557,7 @@
               min="0"
               max="1"
               step="0.05"
-              class="w-24 accent-(--color-accent)"
+              class="w-24 accent-primary"
               bind:value={searchState.semanticRatio}
               oninput={() => savePrefs()}
               onchange={() => {
@@ -568,9 +572,9 @@
     <button
       type="submit"
       disabled={loading || !searchState.query.trim()}
-      class="px-4 py-[0.45rem] bg-(--color-accent) text-white border-none rounded text-sm cursor-pointer shrink-0 hover:enabled:bg-(--color-accent-hover) disabled:opacity-50 disabled:cursor-not-allowed"
+      class="shrink-0 rounded-md bg-background px-4 py-1.5 text-sm font-medium text-primary transition-colors hover:enabled:bg-background/85 disabled:cursor-not-allowed disabled:opacity-50"
     >
-      {loading ? "..." : "Search"}
+      {loading ? "…" : "Search"}
     </button>
   </form>
 {/snippet}
@@ -579,7 +583,7 @@
 
 <main class="px-4">
   {#if error}
-    <div class="bg-red-50 text-red-600 p-3 rounded my-3">{error}</div>
+    <div class="my-3 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert">{error}</div>
   {/if}
 
   {#if searchState.searched}
@@ -605,48 +609,27 @@
         class="flex-1 min-w-0 {previewFullscreen ? 'hidden' : ''}"
         style={sidebarOpen && !previewFullscreen ? `flex: 0 0 ${resultsSplit}%; max-width: ${resultsSplit}%;` : ""}
       >
-        <div class="flex items-center justify-between gap-3 mb-3 py-1.5 flex-wrap sticky top-10 bg-gray-100 z-10">
+        <div class="sticky top-10 z-10 mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-background/95 py-2 backdrop-blur-sm">
           <div class="flex items-center gap-2">
             {#if Object.keys(facets).length > 0}
-              <button
-                class="px-2 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:bg-blue-50 hover:border-(--color-accent) hover:text-(--color-accent) leading-none"
+              <Button
+                variant="outline"
+                size="sm"
+                class="h-7 gap-1.5 px-2 font-mono text-[0.7rem] tracking-wider uppercase"
                 onclick={() => (facetVisible = !facetVisible)}
                 title={facetVisible ? "Hide filters" : "Show filters"}
               >
-                {#if facetVisible}
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg
-                  >
-                {:else}
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg
-                  >
-                {/if}
-              </button>
+                <SlidersHorizontalIcon class="size-3.5" />
+                {facetVisible ? "Hide" : "Filters"}
+              </Button>
             {/if}
-            <p class="text-gray-400 text-sm m-0">
+            <p class="m-0 font-mono text-xs tracking-[0.14em] text-muted-foreground uppercase tabular-nums">
               {searchState.total} result{searchState.total !== 1 ? "s" : ""}
             </p>
           </div>
           <div class="flex items-center gap-1 flex-wrap">
             <select
-              class="py-1 px-1.5 border border-gray-300 rounded bg-gray-100 text-sm cursor-pointer"
+              class="cursor-pointer rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground transition-colors hover:border-primary/40"
               bind:value={searchState.sortBy}
               onchange={handleSortChange}
             >
@@ -656,35 +639,42 @@
               <option value="size:desc">Largest first</option>
               <option value="size:asc">Smallest first</option>
             </select>
-            <button
-              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed"
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-7 gap-1 px-2 text-xs"
               disabled={searchState.currentPage <= 1 || loading}
-              onclick={() => doSearch(searchState.currentPage - 1, false)}>&lsaquo; Prev</button
+              onclick={() => doSearch(searchState.currentPage - 1, false)}
             >
+              <ChevronLeftIcon class="size-3.5" />Prev
+            </Button>
 
             {#each pageNumbers(searchState.currentPage, totalPages) as p}
               {#if p === "..."}
-                <span class="px-1 py-1 text-gray-400 text-sm">&hellip;</span>
+                <span class="px-1 font-mono text-xs text-muted-foreground">&hellip;</span>
               {:else}
-                <button
-                  class="px-2.5 py-1 text-sm border rounded cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed {p ===
-                  searchState.currentPage
-                    ? 'bg-(--color-accent) text-white border-(--color-accent)'
-                    : 'bg-gray-100 text-gray-800 border-gray-300 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent)'}"
+                <Button
+                  variant={p === searchState.currentPage ? "default" : "outline"}
+                  size="sm"
+                  class="h-7 min-w-7 px-2 font-mono text-xs tabular-nums"
                   disabled={loading}
-                  onclick={() => doSearch(p, false)}>{p}</button
+                  onclick={() => doSearch(p, false)}>{p}</Button
                 >
               {/if}
             {/each}
 
-            <button
-              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed"
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-7 gap-1 px-2 text-xs"
               disabled={searchState.currentPage >= totalPages || loading}
-              onclick={() => doSearch(searchState.currentPage + 1, false)}>Next &rsaquo;</button
+              onclick={() => doSearch(searchState.currentPage + 1, false)}
             >
+              Next<ChevronRightIcon class="size-3.5" />
+            </Button>
 
             <select
-              class="py-1 px-1.5 border border-gray-300 rounded bg-gray-100 text-sm ml-2 cursor-pointer"
+              class="ml-2 cursor-pointer rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground transition-colors hover:border-primary/40"
               bind:value={searchState.pageSize}
               onchange={handlePageSizeChange}
             >
@@ -711,7 +701,7 @@
       {#if sidebarOpen}
         <aside
           bind:this={previewAsideEl}
-          class="flex-1 min-w-0 bg-gray-50 border-l border-gray-300 rounded-md shadow-[-2px_0_8px_rgba(0,0,0,0.05)] sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
+          class="sticky top-12 max-h-[calc(100vh-3.5rem)] min-w-0 flex-1 self-start overflow-y-auto rounded-md border border-border/70 bg-card shadow-[0_10px_30px_-24px_oklch(0_0_0/0.5)]"
         >
           {#key searchState.selectedDocId}
             <Document
@@ -759,10 +749,10 @@
   }
   .drag-handle:hover::after,
   .drag-handle.active::after {
-    background: #4a7cf7;
+    background: var(--primary);
   }
   :global(aside mark.active-mark) {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--highlight-active);
     outline-offset: 1px;
     border-radius: 2px;
   }
