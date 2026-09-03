@@ -297,16 +297,16 @@
 {/snippet}
 
 <!--
-  Panels are ruled sections rather than nested cards: the aside already sits on
-  card stock, so another fill on top of it would only muddy the surface.
+  Sections are ruled off from one another rather than boxed: nothing in the
+  panel is an island, so there are no card edges to pad away from.
 -->
 {#snippet panel(title: string, body: Snippet, action?: Snippet)}
-  <section class="rounded-md border border-border/60">
-    <header class="flex items-center justify-between gap-2 border-b border-border/50 px-3 py-2">
+  <section class="border-t border-border first:border-t-0">
+    <header class="flex items-center justify-between gap-2 px-4 pt-3 pb-1.5">
       <h3 class="m-0 font-mono text-[0.7rem] tracking-[0.18em] uppercase text-muted-foreground">{title}</h3>
       {#if action}{@render action()}{/if}
     </header>
-    <div class="p-3">{@render body()}</div>
+    <div class="px-4 pt-1 pb-3">{@render body()}</div>
   </section>
 {/snippet}
 
@@ -340,26 +340,23 @@
   </div>
 
   <div
-    class="flex flex-col gap-4 px-4 py-3 transition-opacity duration-200 {refreshing
+    class="flex flex-col transition-opacity duration-200 {refreshing
       ? 'pointer-events-none opacity-50'
       : ''}"
     aria-busy={loading}
   >
     {#if loading && !doc}
-      <div class="skeleton-delayed flex flex-col gap-4" aria-busy="true" aria-label="Loading document">
+      <div class="skeleton-delayed flex flex-col gap-4 px-4 py-3" aria-busy="true" aria-label="Loading document">
         <Skeleton class="h-3.5 w-3/5" />
         <Skeleton class="h-28 w-full rounded-md" />
         <Skeleton class="h-56 w-full rounded-md" />
       </div>
     {:else if error}
-      <div
-        class="rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        role="alert"
-      >
+      <div class="border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-sm text-destructive" role="alert">
         {error}
       </div>
     {:else if doc}
-      <div class="flex items-start gap-3">
+      <div class="flex items-start gap-3 px-4 py-3">
         {#if doc.extracted_from}
           <p class="m-0 min-w-0 flex-1 font-mono text-[0.7rem] leading-relaxed break-all text-muted-foreground">
             Extracted from

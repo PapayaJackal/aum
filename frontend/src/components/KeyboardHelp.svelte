@@ -7,6 +7,7 @@
     { key: "/", description: "Focus search bar" },
     { key: "j / k", description: "Scroll preview down / up" },
     { key: "n / b", description: "Next / previous highlight" },
+    { key: "\u2193 / \u2191", description: "Next / previous document" },
     { key: "l / h", description: "Next / previous document" },
     { key: "?", description: "Toggle this help" },
     { key: "Esc", description: "Close preview or help" },

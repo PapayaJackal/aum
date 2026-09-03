@@ -2,15 +2,21 @@
   import type { SearchResult } from "../lib/api";
   import ResultCard from "./ResultCard.svelte";
   import { Skeleton } from "$lib/components/ui/skeleton/index.js";
+  import { searchState } from "../lib/searchState.svelte";
 
   let {
     results = [],
     multiIndex = false,
     loading = false,
   }: { results: SearchResult[]; multiIndex: boolean; loading?: boolean } = $props();
+
+  // Roving tabindex: Tab reaches the list once, landing on the selected row (or
+  // the first, when nothing is selected); the arrow keys move within it.
+  let selectedIdx = $derived(results.findIndex((r) => r.doc_id === searchState.selectedDocId));
+  let tabbableIdx = $derived(selectedIdx >= 0 ? selectedIdx : 0);
 </script>
 
-<div class="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
+<div class="divide-y divide-border" role="listbox" aria-label="Search results">
   {#if results.length === 0 && !loading}
     <p class="py-12 text-center font-mono text-sm tracking-wide text-muted-foreground">No results found.</p>
   {:else if results.length === 0 && loading}
@@ -25,8 +31,8 @@
       </div>
     {/each}
   {:else}
-    {#each results as result}
-      <ResultCard {result} {multiIndex} />
+    {#each results as result, i}
+      <ResultCard {result} {multiIndex} tabbable={i === tabbableIdx} />
     {/each}
   {/if}
 </div>

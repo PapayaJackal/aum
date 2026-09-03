@@ -485,6 +485,14 @@
       }
     }
 
+    if (!showKeyboardHelp && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      if (!isEditableActive() || document.activeElement === searchInputEl) {
+        e.preventDefault();
+        navigateResult(e.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+    }
+
     // All other vim keys: skip if in editable element or help overlay is open
     if (isEditableActive() || showKeyboardHelp) return;
 
@@ -606,10 +614,10 @@
 
 {@render header(searchForm, clearSearch)}
 
-<main class="px-4">
+<main>
   {#if error}
     <div
-      class="my-3 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+      class="border-b border-destructive/25 bg-destructive/10 px-4 py-2.5 text-sm text-destructive"
       role="alert"
     >
       {error}
@@ -618,13 +626,13 @@
 
   {#if searchState.searched}
     <div
-      class="flex mt-3"
+      class="flex"
       bind:this={mainContainer}
       style={dragging ? "cursor: col-resize; user-select: none;" : undefined}
     >
       {#if Object.keys(facets).length > 0 && facetVisible && !previewFullscreen}
         <aside
-          class="shrink-0 basis-[220px] max-w-[220px] min-w-0 mr-4 sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
+          class="sticky top-12 h-[calc(100vh-3rem)] min-w-0 shrink-0 basis-[220px] self-start overflow-y-auto border-r border-border"
         >
           <FacetPanel
             {facets}
@@ -636,11 +644,11 @@
       {/if}
 
       <div
-        class="flex-1 min-w-0 {previewFullscreen ? 'hidden' : ''}"
+        class="min-h-[calc(100vh-3rem)] min-w-0 flex-1 {previewFullscreen ? 'hidden' : ''}"
         style={sidebarOpen && !previewFullscreen ? `flex: 0 0 ${resultsSplit}%; max-width: ${resultsSplit}%;` : ""}
       >
         <div
-          class="sticky top-10 z-10 mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/95 py-1.5 backdrop-blur-sm"
+          class="sticky top-12 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background/95 px-3 py-1.5 backdrop-blur-sm"
         >
           <div class="flex items-center gap-2">
             {#if Object.keys(facets).length > 0}
@@ -745,7 +753,7 @@
       {#if sidebarOpen}
         <aside
           bind:this={previewAsideEl}
-          class="sticky top-12 max-h-[calc(100vh-3.5rem)] min-w-0 flex-1 self-start overflow-y-auto rounded-md border border-border/70 bg-card shadow-[0_10px_30px_-24px_oklch(0_0_0/0.5)]"
+          class="sticky top-12 h-[calc(100vh-3rem)] min-w-0 flex-1 self-start overflow-y-auto border-l border-border"
         >
           <!-- Not keyed on the doc id: the panel keeps the previous document
                on screen while the next one loads, instead of blanking. -->
@@ -770,13 +778,16 @@
 
 <style>
   .drag-handle {
-    flex: 0 0 8px;
-    width: 8px;
+    /* Straddles the column rule: 9px of grab area pulled back to zero width in
+       flow, so the two panes still meet edge to edge. */
+    flex: 0 0 9px;
+    width: 9px;
+    margin-inline: -4.5px;
     cursor: col-resize;
     position: sticky;
     top: 3rem;
     align-self: flex-start;
-    height: calc(100vh - 3.5rem);
+    height: calc(100vh - 3rem);
     z-index: 11;
   }
   .drag-handle::after {

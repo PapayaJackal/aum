@@ -78,7 +78,7 @@
   }
 </script>
 
-<div class="rounded-md border border-border/70 bg-card p-4 shadow-[0_1px_2px_oklch(0_0_0/0.04)]">
+<div class="px-3 py-3">
   <div class="mb-3 flex items-center justify-between">
     <h3 class="m-0 font-mono text-[0.7rem] tracking-[0.18em] uppercase text-muted-foreground">Filters</h3>
     {#if Object.keys(activeFacets).length > 0}
