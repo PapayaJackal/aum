@@ -135,6 +135,17 @@ pub(super) fn build_sort_clause(sort: &SortSpec) -> Option<Value> {
 /// backend, where `display_path` is first in `searchable_attributes` and
 /// therefore wins ties via the `attribute` ranking rule.
 pub(super) fn build_text_query(query: &str, filter_clauses: &[Value]) -> Value {
+    // `*` and the empty string mean "every document", matching Meilisearch's
+    // placeholder search. Fed to `match` they would be looked up as literal
+    // terms and match nothing, so translate them to `match_all`.
+    if query.is_empty() || query.trim() == "*" {
+        return if filter_clauses.is_empty() {
+            json!({ "match_all": {} })
+        } else {
+            json!({ "bool": { "filter": filter_clauses } })
+        };
+    }
+
     let should = json!([
         { "match": { "content":      { "query": query, "operator": "and" } } },
         { "match": { "display_path": { "query": query, "operator": "and", "boost": 2 } } },
@@ -293,6 +304,37 @@ mod tests {
     fn filter_clauses_empty_for_empty_map() {
         let clauses = build_filter_clauses(&FilterMap::new());
         assert!(clauses.is_empty());
+    }
+
+    #[test]
+    fn wildcard_query_matches_every_document() {
+        for query in ["*", "", "  *  "] {
+            let q = build_text_query(query, &[]);
+            assert!(
+                q.get("match_all").is_some(),
+                "query {query:?} should match all documents, got {q}"
+            );
+        }
+    }
+
+    #[test]
+    fn wildcard_query_still_applies_filters() -> anyhow::Result<()> {
+        let filters = build_filter_clauses(&FilterMap::from([(
+            FACET_FILE_TYPE.to_owned(),
+            vec!["application/pdf".to_owned()],
+        )]));
+        let q = build_text_query("*", &filters);
+
+        assert!(
+            q.pointer("/bool/should").is_none(),
+            "a match-all query should not score on terms: {q}"
+        );
+        let applied = q
+            .pointer("/bool/filter")
+            .and_then(Value::as_array)
+            .context("missing filter clauses")?;
+        assert_eq!(applied.len(), filters.len());
+        Ok(())
     }
 
     #[test]
