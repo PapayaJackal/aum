@@ -7,8 +7,27 @@
 
 use std::collections::HashMap;
 
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Numeric schema helpers
+// ---------------------------------------------------------------------------
+
+// schemars stamps Rust integer widths with `format: "uint"` / `"uint64"`,
+// which are not registered JSON Schema formats. Strict clients log a warning
+// for every occurrence each time they load the tool list, so express the same
+// constraint with a plain lower bound instead.
+
+/// JSON Schema for a required count: a non-negative integer.
+fn count_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({ "type": "integer", "minimum": 0 })
+}
+
+/// JSON Schema for an optional count: a non-negative integer or null.
+fn optional_count_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({ "type": ["integer", "null"], "minimum": 0 })
+}
 
 // ---------------------------------------------------------------------------
 // Shared parameter fragments
@@ -38,9 +57,11 @@ pub struct SearchParams {
     pub search_type: McpSearchType,
     /// Maximum results to return (1-50). Defaults to 10.
     #[serde(default)]
+    #[schemars(schema_with = "optional_count_schema")]
     pub limit: Option<usize>,
     /// Number of results to skip, for paging through `total`. Defaults to 0.
     #[serde(default)]
+    #[schemars(schema_with = "optional_count_schema")]
     pub offset: Option<usize>,
     /// Facet filters as label to accepted values, e.g.
     /// `{"File Type": ["application/pdf"], "Created": ["2021"]}`.
@@ -81,6 +102,7 @@ pub struct FacetParams {
     pub filters: Option<HashMap<String, Vec<String>>>,
     /// Maximum values to list per facet (1-200). Defaults to 20.
     #[serde(default)]
+    #[schemars(schema_with = "optional_count_schema")]
     pub limit: Option<usize>,
 }
 
@@ -123,8 +145,10 @@ pub struct SearchToolResult {
     /// Hits for this page, most relevant first.
     pub results: Vec<SearchHit>,
     /// Total number of matching documents across all pages.
+    #[schemars(schema_with = "count_schema")]
     pub total: u64,
     /// Offset to pass in the next call, or `null` when this was the last page.
+    #[schemars(schema_with = "optional_count_schema")]
     pub next_offset: Option<usize>,
     /// Facet value counts for the matched set, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,6 +163,7 @@ pub struct Facet {
     /// Values ordered by document count, descending.
     pub values: Vec<FacetValue>,
     /// Number of distinct values omitted by the `limit`.
+    #[schemars(schema_with = "count_schema")]
     pub truncated: usize,
 }
 
@@ -148,6 +173,7 @@ pub struct FacetValue {
     /// The value, usable in the `filters` parameter.
     pub value: String,
     /// Number of matching documents carrying this value.
+    #[schemars(schema_with = "count_schema")]
     pub count: u64,
 }
 
@@ -155,6 +181,7 @@ pub struct FacetValue {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FacetToolResult {
     /// Number of documents the counts were computed over.
+    #[schemars(schema_with = "count_schema")]
     pub total: u64,
     /// Available facets, in the canonical display order.
     pub facets: Vec<Facet>,
@@ -192,6 +219,7 @@ pub struct DocumentToolResult {
     pub extracted_from: Option<DocumentRef>,
     /// Number of other messages in this document's email thread.
     /// Call `get_email_thread` to read them.
+    #[schemars(schema_with = "count_schema")]
     pub thread_size: usize,
     /// Deep link to this document in the aum web UI.
     pub url: String,
