@@ -10,16 +10,18 @@
   }: { results: SearchResult[]; multiIndex: boolean; loading?: boolean } = $props();
 </script>
 
-<div class="flex flex-col gap-3">
+<div class="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
   {#if results.length === 0 && !loading}
     <p class="py-12 text-center font-mono text-sm tracking-wide text-muted-foreground">No results found.</p>
   {:else if results.length === 0 && loading}
-    {#each { length: 5 } as _, i}
-      <div class="rounded-md border border-border/70 bg-card p-4 pl-5" style="opacity: {1 - i * 0.15}">
-        <Skeleton class="mb-3 h-4 w-1/3" />
-        <Skeleton class="mb-1.5 h-3 w-full" />
-        <Skeleton class="mb-3 h-3 w-4/5" />
-        <Skeleton class="h-2.5 w-1/2" />
+    {#each { length: 8 } as _, i}
+      <div class="skeleton-delayed py-1.5 pr-3 pl-3.5" style="opacity: {1 - i * 0.1}">
+        <div class="flex items-baseline gap-2 py-0.5">
+          <Skeleton class="h-3.5 w-1/4" />
+          <Skeleton class="h-2.5 w-1/3" />
+          <Skeleton class="ml-auto h-2.5 w-16" />
+        </div>
+        <Skeleton class="my-0.5 h-3 w-3/5" />
       </div>
     {/each}
   {:else}

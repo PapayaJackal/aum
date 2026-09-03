@@ -45,7 +45,7 @@
 
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
-    class="flex shrink-0 items-center gap-1.5 rounded-md border border-primary-foreground/20 bg-primary-foreground/10 px-2.5 py-1.5 text-sm whitespace-nowrap text-primary-foreground transition-colors hover:bg-primary-foreground/20"
+    class="flex shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 py-1.5 text-sm whitespace-nowrap transition-colors hover:bg-accent hover:text-accent-foreground"
   >
     <span class="max-w-[12rem] truncate">{label}</span>
     <ChevronDownIcon class="size-3.5 opacity-60" />

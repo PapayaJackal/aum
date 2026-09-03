@@ -31,7 +31,7 @@
   onclick={toggle}
   title={dark ? "Switch to light" : "Switch to dark"}
   aria-label="Toggle colour scheme"
-  class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-primary-foreground/70 transition-colors hover:bg-primary-foreground/10 hover:text-primary-foreground"
+  class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
 >
   {#if dark}
     <SunIcon class="size-4" />

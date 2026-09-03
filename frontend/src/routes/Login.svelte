@@ -40,12 +40,10 @@
 </script>
 
 <div class="mx-auto mt-24 w-full max-w-sm">
-  <Card.Root class="border-border/70 shadow-[0_1px_0_oklch(1_0_0/0.6)_inset,0_18px_40px_-28px_oklch(0_0_0/0.45)]">
+  <Card.Root class="shadow-lg">
     <Card.Header class="items-center gap-1 text-center">
       <span class="font-display text-5xl leading-none text-primary">&#x0950;</span>
-      <Card.Description class="font-mono text-xs tracking-[0.18em] uppercase"
-        >you know, for grep</Card.Description
-      >
+      <Card.Description class="font-mono text-xs tracking-[0.18em] uppercase">you know, for grep</Card.Description>
     </Card.Header>
 
     <Card.Content>

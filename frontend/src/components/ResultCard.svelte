@@ -1,14 +1,12 @@
 <script lang="ts">
   import type { SearchResult } from "../lib/api";
   import { searchState } from "../lib/searchState.svelte";
-  import { sanitizeHighlight, escapeHtml } from "../lib/highlight";
+  import { sanitizeHighlight } from "../lib/highlight";
   import { mimeAlias } from "../lib/mime";
-  import { Badge } from "$lib/components/ui/badge/index.js";
 
   let { result, multiIndex = false }: { result: SearchResult; multiIndex: boolean } = $props();
 
   let index = $derived(result.index);
-  let safeIndex = $derived(escapeHtml(index));
 
   let parts = $derived(result.display_path.split("/"));
   let filename = $derived(parts[parts.length - 1] || result.display_path);
@@ -66,53 +64,51 @@
   }
 </script>
 
+<!--
+  A line in a catalogue, not a card: two tight rows — path and snippet — with a
+  rule on the left standing in for the selection border.
+-->
 <button
   type="button"
   bind:this={buttonEl}
-  class="group relative block w-full cursor-pointer rounded-md border border-border/70 bg-card p-4 pl-5 text-left font-[inherit] text-inherit shadow-[0_1px_2px_oklch(0_0_0/0.04)] transition-[box-shadow,border-color,transform] duration-150 hover:-translate-y-px hover:shadow-[0_6px_18px_-10px_oklch(0_0_0/0.35)] {isSelected
-    ? 'border-primary/45 bg-accent/35'
-    : ''}"
+  class="group relative block w-full cursor-pointer border-none py-1.5 pr-3 pl-3.5 text-left font-[inherit] text-inherit transition-colors {isSelected
+    ? 'bg-accent/40'
+    : 'bg-transparent hover:bg-muted/60'}"
   onclick={handleClick}
+  title={index + "/" + result.display_path}
 >
-  <!-- Ruled margin, like a card in a catalogue drawer -->
   <span
     aria-hidden="true"
-    class="absolute inset-y-2 left-2 w-px rounded-full transition-colors {isSelected
+    class="absolute inset-y-0 left-0 w-0.5 transition-colors {isSelected
       ? 'bg-primary'
-      : 'bg-border group-hover:bg-primary/45'}"
+      : 'bg-transparent group-hover:bg-primary/40'}"
   ></span>
 
-  <div class="mb-1.5 flex items-baseline justify-between gap-3">
-    <span class="font-display text-[0.975rem] leading-snug font-semibold text-foreground">
+  <div class="flex items-baseline gap-2">
+    <span class="min-w-0 shrink truncate text-sm leading-6 font-medium text-foreground">
       {#if hasPathHighlight}{@html hlFilename}{:else}{filename}{/if}
     </span>
-    {#if dateLabel}
-      <span
-        class="shrink-0 font-mono text-[0.7rem] tabular-nums text-muted-foreground/80"
-        title="Score: {result.score.toFixed(3)}">{dateLabel}</span
-      >
-    {/if}
-  </div>
-
-  <p class="m-0 mb-2.5 text-sm leading-relaxed text-muted-foreground">{@html snippet}</p>
-
-  <div class="flex items-center justify-between gap-2">
-    <span
-      class="min-w-0 overflow-hidden font-mono text-[0.7rem] text-ellipsis whitespace-nowrap text-muted-foreground/75"
-      title={index + "/" + result.display_path}
-    >
-      {#if hasPathHighlight}{@html safeIndex + "/" + hlDirPart + hlFilename}{:else}{index}/{dirPart}{filename}{/if}
+    <span class="min-w-0 flex-1 truncate font-mono text-[0.7rem] text-muted-foreground/70">
+      {#if hasPathHighlight}{@html hlDirPart}{:else}{dirPart}{/if}
     </span>
-    <div class="flex shrink-0 items-center gap-1">
+    <span
+      class="flex shrink-0 items-baseline gap-1.5 font-mono text-[0.7rem] tabular-nums text-muted-foreground/80"
+      title="Score: {result.score.toFixed(3)}"
+    >
       {#if multiIndex && index}
-        <Badge variant="outline" class="border-primary/30 font-mono text-[0.65rem] text-primary">{index}</Badge>
-      {/if}
-      {#if fileSize}
-        <Badge variant="secondary" class="font-mono text-[0.65rem] tabular-nums">{fileSize}</Badge>
+        <span class="text-primary/80">{index}</span>
       {/if}
       {#if fileType}
-        <Badge variant="secondary" class="font-mono text-[0.65rem] tracking-wide uppercase">{fileType}</Badge>
+        <span class="tracking-wide uppercase">{fileType}</span>
       {/if}
-    </div>
+      {#if fileSize}
+        <span>{fileSize}</span>
+      {/if}
+      {#if dateLabel}
+        <span>{dateLabel}</span>
+      {/if}
+    </span>
   </div>
+
+  <p class="m-0 line-clamp-1 text-[0.8rem] leading-5 text-muted-foreground">{@html snippet}</p>
 </button>

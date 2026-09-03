@@ -19,9 +19,17 @@
   import Document from "./Document.svelte";
   import KeyboardHelp from "../components/KeyboardHelp.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Slider } from "$lib/components/ui/slider/index.js";
+  import { Toggle } from "$lib/components/ui/toggle/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
+  import * as Popover from "$lib/components/ui/popover/index.js";
   import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+  import SearchIcon from "@lucide/svelte/icons/search";
+  import Settings2Icon from "@lucide/svelte/icons/settings-2";
   import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
+  import SparklesIcon from "@lucide/svelte/icons/sparkles";
 
   let { header }: { header: Snippet<[() => ReturnType<Snippet>, () => void]> } = $props();
 
@@ -66,19 +74,6 @@
   let loading = $state(false);
   let error = $state("");
 
-  let sliderVisible = $state(false);
-  let sliderHideTimer: ReturnType<typeof setTimeout> | undefined;
-  function showSlider() {
-    clearTimeout(sliderHideTimer);
-    sliderVisible = true;
-  }
-  function hideSlider() {
-    clearTimeout(sliderHideTimer);
-    sliderHideTimer = setTimeout(() => {
-      sliderVisible = false;
-    }, 400);
-  }
-
   function updateSearchUrl() {
     const qs = getSearchQs();
     history.replaceState(null, "", qs ? `#/?${qs}` : "#/");
@@ -108,6 +103,17 @@
   });
 
   let joinedIndex = $derived(searchState.selectedIndices.join(","));
+
+  const SORT_OPTIONS = [
+    { value: "relevance", label: "Best match" },
+    { value: "date:desc", label: "Newest first" },
+    { value: "date:asc", label: "Oldest first" },
+    { value: "size:desc", label: "Largest first" },
+    { value: "size:asc", label: "Smallest first" },
+  ];
+  const PAGE_SIZE_OPTIONS = [20, 50, 100];
+
+  let sortLabel = $derived(SORT_OPTIONS.find((o) => o.value === searchState.sortBy)?.label ?? "Best match");
 
   async function doSearch(page: number = 1, resetFacets = true) {
     if (!searchState.query.trim()) return;
@@ -376,10 +382,11 @@
 
   // --- Vim-style keyboard navigation ---
 
-  // Reset mark index when selected document changes.
+  // Reset mark index and preview scroll when the selected document changes.
   $effect(() => {
     const _ = searchState.selectedDocId;
     currentMarkIndex = -1;
+    previewAsideEl?.scrollTo({ top: 0, behavior: "instant" });
   });
 
   function isEditableActive(): boolean {
@@ -515,67 +522,85 @@
 </svelte:head>
 
 {#snippet searchForm()}
-  <form class="flex-1 flex gap-2 items-center min-w-0" onsubmit={handleSubmit}>
-    <input
+  <form class="flex min-w-0 flex-1 items-center gap-2" onsubmit={handleSubmit}>
+    <Input
       type="search"
-      placeholder="Search documents..."
+      placeholder="Search documents…"
       bind:value={searchState.query}
-      bind:this={searchInputEl}
-      class="min-w-0 flex-1 rounded-md border border-primary-foreground/15 bg-background/95 px-3 py-1.5 text-base text-foreground shadow-inner transition-[box-shadow,border-color] placeholder:text-muted-foreground/70 focus:border-primary-foreground/40 focus:outline-none focus:ring-2 focus:ring-primary-foreground/25"
+      bind:ref={searchInputEl}
+      aria-label="Search documents"
+      class="h-9 min-w-0 flex-1 text-base"
     />
     {#if indices.length > 0}
       <IndexSelector {indices} selectedIndices={searchState.selectedIndices} onchange={handleIndicesChange} />
     {/if}
     {#if hybridEnabled}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="relative shrink-0" onmouseenter={showSlider} onmouseleave={hideSlider}>
-        <label
-          class="flex cursor-pointer items-center gap-1.5 px-2 py-1.5 font-mono text-[0.7rem] tracking-wider text-primary-foreground/80 uppercase select-none hover:text-primary-foreground"
-          title="Combine keyword and semantic search"
+      <div class="flex shrink-0 items-center gap-0.5">
+        <Toggle
+          size="sm"
+          pressed={searchState.searchType === "hybrid"}
+          onPressedChange={(pressed) => {
+            searchState.searchType = pressed ? "hybrid" : "text";
+            handleSearchTypeChange();
+          }}
+          aria-label="Blend keyword and semantic search"
+          title="Blend keyword and semantic search"
+          class="h-9 gap-1.5 px-2.5 font-mono text-[0.7rem] tracking-wider text-muted-foreground uppercase"
         >
-          <input
-            type="checkbox"
-            class="accent-primary-foreground"
-            checked={searchState.searchType === "hybrid"}
-            onchange={(e) => {
-              searchState.searchType = e.currentTarget.checked ? "hybrid" : "text";
-              handleSearchTypeChange();
-            }}
-          />
-          Hybrid
-        </label>
-        {#if searchState.searchType === "hybrid" && sliderVisible}
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
-            class="absolute top-full right-0 z-10 mt-1.5 flex items-center gap-2 rounded-md border border-border bg-popover px-3 py-2 font-mono text-[10px] tracking-wider text-muted-foreground uppercase whitespace-nowrap shadow-lg"
-            onmouseenter={showSlider}
-            onmouseleave={hideSlider}
-          >
-            <span>Keyword</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              class="w-24 accent-primary"
-              bind:value={searchState.semanticRatio}
-              oninput={() => savePrefs()}
-              onchange={() => {
-                if (searchState.searched) doSearch(1);
-              }}
-            />
-            <span>Semantic</span>
-          </div>
+          <SparklesIcon class="size-3.5" />Hybrid
+        </Toggle>
+        {#if searchState.searchType === "hybrid"}
+          <Popover.Root>
+            <Popover.Trigger>
+              {#snippet child({ props })}
+                <Button
+                  {...props}
+                  variant="ghost"
+                  size="icon"
+                  class="size-8 text-muted-foreground"
+                >
+                  <Settings2Icon class="size-4" />
+                  <span class="sr-only">Adjust keyword / semantic balance</span>
+                </Button>
+              {/snippet}
+            </Popover.Trigger>
+            <Popover.Content class="w-64" align="end">
+              <p class="m-0 mb-3 font-mono text-[0.7rem] tracking-[0.16em] uppercase text-muted-foreground">
+                Ranking balance
+              </p>
+              <Slider
+                type="single"
+                min={0}
+                max={1}
+                step={0.05}
+                value={searchState.semanticRatio}
+                onValueChange={(v) => {
+                  searchState.semanticRatio = v;
+                  savePrefs();
+                }}
+                onValueCommit={() => {
+                  if (searchState.searched) doSearch(1);
+                }}
+              />
+              <div
+                class="mt-2 flex justify-between font-mono text-[0.65rem] tracking-wider uppercase text-muted-foreground"
+              >
+                <span>Keyword</span>
+                <span>Semantic</span>
+              </div>
+            </Popover.Content>
+          </Popover.Root>
         {/if}
       </div>
     {/if}
-    <button
+    <Button
       type="submit"
       disabled={loading || !searchState.query.trim()}
-      class="shrink-0 rounded-md bg-background px-4 py-1.5 text-sm font-medium text-primary transition-colors hover:enabled:bg-background/85 disabled:cursor-not-allowed disabled:opacity-50"
+      class="h-9 shrink-0 gap-1.5"
     >
-      {loading ? "…" : "Search"}
-    </button>
+      <SearchIcon class="size-4" />
+      <span class="hidden sm:inline">{loading ? "Searching…" : "Search"}</span>
+    </Button>
   </form>
 {/snippet}
 
@@ -583,7 +608,12 @@
 
 <main class="px-4">
   {#if error}
-    <div class="my-3 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert">{error}</div>
+    <div
+      class="my-3 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+      role="alert"
+    >
+      {error}
+    </div>
   {/if}
 
   {#if searchState.searched}
@@ -609,7 +639,9 @@
         class="flex-1 min-w-0 {previewFullscreen ? 'hidden' : ''}"
         style={sidebarOpen && !previewFullscreen ? `flex: 0 0 ${resultsSplit}%; max-width: ${resultsSplit}%;` : ""}
       >
-        <div class="sticky top-10 z-10 mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-background/95 py-2 backdrop-blur-sm">
+        <div
+          class="sticky top-10 z-10 mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/95 py-1.5 backdrop-blur-sm"
+        >
           <div class="flex items-center gap-2">
             {#if Object.keys(facets).length > 0}
               <Button
@@ -628,17 +660,21 @@
             </p>
           </div>
           <div class="flex items-center gap-1 flex-wrap">
-            <select
-              class="cursor-pointer rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground transition-colors hover:border-primary/40"
-              bind:value={searchState.sortBy}
-              onchange={handleSortChange}
+            <Select.Root
+              type="single"
+              value={searchState.sortBy}
+              onValueChange={(v) => {
+                searchState.sortBy = v;
+                handleSortChange();
+              }}
             >
-              <option value="relevance">Best match</option>
-              <option value="date:desc">Newest first</option>
-              <option value="date:asc">Oldest first</option>
-              <option value="size:desc">Largest first</option>
-              <option value="size:asc">Smallest first</option>
-            </select>
+              <Select.Trigger size="sm" class="mr-1 bg-card" aria-label="Sort results">{sortLabel}</Select.Trigger>
+              <Select.Content>
+                {#each SORT_OPTIONS as opt}
+                  <Select.Item value={opt.value} label={opt.label} />
+                {/each}
+              </Select.Content>
+            </Select.Root>
             <Button
               variant="outline"
               size="sm"
@@ -673,15 +709,23 @@
               Next<ChevronRightIcon class="size-3.5" />
             </Button>
 
-            <select
-              class="ml-2 cursor-pointer rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground transition-colors hover:border-primary/40"
-              bind:value={searchState.pageSize}
-              onchange={handlePageSizeChange}
+            <Select.Root
+              type="single"
+              value={String(searchState.pageSize)}
+              onValueChange={(v) => {
+                searchState.pageSize = Number(v);
+                handlePageSizeChange();
+              }}
             >
-              <option value={20}>20 / page</option>
-              <option value={50}>50 / page</option>
-              <option value={100}>100 / page</option>
-            </select>
+              <Select.Trigger size="sm" class="ml-1 bg-card font-mono tabular-nums" aria-label="Results per page"
+                >{searchState.pageSize} / page</Select.Trigger
+              >
+              <Select.Content>
+                {#each PAGE_SIZE_OPTIONS as n}
+                  <Select.Item value={String(n)} label="{n} / page" />
+                {/each}
+              </Select.Content>
+            </Select.Root>
           </div>
         </div>
         <ResultList results={searchState.results} {multiIndex} {loading} />
@@ -703,17 +747,17 @@
           bind:this={previewAsideEl}
           class="sticky top-12 max-h-[calc(100vh-3.5rem)] min-w-0 flex-1 self-start overflow-y-auto rounded-md border border-border/70 bg-card shadow-[0_10px_30px_-24px_oklch(0_0_0/0.5)]"
         >
-          {#key searchState.selectedDocId}
-            <Document
-              docId={searchState.selectedDocId}
-              index={searchState.selectedDocIndex}
-              highlightQuery={searchState.submittedQuery}
-              onClose={closeSidebar}
-              onNavigateDoc={navigateDoc}
-              onToggleFullscreen={() => (previewFullscreen = !previewFullscreen)}
-              {previewFullscreen}
-            />
-          {/key}
+          <!-- Not keyed on the doc id: the panel keeps the previous document
+               on screen while the next one loads, instead of blanking. -->
+          <Document
+            docId={searchState.selectedDocId}
+            index={searchState.selectedDocIndex}
+            highlightQuery={searchState.submittedQuery}
+            onClose={closeSidebar}
+            onNavigateDoc={navigateDoc}
+            onToggleFullscreen={() => (previewFullscreen = !previewFullscreen)}
+            {previewFullscreen}
+          />
         </aside>
       {/if}
     </div>

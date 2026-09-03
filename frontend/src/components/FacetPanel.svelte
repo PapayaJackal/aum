@@ -1,5 +1,7 @@
 <script lang="ts">
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import { Slider } from "$lib/components/ui/slider/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let {
     facets = {},
@@ -80,54 +82,34 @@
   <div class="mb-3 flex items-center justify-between">
     <h3 class="m-0 font-mono text-[0.7rem] tracking-[0.18em] uppercase text-muted-foreground">Filters</h3>
     {#if Object.keys(activeFacets).length > 0}
-      <button
-        class="cursor-pointer border-none bg-transparent p-0 text-xs text-primary hover:underline"
-        onclick={clearAll}>Clear</button
-      >
+      <Button variant="link" size="sm" class="h-auto p-0 text-xs" onclick={clearAll}>Clear</Button>
     {/if}
   </div>
 
   {#each Object.entries(facets) as [key, values]}
-    <div class="mb-4 last:mb-0 [&:not(:first-of-type)]:border-t [&:not(:first-of-type)]:border-border/50 [&:not(:first-of-type)]:pt-3">
+    <div
+      class="mb-4 last:mb-0 [&:not(:first-of-type)]:border-t [&:not(:first-of-type)]:border-border/50 [&:not(:first-of-type)]:pt-3"
+    >
       <h4 class="m-0 mb-2 text-sm font-medium text-foreground/80 capitalize">{key}</h4>
       {#if dateFacetSet.has(key)}
         {@const dr = dateRange(key)}
-        <div class="py-1">
-          <div class="mb-1 flex items-center justify-center gap-1.5 font-mono text-sm tabular-nums text-foreground/80">
+        <div class="pt-1 pb-2">
+          <div
+            class="mb-2 flex items-baseline justify-center gap-1.5 font-mono text-sm tabular-nums text-foreground/80"
+          >
             <span>{dr.lo}</span>
             <span class="text-muted-foreground">&ndash;</span>
             <span>{dr.hi}</span>
           </div>
-          <div class="slider-track">
-            <input
-              type="range"
-              min={dr.min}
-              max={dr.max}
-              value={dr.lo}
-              oninput={(e) => {
-                const v = Math.min(Number((e.target as HTMLInputElement).value), dr.hi);
-                updateDateDraft(key, v, dr.hi);
-              }}
-              onchange={() => {
-                const d = dateDrafts[key];
-                if (d) commitDateRange(key, d.lo, d.hi, dr.min, dr.max);
-              }}
-            />
-            <input
-              type="range"
-              min={dr.min}
-              max={dr.max}
-              value={dr.hi}
-              oninput={(e) => {
-                const v = Math.max(Number((e.target as HTMLInputElement).value), dr.lo);
-                updateDateDraft(key, dr.lo, v);
-              }}
-              onchange={() => {
-                const d = dateDrafts[key];
-                if (d) commitDateRange(key, d.lo, d.hi, dr.min, dr.max);
-              }}
-            />
-          </div>
+          <Slider
+            type="multiple"
+            min={dr.min}
+            max={dr.max}
+            step={1}
+            value={[dr.lo, dr.hi]}
+            onValueChange={(v) => updateDateDraft(key, v[0], v[1])}
+            onValueCommit={(v) => commitDateRange(key, v[0], v[1], dr.min, dr.max)}
+          />
         </div>
       {:else}
         {#each values as value}
@@ -135,11 +117,7 @@
           <label
             class="-mx-1.5 flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm transition-colors hover:bg-muted/70"
           >
-            <Checkbox
-              checked={isActive(key, value)}
-              onCheckedChange={() => toggleFacet(key, value)}
-              class="shrink-0"
-            />
+            <Checkbox checked={isActive(key, value)} onCheckedChange={() => toggleFacet(key, value)} class="shrink-0" />
             <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" title={label}>{label}</span>
           </label>
         {/each}

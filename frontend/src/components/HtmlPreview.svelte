@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fetchPreviewBlob } from "../lib/api";
   import { sanitizeHtmlForPreview } from "../lib/sanitize";
+  import PreviewStatus from "./PreviewStatus.svelte";
 
   let {
     docId,
@@ -39,12 +40,13 @@
   }
 
   $effect(() => {
+    const id = docId;
+    const idx = index;
     loading = true;
     error = "";
-    sanitizedHtml = null;
     let cancelled = false;
 
-    fetchPreviewBlob(docId, index)
+    fetchPreviewBlob(id, idx)
       .then(async (blob) => {
         if (cancelled) return;
         const text = await blob.text();
@@ -52,7 +54,10 @@
         sanitizedHtml = sanitizeHtmlForPreview(text);
       })
       .catch((err) => {
-        if (!cancelled) error = err instanceof Error ? err.message : "Failed to load preview";
+        if (!cancelled) {
+          error = err instanceof Error ? err.message : "Failed to load preview";
+          sanitizedHtml = null;
+        }
       })
       .finally(() => {
         if (!cancelled) loading = false;
@@ -66,18 +71,20 @@
   });
 </script>
 
-{#if loading}
-  <div class="flex items-center justify-center py-12 text-gray-400 text-sm">Loading preview...</div>
-{:else if error}
-  <div class="bg-red-50 text-red-600 p-3 rounded text-sm">{error}</div>
-{:else if sanitizedHtml}
-  <iframe
-    bind:this={iframeEl}
-    srcdoc={sanitizedHtml}
-    sandbox="allow-same-origin"
-    class="w-full border-none rounded bg-white"
-    style="min-height: 200px; overflow: hidden;"
-    title="Document preview"
-    onload={handleLoad}
-  ></iframe>
+<PreviewStatus {loading} {error} label="preview" hasContent={!!sanitizedHtml} />
+
+{#if sanitizedHtml}
+  <!-- The document brings its own styling, so the frame keeps a white page
+       ground in both themes and supplies only the surrounding border. -->
+  <div class="overflow-hidden rounded-md border border-border/70 bg-white">
+    <iframe
+      bind:this={iframeEl}
+      srcdoc={sanitizedHtml}
+      sandbox="allow-same-origin"
+      class="block w-full border-none"
+      style="min-height: 200px; overflow: hidden;"
+      title="Document preview"
+      onload={handleLoad}
+    ></iframe>
+  </div>
 {/if}

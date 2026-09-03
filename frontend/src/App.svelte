@@ -6,6 +6,8 @@
   import Invite from "./routes/Invite.svelte";
   import Search from "./routes/Search.svelte";
   import ThemeToggle from "./lib/components/app/ThemeToggle.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import LogOutIcon from "@lucide/svelte/icons/log-out";
 
   let hash = $state(window.location.hash || "#/");
   let publicMode = $state(false);
@@ -43,17 +45,11 @@
 <svelte:window onhashchange={onHashChange} />
 
 {#snippet wordmark(onclick?: () => void)}
-  <a
-    href="#/"
-    {onclick}
-    class="group flex shrink-0 items-baseline gap-2 no-underline"
-    aria-label="aum — home"
-  >
-    <span class="font-display text-2xl leading-none text-primary-foreground transition-transform group-hover:-rotate-6"
+  <a href="#/" {onclick} class="group flex shrink-0 items-baseline gap-2 no-underline" aria-label="aum — home">
+    <span class="font-display text-2xl leading-none text-foreground transition-transform group-hover:-rotate-6"
       >&#x0950;</span
     >
-    <span
-      class="hidden font-display text-sm tracking-[0.28em] text-primary-foreground/55 uppercase sm:inline"
+    <span class="hidden font-display text-sm tracking-[0.28em] text-muted-foreground uppercase sm:inline"
       >aum</span
     >
   </a>
@@ -61,7 +57,7 @@
 
 {#snippet chrome(inner: () => ReturnType<typeof wordmark>)}
   <header
-    class="sticky top-0 z-50 flex items-center gap-3 border-b border-primary/25 bg-primary px-4 py-2 text-primary-foreground shadow-[0_1px_0_oklch(1_0_0/0.06)_inset,0_6px_20px_-12px_oklch(0_0_0/0.6)]"
+    class="sticky top-0 z-50 flex items-center gap-3 border-b bg-masthead/95 px-4 py-2 text-masthead-foreground backdrop-blur supports-[backdrop-filter]:bg-masthead/80"
   >
     {@render inner()}
   </header>
@@ -93,11 +89,15 @@
         {@render form()}
         <ThemeToggle />
         {#if !publicMode}
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onclick={logout}
-            class="shrink-0 rounded-md border border-primary-foreground/25 px-3 py-1 text-sm text-primary-foreground/75 transition-colors hover:border-primary-foreground/60 hover:text-primary-foreground"
-            >Logout</button
+            class="shrink-0"
           >
+            <LogOutIcon class="size-3.5" />
+            <span class="hidden sm:inline">Logout</span>
+          </Button>
         {/if}
       {/snippet}
       {@render chrome(searchBar)}
