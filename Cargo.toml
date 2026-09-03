@@ -70,3 +70,5 @@ wiremock = "0.6"
 rust-embed = "8.11.0"
 indexmap = { version = "2.14.0", features = ["serde"] }
 rpassword = "7.4.0"
+rmcp = { version = "3.2.0", default-features = false }
+schemars = "1"

@@ -372,6 +372,17 @@ pub struct ServerConfig {
     /// List of allowed CORS origins (e.g. `["https://app.example.com"]`).
     #[config_default = "[]"]
     pub cors_origins: Vec<String>,
+    #[allow(clippy::doc_markdown)]
+    /// Enable the MCP endpoint at `/mcp` so agents can search the corpus.
+    #[config_default = "true"]
+    pub enable_mcp: bool,
+    /// Extra `Host` header values accepted by the MCP endpoint.
+    ///
+    /// MCP servers reject unknown `Host` values to block DNS-rebinding attacks.
+    /// Loopback addresses and the host of `base_url` are always allowed; list
+    /// any additional hostnames the server is reached by here.
+    #[config_default = "[]"]
+    pub mcp_allowed_hosts: Vec<String>,
 }
 
 /// Configuration for authentication and access control.

@@ -26,6 +26,8 @@ document search platform, look at
 - Resizable split-pane search UI with fullscreen preview mode
 - Vim-style keyboard navigation (`j`/`k` to move, `o` to open, `?`
   for the shortcut reference)
+- MCP endpoint so coding agents can search the corpus with the same
+  credentials and per-index permissions as human users
 - Multi-index support with per-user access control
 - OCR support via Tesseract (through Tika)
 - Multi-instance Tika and embedder pools with per-instance concurrency
@@ -179,6 +181,10 @@ Key settings:
 - `AUM_LOG_LEVEL` -- Log level (default: `INFO`)
 - `AUM_LOG_FORMAT` -- `json` or `console` (default: `json`)
 - `AUM_PORT` -- Server port (default: `8000`)
+- `AUM_SERVER__ENABLE_MCP` -- Serve the MCP endpoint at `/mcp` (default:
+  `true`)
+- `AUM_SERVER__MCP_ALLOWED_HOSTS` -- Extra `Host` values the MCP endpoint
+  accepts, beyond loopback and the host of `server.base_url`
 
 ## CLI reference
 
@@ -209,6 +215,45 @@ searching.
 - `aum config` -- Print the resolved configuration
 
 Run any command with `--help` for full usage details.
+
+## Agent access (MCP)
+
+aum speaks the [Model Context Protocol](https://modelcontextprotocol.io) at
+`/mcp`, over streamable HTTP. Agents authenticate with the same session
+tokens as the REST API and see exactly the indices their user was granted,
+so an agent is never more privileged than the person it acts for.
+
+Issue a long-lived token, then point the agent at the server:
+
+```sh
+aum user create researchbot --generate-password
+aum user grant researchbot my-index
+aum user token researchbot --days 90
+```
+
+```sh
+claude mcp add --transport http aum https://search.example.com/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+In public mode the `Authorization` header can be omitted entirely.
+
+The server exposes six read-only tools:
+
+| Tool | Purpose |
+| :- | :- |
+| `list_indices` | Which indices the token can read, and which support hybrid search |
+| `search_documents` | Ranked snippets, with facet filters, sorting, and paging |
+| `get_document` | Full extracted text, metadata, attachments, and parent container |
+| `get_email_thread` | Sibling messages of an email, oldest first |
+| `list_facets` | Exact facet values (file type, author, year, participants) for filtering |
+| `fetch_document_file` | The original file — images inline, everything else as a download link |
+
+Because MCP servers are a DNS-rebinding target, the endpoint validates the
+`Host` header. Loopback and the host of `server.base_url` are accepted
+automatically; if the server is reached by any other name, list it in
+`server.mcp_allowed_hosts`. Set `server.enable_mcp = false` to turn the
+endpoint off entirely.
 
 ## Scaling extraction
 

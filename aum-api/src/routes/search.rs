@@ -48,7 +48,7 @@ const HTML_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; img-src d
 const BINARY_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'";
 
 /// Extract a metadata value that may be stored as a string or a single-element array.
-fn meta_str(meta: &HashMap<String, serde_json::Value>, key: &str) -> String {
+pub(crate) fn meta_str(meta: &HashMap<String, serde_json::Value>, key: &str) -> String {
     meta.get(key)
         .and_then(|v| {
             v.as_str().map(String::from).or_else(|| {
@@ -85,7 +85,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Resolve the index list from query params or the server default.
-fn resolve_indices(index_param: &str, default: &str) -> Vec<String> {
+pub(crate) fn resolve_indices(index_param: &str, default: &str) -> Vec<String> {
     let raw = if index_param.is_empty() {
         default
     } else {
@@ -99,7 +99,7 @@ fn resolve_indices(index_param: &str, default: &str) -> Vec<String> {
 }
 
 /// Resolve a single index name from query params or the server default.
-fn resolve_index<'a>(index_param: &'a str, default: &'a str) -> &'a str {
+pub(crate) fn resolve_index<'a>(index_param: &'a str, default: &'a str) -> &'a str {
     if index_param.is_empty() {
         default
     } else {
@@ -108,7 +108,7 @@ fn resolve_index<'a>(index_param: &'a str, default: &'a str) -> &'a str {
 }
 
 /// Check that a user has access to an index. In public mode (user is None), access is allowed.
-async fn check_index_access(
+pub(crate) async fn check_index_access(
     state: &AppState,
     user: Option<&aum_core::auth::User>,
     index: &str,
@@ -124,7 +124,7 @@ async fn check_index_access(
 }
 
 /// Parse a sort string like "date:asc" or "size:desc" into a [`SortSpec`].
-fn parse_sort(sort: &str) -> Result<SortSpec, ApiError> {
+pub(crate) fn parse_sort(sort: &str) -> Result<SortSpec, ApiError> {
     let (field_name, dir) = sort
         .split_once(':')
         .ok_or_else(|| ApiError::BadRequest(format!("Invalid sort format: '{sort}'")))?;
@@ -153,7 +153,9 @@ fn parse_sort(sort: &str) -> Result<SortSpec, ApiError> {
 }
 
 /// Filter metadata to exclude internal/hidden keys.
-fn clean_metadata(meta: &HashMap<String, serde_json::Value>) -> HashMap<String, serde_json::Value> {
+pub(crate) fn clean_metadata(
+    meta: &HashMap<String, serde_json::Value>,
+) -> HashMap<String, serde_json::Value> {
     meta.iter()
         .filter(|(k, _)| {
             !EXCLUDED_META_PREFIXES
@@ -302,7 +304,7 @@ fn sort_facet_values(counts: &HashMap<String, u64>) -> Vec<String> {
 ///
 /// Returns an `IndexMap` with facets in the canonical display order defined by
 /// [`FACET_ORDER`]. Any unknown facets are appended after the known ones.
-fn simplify_facets(
+pub(crate) fn simplify_facets(
     facets: &HashMap<String, HashMap<String, u64>>,
 ) -> IndexMap<String, Vec<String>> {
     let mut map = IndexMap::with_capacity(facets.len());
@@ -323,7 +325,7 @@ fn simplify_facets(
 }
 
 /// Embed a query string using the appropriate model for the given indices.
-async fn embed_query(
+pub(crate) async fn embed_query(
     state: &AppState,
     indices: &[String],
     query: &str,
@@ -505,7 +507,7 @@ pub async fn get_document(
 const MAX_THREAD_SIZE: usize = 100;
 
 /// Build the email thread for a document if it has email Message-ID metadata.
-async fn build_thread(
+pub(crate) async fn build_thread(
     state: &AppState,
     index: &str,
     doc_id: &str,
@@ -604,7 +606,7 @@ async fn build_thread(
 ///
 /// Shared preamble for download and preview handlers: resolves the index,
 /// checks permissions, fetches the document, and validates the file path.
-async fn fetch_document_file(
+pub(crate) async fn fetch_document_file(
     state: &AppState,
     user: Option<&aum_core::auth::User>,
     doc_id: &str,
@@ -622,7 +624,7 @@ async fn fetch_document_file(
 }
 
 /// Validate a `source_path`: reject symlinks and ensure it's a regular file.
-fn safe_file_path(source_path: &str) -> Result<std::path::PathBuf, ApiError> {
+pub(crate) fn safe_file_path(source_path: &str) -> Result<std::path::PathBuf, ApiError> {
     let path = Path::new(source_path);
     let meta = path
         .symlink_metadata()

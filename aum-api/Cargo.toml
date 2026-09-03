@@ -34,6 +34,8 @@ anyhow = { workspace = true }
 tokio-util.workspace = true
 rust-embed = { workspace = true, optional = true }
 indexmap = { workspace = true }
+rmcp = { workspace = true, features = ["server", "macros", "schemars", "transport-streamable-http-server", "tower"] }
+schemars = { workspace = true }
 
 [features]
 bundle-frontend = ["dep:rust-embed"]

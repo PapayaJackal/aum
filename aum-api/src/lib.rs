@@ -9,6 +9,7 @@ pub mod dto;
 pub mod email_preview;
 pub mod error;
 pub mod extractors;
+pub mod mcp;
 pub mod routes;
 pub mod state;
 
@@ -112,6 +113,11 @@ pub fn build_router(state: &AppState) -> Router {
             axum::http::header::X_CONTENT_TYPE_OPTIONS,
             axum::http::HeaderValue::from_static("nosniff"),
         ));
+
+    // MCP endpoint for agents
+    if state.config.server.enable_mcp {
+        app = mcp::attach(app, state);
+    }
 
     // Request tracing
     app = app.layer(TraceLayer::new_for_http());
