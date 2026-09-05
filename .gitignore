@@ -8,3 +8,8 @@ dist/
 node_modules/
 testdata/
 result
+
+# Browser test artifacts
+frontend/tests/test-results/
+frontend/test-results/
+frontend/playwright-report/

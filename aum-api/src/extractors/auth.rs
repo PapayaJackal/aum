@@ -16,7 +16,11 @@ fn extract_bearer_token(parts: &Parts) -> Option<&str> {
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())?;
     // RFC 7235: auth-scheme is case-insensitive.
-    if value.len() > 7 && value[..7].eq_ignore_ascii_case("Bearer ") {
+    if value.len() > 7
+        && value
+            .get(..7)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("Bearer "))
+    {
         Some(&value[7..])
     } else {
         None
@@ -48,6 +52,23 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             .ok_or_else(|| ApiError::Unauthorized("Invalid or expired session".into()))?;
 
         Ok(Self(user))
+    }
+}
+
+/// A validated session token, used to revoke only the requesting session.
+pub struct AuthenticatedSession(pub String);
+
+impl FromRequestParts<AppState> for AuthenticatedSession {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        AuthenticatedUser::from_request_parts(parts, state).await?;
+        let token = extract_bearer_token(parts)
+            .ok_or_else(|| ApiError::Unauthorized("Missing authorization header".into()))?;
+        Ok(Self(token.to_owned()))
     }
 }
 

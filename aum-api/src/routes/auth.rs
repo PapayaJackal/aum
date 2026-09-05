@@ -12,7 +12,7 @@ use crate::dto::{
     SessionTokenResponse,
 };
 use crate::error::ApiError;
-use crate::extractors::auth::AuthenticatedUser;
+use crate::extractors::auth::AuthenticatedSession;
 use crate::state::AppState;
 
 /// Build the auth router.
@@ -71,7 +71,8 @@ pub async fn login(
 ///
 /// # Errors
 ///
-/// Returns 401 if the session token is missing or invalid.
+/// Returns 401 if the session token is missing or invalid, or 500 if
+/// revoking the session fails.
 #[utoipa::path(
     post,
     path = "/api/auth/logout",
@@ -80,13 +81,9 @@ pub async fn login(
 )]
 pub async fn logout(
     State(state): State<AppState>,
-    auth: AuthenticatedUser,
+    AuthenticatedSession(token): AuthenticatedSession,
 ) -> Result<axum::http::StatusCode, ApiError> {
-    // The extractor already validated the session; we need to extract the raw
-    // token again to delete it.  Re-read from the request isn't available here,
-    // so we delete all sessions for the user. A per-token delete would require
-    // passing the token through; for now, single-session logout via user ID.
-    let _ = state.auth.delete_user_sessions(auth.0.id).await;
+    state.auth.delete_session(&token).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 

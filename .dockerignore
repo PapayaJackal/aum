@@ -10,3 +10,7 @@ frontend/dist/
 data/
 testdata/
 *.md
+
+frontend/tests/
+frontend/test-results/
+frontend/playwright-report/
