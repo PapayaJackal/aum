@@ -21,7 +21,7 @@
 
         inherit (pkgs) lib;
 
-        # Rust ≥1.85 is required by edition 2024.
+        # Rust ≥1.91 is required (edition 2024, and str::floor_char_boundary).
         rustToolchain = pkgs.rust-bin.stable.latest.default;
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;

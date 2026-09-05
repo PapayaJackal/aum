@@ -50,7 +50,7 @@ RUN apk add --no-cache ca-certificates
 
 COPY --from=rust-builder /app/target/release/aum /usr/local/bin/aum
 
-ENV AUM_DATA_DIR=/data
+ENV AUM_DATA__DIR=/data
 VOLUME ["/data"]
 EXPOSE 8000
 
