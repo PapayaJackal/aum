@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { login, getProviders } from "../lib/api";
+  import { login } from "../lib/api";
   import { setAuth } from "../lib/auth";
-  import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
@@ -11,16 +10,6 @@
   let password = $state("");
   let error = $state("");
   let loading = $state(false);
-
-  onMount(() => {
-    getProviders()
-      .then((res) => {
-        if (res.public_mode) {
-          window.location.hash = "#/";
-        }
-      })
-      .catch(() => {});
-  });
 
   async function handleSubmit(e: Event) {
     e.preventDefault();
