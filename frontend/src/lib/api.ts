@@ -1,4 +1,4 @@
-import { getToken, setAuth, clearAuth, isPublicMode } from "./auth";
+import { getToken, clearAuth, isPublicMode } from "./auth";
 
 const BASE = "/api";
 
@@ -14,7 +14,7 @@ async function _authFetch(url: string, options: RequestInit = {}): Promise<Respo
 
   const res = await fetch(url, { ...options, headers });
 
-  if (res.status === 401 && !isPublicMode()) {
+  if (res.status === 401 && !isPublicMode() && !url.endsWith("/auth/logout")) {
     clearAuth();
     window.location.hash = "#/login";
     throw new Error("Unauthorized");
@@ -49,6 +49,15 @@ export function login(username: string, password: string): Promise<SessionTokenR
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
+}
+
+export async function logout(): Promise<void> {
+  const res = await _authFetch(`${BASE}/auth/logout`, { method: "POST" });
+  // An expired or already revoked session is also safely logged out.
+  if (res.status !== 401 && !res.ok) {
+    throw new Error("Could not sign out. Please try again.");
+  }
+  clearAuth();
 }
 
 export interface ProvidersResponse {
@@ -116,6 +125,7 @@ export function search(
   filters: Record<string, string[]> = {},
   semanticRatio?: number,
   sort?: string,
+  signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q: query, type, limit: String(limit), offset: String(offset) });
   if (index) params.set("index", index);
@@ -128,7 +138,7 @@ export function search(
   if (sort) {
     params.set("sort", sort);
   }
-  return request(`/search?${params}`);
+  return request(`/search?${params}`, { signal });
 }
 
 // Documents

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { onMount, untrack } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { search, listIndices, type IndexInfo } from "../lib/api";
   import { mimeAlias } from "../lib/mime";
   import {
@@ -115,8 +115,15 @@
 
   let sortLabel = $derived(SORT_OPTIONS.find((o) => o.value === searchState.sortBy)?.label ?? "Best match");
 
+  let searchController: AbortController | undefined;
+  onDestroy(() => searchController?.abort());
+
   async function doSearch(page: number = 1, resetFacets = true) {
     if (!searchState.query.trim()) return;
+    searchController?.abort();
+    const controller = new AbortController();
+    searchController = controller;
+    const query = searchState.query;
     loading = true;
     error = "";
     searchState.searched = true;
@@ -138,28 +145,36 @@
         activeFilters,
         searchState.searchType === "hybrid" ? searchState.semanticRatio : undefined,
         searchState.sortBy !== "relevance" ? searchState.sortBy : undefined,
+        controller.signal,
       );
+      if (controller.signal.aborted) return;
       searchState.results = res.results;
       searchState.total = res.total;
       if (res.facets !== null) {
         searchState.facets = res.facets;
         if (resetFacets || Object.keys(searchState.baselineFacets).length === 0) {
           searchState.baselineFacets = res.facets;
-          saveBaselineFacets(searchState.query, joinedIndex);
+          saveBaselineFacets(query, joinedIndex);
         }
       }
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       error = err.message || "Search failed";
       searchState.results = [];
       searchState.total = 0;
     } finally {
-      loading = false;
-      updateSearchUrl();
-      window.scrollTo({ top: 0 });
+      if (!controller.signal.aborted) {
+        loading = false;
+        updateSearchUrl();
+        window.scrollTo({ top: 0 });
+      }
     }
   }
 
   function clearSearch() {
+    searchController?.abort();
+    loading = false;
+    error = "";
     searchState.query = "";
     searchState.submittedQuery = "";
     searchState.results = [];

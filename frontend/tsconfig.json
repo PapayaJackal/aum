@@ -10,6 +10,7 @@
     "moduleDetection": "force",
     "noEmit": true,
     "strict": true,
+    "skipLibCheck": true,
     "verbatimModuleSyntax": true,
     "baseUrl": ".",
     "paths": {

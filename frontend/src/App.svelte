@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { isAuthenticated, clearAuth, isPublicMode, setPublicMode } from "./lib/auth";
-  import { getProviders } from "./lib/api";
+  import { isAuthenticated, setPublicMode } from "./lib/auth";
+  import { getProviders, logout as revokeSession } from "./lib/api";
   import Login from "./routes/Login.svelte";
   import Invite from "./routes/Invite.svelte";
   import Search from "./routes/Search.svelte";
@@ -36,9 +36,20 @@
     }
   });
 
-  function logout() {
-    clearAuth();
-    window.location.hash = "#/login";
+  let signingOut = $state(false);
+  let logoutError = $state("");
+
+  async function logout() {
+    signingOut = true;
+    logoutError = "";
+    try {
+      await revokeSession();
+      window.location.hash = "#/login";
+    } catch (err) {
+      logoutError = err instanceof Error ? err.message : "Could not sign out. Please try again.";
+    } finally {
+      signingOut = false;
+    }
   }
 </script>
 
@@ -82,6 +93,9 @@
   {@render chrome(loginBar)}
   <main class="px-4"><Login /></main>
 {:else}
+  {#if logoutError}
+    <p role="alert" class="px-4 py-2 text-sm text-destructive">{logoutError}</p>
+  {/if}
   <Search>
     {#snippet header(form, clearSearch)}
       {#snippet searchBar()}
@@ -93,6 +107,7 @@
             variant="outline"
             size="sm"
             onclick={logout}
+            disabled={signingOut}
             class="shrink-0"
           >
             <LogOutIcon class="size-3.5" />

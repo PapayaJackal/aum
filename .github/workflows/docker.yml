@@ -1,6 +1,7 @@
-name: Build and push container image
+name: Release checks and container image
 
 on:
+  pull_request:
   push:
     branches: [main]
     tags: ["v*"]
@@ -9,8 +10,40 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+permissions:
+  contents: read
+
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            frontend/tests/package-lock.json
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable test --workspace --locked
+      - run: cargo +stable test -p aum-core --features meilisearch --locked
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run check
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: npm ci
+        working-directory: frontend/tests
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend/tests
+      - run: npm test
+        working-directory: frontend
+
   build-and-push:
+    needs: checks
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
