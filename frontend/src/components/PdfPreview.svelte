@@ -66,11 +66,10 @@
           data: arrayBuffer,
           disableAutoFetch: true,
           disableStream: true,
-          isEvalSupported: false,
         }).promise;
 
         if (cancelled) {
-          pdf.destroy();
+          void pdf.loadingTask.destroy();
           return;
         }
 
@@ -158,7 +157,7 @@
       observer = null;
     }
     if (pdfDoc) {
-      pdfDoc.destroy();
+      void pdfDoc.loadingTask.destroy();
       pdfDoc = null;
     }
   }
