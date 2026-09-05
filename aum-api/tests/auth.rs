@@ -22,7 +22,8 @@ async fn login_logout_revokes_only_current_session() -> anyhow::Result<()> {
     config.data.dir = dir.path().to_owned();
     let pool = aum_core::bootstrap_db(&config).await;
     let auth = AuthService::new(pool.clone(), &config.auth);
-    let user = auth.create_user("reader", "Test1234!", false).await?;
+    let password = aum_core::auth::password::generate_password(24);
+    let user = auth.create_user("reader", &password, false).await?;
     let other_token = auth.create_session(&user).await?;
     let state = AppState {
         backend: Arc::new(AumBackend::from_config(&config)?),
@@ -38,7 +39,7 @@ async fn login_logout_revokes_only_current_session() -> anyhow::Result<()> {
                 .header("content-type", "application/json")
                 .extension(ConnectInfo("127.0.0.1:12345".parse::<SocketAddr>()?))
                 .body(Body::from(
-                    r#"{"username":"reader","password":"Test1234!"}"#,
+                    serde_json::json!({ "username": "reader", "password": password }).to_string(),
                 ))?,
         )
         .await?;
