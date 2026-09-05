@@ -2,6 +2,11 @@
   import { onMount } from "svelte";
   import { validateInvite, redeemInvite } from "../lib/api";
   import { setAuth } from "../lib/auth";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Label } from "$lib/components/ui/label/index.js";
+  import { Skeleton } from "$lib/components/ui/skeleton/index.js";
+  import * as Card from "$lib/components/ui/card/index.js";
 
   let token = $state("");
   let username = $state("");
@@ -58,53 +63,60 @@
   }
 </script>
 
-<div class="max-w-sm mx-auto mt-16 p-8 bg-white rounded-lg shadow-md">
-  <h1 class="m-0 mb-1 text-center text-(--color-brand) text-5xl">&#x0950;</h1>
-  <p class="text-center text-gray-400 mt-0 mb-6">set up your account</p>
+<div class="mx-auto mt-24 w-full max-w-sm">
+  <Card.Root class="shadow-lg">
+    <Card.Header class="items-center gap-1 text-center">
+      <span class="font-display text-5xl leading-none text-primary">&#x0950;</span>
+      <Card.Description class="font-mono text-xs tracking-[0.18em] uppercase">set up your account</Card.Description>
+    </Card.Header>
 
-  {#if error}
-    <div class="bg-red-50 text-red-600 p-2 rounded text-sm mb-4">{error}</div>
-  {/if}
+    <Card.Content>
+      {#if error}
+        <div
+          class="mb-4 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
+          {error}
+        </div>
+      {/if}
 
-  {#if valid === null}
-    <p class="text-center text-gray-500">Validating invitation...</p>
-  {:else if valid === false}
-    <p class="text-center text-gray-500">This invitation link is invalid or has expired.</p>
-  {:else}
-    <p class="text-sm text-gray-600 mb-4">
-      Welcome, <strong>{username}</strong>. Set a password to complete your account.
-    </p>
+      {#if valid === null}
+        <div class="flex flex-col gap-4" aria-busy="true">
+          <Skeleton class="h-4 w-2/3" />
+          <Skeleton class="h-9 w-full" />
+          <Skeleton class="h-9 w-full" />
+          <Skeleton class="h-9 w-full" />
+        </div>
+      {:else if valid === false}
+        <p class="m-0 text-center text-sm text-muted-foreground">This invitation link is invalid or has expired.</p>
+      {:else}
+        <p class="m-0 mb-5 text-sm text-muted-foreground">
+          Welcome, <strong class="font-display font-semibold text-foreground">{username}</strong>. Set a password to
+          complete your account.
+        </p>
 
-    <form onsubmit={handleSubmit} class="flex flex-col gap-4">
-      <label class="flex flex-col gap-1 text-sm font-medium">
-        Password
-        <input
-          type="password"
-          bind:value={password}
-          required
-          autocomplete="new-password"
-          class="p-2 border border-gray-300 rounded text-base focus:outline-none focus:border-(--color-brand)"
-        />
-      </label>
+        <form onsubmit={handleSubmit} class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5">
+            <Label for="password">Password</Label>
+            <Input id="password" type="password" bind:value={password} required autocomplete="new-password" />
+          </div>
 
-      <label class="flex flex-col gap-1 text-sm font-medium">
-        Confirm password
-        <input
-          type="password"
-          bind:value={confirmPassword}
-          required
-          autocomplete="new-password"
-          class="p-2 border border-gray-300 rounded text-base focus:outline-none focus:border-(--color-brand)"
-        />
-      </label>
+          <div class="flex flex-col gap-1.5">
+            <Label for="confirm-password">Confirm password</Label>
+            <Input
+              id="confirm-password"
+              type="password"
+              bind:value={confirmPassword}
+              required
+              autocomplete="new-password"
+            />
+          </div>
 
-      <button
-        type="submit"
-        disabled={loading}
-        class="p-2.5 bg-(--color-brand) text-white border-none rounded text-base cursor-pointer hover:bg-(--color-brand-hover) disabled:opacity-60 disabled:cursor-not-allowed"
-      >
-        {loading ? "Creating account..." : "Create account"}
-      </button>
-    </form>
-  {/if}
+          <Button type="submit" disabled={loading} class="mt-1 w-full">
+            {loading ? "Creating account…" : "Create account"}
+          </Button>
+        </form>
+      {/if}
+    </Card.Content>
+  </Card.Root>
 </div>

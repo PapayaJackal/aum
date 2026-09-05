@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fetchPreviewBlob } from "../lib/api";
+  import PreviewStatus from "./PreviewStatus.svelte";
 
   let {
     docId,
@@ -14,37 +15,46 @@
   let error = $state("");
 
   $effect(() => {
+    const id = docId;
+    const idx = index;
     loading = true;
     error = "";
-    let revoked = false;
-    let url: string | null = null;
+    let cancelled = false;
 
-    fetchPreviewBlob(docId, index)
+    fetchPreviewBlob(id, idx)
       .then((blob) => {
-        if (revoked) return;
-        url = URL.createObjectURL(blob);
-        objectUrl = url;
+        if (cancelled) return;
+        // Swap first, then release the previous image: the old one stays
+        // visible right up to the frame the new one replaces it.
+        const previous = objectUrl;
+        objectUrl = URL.createObjectURL(blob);
+        if (previous) URL.revokeObjectURL(previous);
       })
       .catch((err) => {
-        if (!revoked) error = err.message || "Failed to load preview";
+        if (!cancelled) {
+          error = err.message || "Failed to load preview";
+          objectUrl = null;
+        }
       })
       .finally(() => {
-        if (!revoked) loading = false;
+        if (!cancelled) loading = false;
       });
 
     return () => {
-      revoked = true;
-      if (url) URL.revokeObjectURL(url);
+      cancelled = true;
     };
+  });
+
+  // Release the last object URL when the panel itself goes away.
+  $effect(() => () => {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
   });
 </script>
 
-{#if loading}
-  <div class="flex items-center justify-center py-12 text-gray-400 text-sm">Loading preview...</div>
-{:else if error}
-  <div class="bg-red-50 text-red-600 p-3 rounded text-sm">{error}</div>
-{:else if objectUrl}
-  <div class="flex items-center justify-center">
-    <img src={objectUrl} alt="Document preview" class="max-w-full h-auto rounded" />
+<PreviewStatus {loading} {error} label="image" shape="page" hasContent={!!objectUrl} />
+
+{#if objectUrl}
+  <div class="flex items-center justify-center overflow-hidden rounded-md border border-border/70 bg-muted/40 p-2">
+    <img src={objectUrl} alt="Document preview" class="h-auto max-w-full rounded-sm" />
   </div>
 {/if}

@@ -12,6 +12,14 @@
   import HtmlPreview from "../components/HtmlPreview.svelte";
   import ImagePreview from "../components/ImagePreview.svelte";
   import PdfPreview from "../components/PdfPreview.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Skeleton } from "$lib/components/ui/skeleton/index.js";
+  import * as Tooltip from "$lib/components/ui/tooltip/index.js";
+  import type { Snippet } from "svelte";
+  import DownloadIcon from "@lucide/svelte/icons/download";
+  import Maximize2Icon from "@lucide/svelte/icons/maximize-2";
+  import Minimize2Icon from "@lucide/svelte/icons/minimize-2";
+  import XIcon from "@lucide/svelte/icons/x";
 
   let {
     docId,
@@ -196,16 +204,36 @@
     return { priority, extra };
   });
 
+  // The previous document stays on screen while the next one is fetched, so a
+  // fast swap never blanks the panel. Only the very first load shows skeletons.
   $effect(() => {
+    const id = docId;
+    const idx = index;
+    let cancelled = false;
     loading = true;
     error = "";
-    showAllMeta = false;
-    showRichPreview = true;
-    getDocument(docId, index)
-      .then((d) => (doc = d))
-      .catch((err) => (error = err.message))
-      .finally(() => (loading = false));
+    getDocument(id, idx)
+      .then((d) => {
+        if (cancelled) return;
+        doc = d;
+        showAllMeta = false;
+        showRichPreview = true;
+      })
+      .catch((err) => {
+        if (!cancelled) error = err.message;
+      })
+      .finally(() => {
+        if (!cancelled) loading = false;
+      });
+
+    return () => {
+      cancelled = true;
+    };
   });
+
+  // A swap over existing content: dim it and run the header bar instead of
+  // tearing the panel down to skeletons.
+  let refreshing = $derived(loading && !!doc && !error);
 
   let previewable = $derived(doc ? isPreviewable(doc.metadata) : false);
   let contentType = $derived(doc ? getContentType(doc.metadata) : "");
@@ -243,270 +271,293 @@
       // Use tick to wait for DOM update.
       const el = threadContainerEl;
       requestAnimationFrame(() => {
-        const current = el.querySelector("[data-current-thread]");
+        const current = el.querySelector<HTMLElement>("[data-current-thread]");
+        // Move only the thread box: scrollIntoView would drag every scrollable
+        // ancestor, including the preview pane and the window, along with it.
         if (current) {
-          current.scrollIntoView({ block: "center" });
+          el.scrollTop = current.offsetTop - (el.clientHeight - current.offsetHeight) / 2;
         }
       });
     }
   });
 </script>
 
-<div class="flex items-center gap-3 px-4 py-3 border-b border-gray-300 bg-gray-50 sticky top-0 z-[1]">
-  <h2 class="m-0 text-base flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-    {#if doc}
-      {doc.display_path.split("/").pop()}
-    {:else}
-      Document
-    {/if}
-  </h2>
-  {#if onToggleFullscreen}
-    <button
-      class="shrink-0 bg-transparent border-none text-gray-400 cursor-pointer p-1 rounded leading-none hover:bg-gray-200 hover:text-gray-800"
-      onclick={onToggleFullscreen}
-      title={previewFullscreen ? "Exit full screen" : "Full screen"}
-    >
-      {#if previewFullscreen}
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="4 14 10 14 10 20"></polyline>
-          <polyline points="20 10 14 10 14 4"></polyline>
-          <line x1="10" y1="14" x2="3" y2="21"></line>
-          <line x1="21" y1="3" x2="14" y2="10"></line>
-        </svg>
-      {:else}
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="15 3 21 3 21 9"></polyline>
-          <polyline points="9 21 3 21 3 15"></polyline>
-          <line x1="21" y1="3" x2="14" y2="10"></line>
-          <line x1="3" y1="21" x2="10" y2="14"></line>
-        </svg>
-      {/if}
-    </button>
-  {/if}
-  <button
-    class="shrink-0 bg-transparent border-none text-lg text-gray-400 cursor-pointer p-1 rounded leading-none hover:bg-gray-200 hover:text-gray-800"
-    onclick={onClose}
-    title="Close">&#x2715;</button
+{#snippet iconAction(label: string, onclick: () => void, icon: Snippet)}
+  <Tooltip.Root>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <Button {...props} variant="ghost" size="icon" class="size-7 shrink-0 text-muted-foreground" {onclick}>
+          {@render icon()}
+          <span class="sr-only">{label}</span>
+        </Button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Content>{label}</Tooltip.Content>
+  </Tooltip.Root>
+{/snippet}
+
+<!--
+  Sections are ruled off from one another rather than boxed: nothing in the
+  panel is an island, so there are no card edges to pad away from.
+-->
+{#snippet panel(title: string, body: Snippet, action?: Snippet)}
+  <section class="border-t border-border first:border-t-0">
+    <header class="flex items-center justify-between gap-2 px-4 pt-3 pb-1.5">
+      <h3 class="m-0 font-mono text-[0.7rem] tracking-[0.18em] uppercase text-muted-foreground">{title}</h3>
+      {#if action}{@render action()}{/if}
+    </header>
+    <div class="px-4 pt-1 pb-3">{@render body()}</div>
+  </section>
+{/snippet}
+
+<Tooltip.Provider delayDuration={300}>
+  <div
+    class="sticky top-0 z-1 flex items-center gap-1.5 border-b border-border/70 bg-card/95 px-4 py-2.5 backdrop-blur-sm relative"
   >
-</div>
+    {#if refreshing}
+      <span aria-hidden="true" class="loading-bar absolute inset-x-0 -bottom-px h-0.5"></span>
+    {/if}
+    <h2
+      class="m-0 min-w-0 flex-1 overflow-hidden font-display text-[0.975rem] font-semibold text-ellipsis whitespace-nowrap"
+      title={doc?.display_path}
+    >
+      {#if doc}{doc.display_path.split("/").pop()}{:else}Document{/if}
+    </h2>
+    {#if onToggleFullscreen}
+      {#snippet fullscreenIcon()}
+        {#if previewFullscreen}
+          <Minimize2Icon class="size-4" />
+        {:else}
+          <Maximize2Icon class="size-4" />
+        {/if}
+      {/snippet}
+      {@render iconAction(previewFullscreen ? "Exit full screen" : "Full screen", onToggleFullscreen, fullscreenIcon)}
+    {/if}
+    {#snippet closeIcon()}
+      <XIcon class="size-4" />
+    {/snippet}
+    {@render iconAction("Close", onClose, closeIcon)}
+  </div>
 
-<div class="p-3 px-4">
-  {#if loading}
-    <p class="text-gray-400 p-4">Loading document...</p>
-  {:else if error}
-    <div class="bg-red-50 text-red-600 p-3 rounded my-3">{error}</div>
-  {:else if doc}
-    <div class="flex items-center gap-3 mb-3">
-      {#if doc.extracted_from}
-        <p class="m-0 text-xs text-gray-400 break-all flex-1 min-w-0">
-          Extracted from <button
-            class="bg-transparent border-none text-(--color-accent) cursor-pointer font-[inherit] p-0 no-underline hover:underline"
-            onclick={() => onNavigateDoc(doc!.extracted_from!.doc_id, index)}>{doc.extracted_from.display_path}</button
-          >
-        </p>
-      {:else}
-        <p class="m-0 text-xs text-gray-400 break-all flex-1 min-w-0">{index}/{doc.display_path}</p>
+  <div
+    class="flex flex-col transition-opacity duration-200 {refreshing
+      ? 'pointer-events-none opacity-50'
+      : ''}"
+    aria-busy={loading}
+  >
+    {#if loading && !doc}
+      <div class="skeleton-delayed flex flex-col gap-4 px-4 py-3" aria-busy="true" aria-label="Loading document">
+        <Skeleton class="h-3.5 w-3/5" />
+        <Skeleton class="h-28 w-full rounded-md" />
+        <Skeleton class="h-56 w-full rounded-md" />
+      </div>
+    {:else if error}
+      <div class="border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-sm text-destructive" role="alert">
+        {error}
+      </div>
+    {:else if doc}
+      <div class="flex items-start gap-3 px-4 py-3">
+        {#if doc.extracted_from}
+          <p class="m-0 min-w-0 flex-1 font-mono text-[0.7rem] leading-relaxed break-all text-muted-foreground">
+            Extracted from
+            <button
+              class="cursor-pointer border-none bg-transparent p-0 font-[inherit] text-primary underline-offset-2 hover:underline"
+              onclick={() => onNavigateDoc(doc!.extracted_from!.doc_id, index)}
+              >{doc.extracted_from.display_path}</button
+            >
+          </p>
+        {:else}
+          <p class="m-0 min-w-0 flex-1 font-mono text-[0.7rem] leading-relaxed break-all text-muted-foreground">
+            {index}/{doc.display_path}
+          </p>
+        {/if}
+        <Button
+          variant="outline"
+          size="sm"
+          class="h-7 shrink-0 gap-1.5 px-2 text-xs"
+          onclick={() => {
+            downloadError = "";
+            downloadDocument(docId, index).catch((err) => {
+              downloadError = err.message || "Download failed";
+            });
+          }}
+        >
+          <DownloadIcon class="size-3.5" />Original
+        </Button>
+      </div>
+
+      {#if downloadError}
+        <div
+          class="rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          role="alert"
+        >
+          {downloadError}
+        </div>
       {/if}
-      <button
-        class="shrink-0 text-xs font-[inherit] text-(--color-accent) bg-transparent cursor-pointer border border-(--color-accent) px-2 py-1 rounded hover:bg-(--color-accent) hover:text-white"
-        onclick={() => {
-          downloadError = "";
-          downloadDocument(docId, index).catch((err) => {
-            downloadError = err.message || "Download failed";
-          });
-        }}>Download original</button
-      >
-    </div>
 
-    {#snippet metaValue(entry: MetaEntry)}
-      {#if entry.isDate}
-        {formatLocalDate(entry.value as string)}
-      {:else if entry.isFileSize}
-        {humanFileSize(entry.value as string)}
-      {:else if entry.isEmail}
-        {#if Array.isArray(entry.value)}
+      {#snippet metaValue(entry: MetaEntry)}
+        {#if entry.isDate}
+          {formatLocalDate(entry.value as string)}
+        {:else if entry.isFileSize}
+          {humanFileSize(entry.value as string)}
+        {:else if entry.isEmail}
+          {#if Array.isArray(entry.value)}
+            {#each entry.value as v, i}
+              {#if i > 0},
+              {/if}
+              <a
+                class="text-primary underline-offset-2 hover:underline"
+                href={facetSearchHref("Email Addresses", extractEmail(v))}
+                onclick={handleFacetClick}>{v}</a
+              >
+            {/each}
+          {:else}
+            <a
+              class="text-primary underline-offset-2 hover:underline"
+              href={facetSearchHref("Email Addresses", extractEmail(entry.value))}
+              onclick={handleFacetClick}>{entry.value}</a
+            >
+          {/if}
+        {:else if entry.facetLabel && !Array.isArray(entry.value)}
+          <a
+            class="text-primary underline-offset-2 hover:underline"
+            href={facetSearchHref(entry.facetLabel, entry.value)}
+            onclick={handleFacetClick}>{entry.displayFn ? entry.displayFn(entry.value) : entry.value}</a
+          >
+        {:else if entry.facetLabel && Array.isArray(entry.value)}
           {#each entry.value as v, i}
             {#if i > 0},
             {/if}
             <a
-              class="text-(--color-accent) no-underline hover:underline"
-              href={facetSearchHref("Email Addresses", extractEmail(v))}
-              onclick={handleFacetClick}>{v}</a
+              class="text-primary underline-offset-2 hover:underline"
+              href={facetSearchHref(entry.facetLabel, v)}
+              onclick={handleFacetClick}>{entry.displayFn ? entry.displayFn(v) : v}</a
             >
           {/each}
         {:else}
-          <a
-            class="text-(--color-accent) no-underline hover:underline"
-            href={facetSearchHref("Email Addresses", extractEmail(entry.value))}
-            onclick={handleFacetClick}>{entry.value}</a
-          >
+          {entry.displayFn ? entry.displayFn(displayValue(entry.value)) : displayValue(entry.value)}
         {/if}
-      {:else if entry.facetLabel && !Array.isArray(entry.value)}
-        <a
-          class="text-(--color-accent) no-underline hover:underline"
-          href={facetSearchHref(entry.facetLabel, entry.value)}
-          onclick={handleFacetClick}>{entry.displayFn ? entry.displayFn(entry.value) : entry.value}</a
-        >
-      {:else if entry.facetLabel && Array.isArray(entry.value)}
-        {#each entry.value as v, i}
-          {#if i > 0},
-          {/if}
-          <a
-            class="text-(--color-accent) no-underline hover:underline"
-            href={facetSearchHref(entry.facetLabel, v)}
-            onclick={handleFacetClick}>{entry.displayFn ? entry.displayFn(v) : v}</a
+      {/snippet}
+
+      {#snippet metaRow(entry: MetaEntry)}
+        <tr class="border-b border-border/40 last:border-b-0">
+          <th
+            scope="row"
+            class="w-[7.5rem] py-1.5 pr-3 text-left align-top font-mono text-[0.68rem] font-medium tracking-[0.1em] uppercase text-muted-foreground"
+            >{entry.display}</th
           >
-        {/each}
-      {:else}
-        {entry.displayFn ? entry.displayFn(displayValue(entry.value)) : displayValue(entry.value)}
-      {/if}
-    {/snippet}
+          <td class="py-1.5 align-top text-sm break-words">{@render metaValue(entry)}</td>
+        </tr>
+      {/snippet}
 
-    {#if downloadError}
-      <div class="bg-red-50 text-red-600 p-3 rounded my-3 text-sm">{downloadError}</div>
-    {/if}
-
-    <div class="bg-white rounded-md p-3 my-3 shadow-sm">
-      <h3 class="m-0 mb-2 text-sm text-gray-500">Metadata</h3>
-      <div class="max-h-[300px] overflow-y-auto">
-        <table class="w-full border-collapse">
-          <tbody>
-            {#each metaEntries.priority as entry}
-              <tr>
-                <td
-                  class="p-1.5 border-b border-gray-100 text-sm align-top font-semibold whitespace-nowrap w-[130px] text-gray-500"
-                  >{entry.display}</td
-                >
-                <td class="p-1.5 border-b border-gray-100 text-sm align-top">{@render metaValue(entry)}</td>
-              </tr>
-            {/each}
-            {#if metaEntries.extra.length > 0}
-              <tr>
-                <td colspan="2" class="p-1.5">
-                  <button
-                    class="bg-transparent border-none text-indigo-500 text-xs cursor-pointer py-1 px-0 hover:underline"
-                    onclick={() => (showAllMeta = !showAllMeta)}
-                  >
-                    {showAllMeta ? "Hide" : "Show"}
-                    {metaEntries.extra.length} more fields
-                  </button>
-                </td>
-              </tr>
+      {#snippet metadataBody()}
+        <div class="max-h-[300px] overflow-y-auto">
+          <table class="w-full border-collapse">
+            <tbody>
+              {#each metaEntries.priority as entry}
+                {@render metaRow(entry)}
+              {/each}
               {#if showAllMeta}
                 {#each metaEntries.extra as entry}
-                  <tr>
-                    <td
-                      class="p-1.5 border-b border-gray-100 text-sm align-top font-semibold whitespace-nowrap w-[130px] text-gray-500"
-                      >{entry.display}</td
-                    >
-                    <td class="p-1.5 border-b border-gray-100 text-sm align-top">{@render metaValue(entry)}</td>
-                  </tr>
+                  {@render metaRow(entry)}
                 {/each}
               {/if}
-            {/if}
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    {#if unifiedThread.length > 0}
-      <div class="bg-white rounded-md p-3 my-3 shadow-sm">
-        <h3 class="m-0 mb-2 text-sm text-gray-500">Thread ({unifiedThread.length})</h3>
-        <div bind:this={threadContainerEl} class="max-h-[270px] overflow-y-auto">
-          {#each unifiedThread as msg}
-            {#if msg.isCurrent}
-              <div
-                data-current-thread
-                class="w-full text-left bg-indigo-50 rounded p-2 mb-1.5 last:mb-0 border-l-3 border-l-(--color-accent) border-t-0 border-r-0 border-b-0"
-              >
-                <div class="flex items-baseline gap-2 mb-0.5">
-                  <span class="text-xs font-semibold text-gray-900 truncate">{msg.sender || "Unknown"}</span>
-                  <span class="text-xs text-gray-400 shrink-0">{msg.date ? formatLocalDate(msg.date) : ""}</span>
-                </div>
-                {#if msg.subject}
-                  <div class="text-xs text-gray-700 truncate mb-0.5 font-medium">{msg.subject}</div>
-                {/if}
-                <div class="text-xs text-gray-500 line-clamp-2">{msg.snippet}</div>
-              </div>
-            {:else}
-              <button
-                class="w-full text-left bg-gray-50 rounded p-2 mb-1.5 last:mb-0 border-l-3 border-l-gray-300 cursor-pointer border-t-0 border-r-0 border-b-0 hover:bg-gray-100"
-                onclick={() => onNavigateDoc(msg.doc_id, index)}
-              >
-                <div class="flex items-baseline gap-2 mb-0.5">
-                  <span class="text-xs font-semibold text-gray-700 truncate">{msg.sender || "Unknown"}</span>
-                  <span class="text-xs text-gray-400 shrink-0">{msg.date ? formatLocalDate(msg.date) : ""}</span>
-                </div>
-                {#if msg.subject}
-                  <div class="text-xs text-gray-600 truncate mb-0.5">{msg.subject}</div>
-                {/if}
-                <div class="text-xs text-gray-400 line-clamp-2">{msg.snippet}</div>
-              </button>
-            {/if}
-          {/each}
+            </tbody>
+          </table>
         </div>
-      </div>
-    {/if}
+      {/snippet}
 
-    {#if doc.attachments.length > 0}
-      <div class="bg-white rounded-md p-3 my-3 shadow-sm">
-        <h3 class="m-0 mb-1.5 text-sm text-gray-500">Attachments</h3>
-        <ul class="list-none m-0 p-0">
-          {#each doc.attachments as att}
-            <li class="py-1 border-b border-gray-100 text-sm last:border-b-0">
-              <button
-                class="bg-transparent border-none text-(--color-accent) cursor-pointer font-[inherit] p-0 no-underline hover:underline"
-                onclick={() => onNavigateDoc(att.doc_id, index)}>{att.display_path.split("/").pop()}</button
+      {#snippet metadataAction()}
+        {#if metaEntries.extra.length > 0}
+          <Button variant="link" size="sm" class="h-auto p-0 text-xs" onclick={() => (showAllMeta = !showAllMeta)}>
+            {showAllMeta ? "Fewer" : `${metaEntries.extra.length} more`} fields
+          </Button>
+        {/if}
+      {/snippet}
+
+      {@render panel("Metadata", metadataBody, metadataAction)}
+
+      {#if unifiedThread.length > 0}
+        {#snippet threadBody()}
+          <div bind:this={threadContainerEl} class="flex max-h-[270px] flex-col gap-1.5 overflow-y-auto">
+            {#each unifiedThread as msg}
+              {@const current = msg.isCurrent}
+              <svelte:element
+                this={current ? "div" : "button"}
+                {...current
+                  ? { "data-current-thread": true }
+                  : { type: "button", onclick: () => onNavigateDoc(msg.doc_id, index) }}
+                class="w-full rounded-r-sm border-l-2 py-1.5 pr-2 pl-2.5 text-left transition-colors {current
+                  ? 'border-l-primary bg-accent/50'
+                  : 'cursor-pointer border-l-border bg-muted/50 hover:border-l-primary/50 hover:bg-muted'}"
               >
-            </li>
-          {/each}
-        </ul>
-      </div>
-    {/if}
+                <div class="mb-0.5 flex items-baseline gap-2">
+                  <span class="truncate text-xs font-semibold {current ? 'text-foreground' : 'text-foreground/80'}"
+                    >{msg.sender || "Unknown"}</span
+                  >
+                  <span class="shrink-0 font-mono text-[0.65rem] tabular-nums text-muted-foreground"
+                    >{msg.date ? formatLocalDate(msg.date) : ""}</span
+                  >
+                </div>
+                {#if msg.subject}
+                  <div
+                    class="mb-0.5 truncate text-xs {current ? 'font-medium text-foreground/90' : 'text-foreground/70'}"
+                  >
+                    {msg.subject}
+                  </div>
+                {/if}
+                <div class="line-clamp-2 text-xs text-muted-foreground">{msg.snippet}</div>
+              </svelte:element>
+            {/each}
+          </div>
+        {/snippet}
+        {@render panel(`Thread (${unifiedThread.length})`, threadBody)}
+      {/if}
 
-    <div class="bg-white rounded-md p-3 my-3 shadow-sm">
-      <div class="flex items-center justify-between mb-2">
-        <h3 class="m-0 text-sm text-gray-500">Content</h3>
-        {#if previewable && doc.content}
-          <button
-            class="text-xs bg-transparent border-none text-indigo-500 cursor-pointer py-1 px-0 hover:underline"
+      {#if doc.attachments.length > 0}
+        {#snippet attachmentsBody()}
+          <ul class="m-0 list-none p-0">
+            {#each doc!.attachments as att}
+              <li class="border-b border-border/40 py-1 last:border-b-0">
+                <button
+                  class="cursor-pointer border-none bg-transparent p-0 text-left font-[inherit] text-sm text-primary underline-offset-2 hover:underline"
+                  onclick={() => onNavigateDoc(att.doc_id, index)}>{att.display_path.split("/").pop()}</button
+                >
+              </li>
+            {/each}
+          </ul>
+        {/snippet}
+        {@render panel("Attachments", attachmentsBody)}
+      {/if}
+
+      {#snippet contentBody()}
+        {#if previewable && showRichPreview}
+          {#if isImage}
+            <ImagePreview {docId} {index} />
+          {:else if isPdf}
+            <PdfPreview {docId} {index} />
+          {:else if isHtml}
+            <HtmlPreview {docId} {index} />
+          {/if}
+        {:else}
+          <pre class="m-0 font-sans text-sm leading-7 break-words whitespace-pre-wrap">{@html contentHtml}</pre>
+        {/if}
+      {/snippet}
+
+      {#snippet contentAction()}
+        {#if previewable && doc?.content}
+          <Button
+            variant="link"
+            size="sm"
+            class="h-auto p-0 text-xs"
             onclick={() => (showRichPreview = !showRichPreview)}
           >
-            {showRichPreview ? "Show extracted text" : "Show preview"}
-          </button>
+            {showRichPreview ? "Extracted text" : "Preview"}
+          </Button>
         {/if}
-      </div>
-      {#if previewable && showRichPreview}
-        {#if isImage}
-          <ImagePreview {docId} {index} />
-        {:else if isPdf}
-          <PdfPreview {docId} {index} />
-        {:else if isHtml}
-          <HtmlPreview {docId} {index} />
-        {/if}
-      {:else}
-        <pre class="whitespace-pre-wrap break-words text-sm leading-relaxed m-0">{@html contentHtml}</pre>
-      {/if}
-    </div>
-  {/if}
-</div>
+      {/snippet}
+
+      {@render panel("Content", contentBody, contentAction)}
+    {/if}
+  </div>
+</Tooltip.Provider>

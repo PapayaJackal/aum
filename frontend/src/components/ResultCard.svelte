@@ -1,13 +1,21 @@
 <script lang="ts">
   import type { SearchResult } from "../lib/api";
   import { searchState } from "../lib/searchState.svelte";
-  import { sanitizeHighlight, escapeHtml } from "../lib/highlight";
+  import { sanitizeHighlight } from "../lib/highlight";
   import { mimeAlias } from "../lib/mime";
 
-  let { result, multiIndex = false }: { result: SearchResult; multiIndex: boolean } = $props();
+  let {
+    result,
+    multiIndex = false,
+    tabbable = false,
+  }: {
+    result: SearchResult;
+    multiIndex: boolean;
+    /** The list is one tab stop: only its active row is reachable with Tab. */
+    tabbable?: boolean;
+  } = $props();
 
   let index = $derived(result.index);
-  let safeIndex = $derived(escapeHtml(index));
 
   let parts = $derived(result.display_path.split("/"));
   let filename = $derived(parts[parts.length - 1] || result.display_path);
@@ -54,8 +62,14 @@
   let buttonEl = $state<HTMLButtonElement | null>(null);
 
   $effect(() => {
-    if (isSelected && buttonEl) {
-      buttonEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (!isSelected || !buttonEl) return;
+    buttonEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+    // Keep focus with the selection, but only when the list already had it:
+    // arrowing from the search field must not steal focus out of the input.
+    const active = document.activeElement;
+    if (active !== buttonEl && active instanceof HTMLElement && active.dataset.resultRow !== undefined) {
+      buttonEl.focus();
     }
   });
 
@@ -65,49 +79,50 @@
   }
 </script>
 
+<!--
+  A line in a catalogue, not a card: two tight rows — path and snippet — with a
+  rule on the left standing in for the selection border.
+-->
 <button
   type="button"
   bind:this={buttonEl}
-  class="block w-full text-left font-[inherit] bg-white p-4 rounded-md shadow-sm no-underline text-inherit border-2 cursor-pointer transition-[box-shadow,border-color] duration-150 hover:shadow-md {isSelected
-    ? 'border-(--color-accent) bg-blue-50'
-    : 'border-transparent'}"
+  data-result-row
+  role="option"
+  aria-selected={isSelected}
+  tabindex={tabbable ? 0 : -1}
+  class="group relative block w-full cursor-pointer border-none py-1.5 pr-3 pl-3.5 text-left font-[inherit] text-inherit transition-colors {isSelected
+    ? 'bg-accent/40'
+    : 'bg-transparent hover:bg-muted/60'}"
   onclick={handleClick}
+  title={index + "/" + result.display_path}
 >
-  <div class="flex justify-between items-center mb-2">
-    {#if hasPathHighlight}
-      <span class="font-semibold text-(--color-brand)">{@html hlFilename}</span>
-    {:else}
-      <span class="font-semibold text-(--color-brand)">{filename}</span>
-    {/if}
-    {#if dateLabel}
-      <span class="text-xs text-gray-400 shrink-0" title="Score: {result.score.toFixed(3)}">{dateLabel}</span>
-    {/if}
-  </div>
+  <span
+    aria-hidden="true"
+    class="absolute inset-y-0 left-0 w-0.5 transition-colors {isSelected
+      ? 'bg-primary'
+      : 'bg-transparent group-hover:bg-primary/40'}"
+  ></span>
 
-  <p class="text-sm leading-relaxed text-gray-500 m-0 mb-2">{@html snippet}</p>
-
-  <div class="flex justify-between items-center text-xs text-gray-400 gap-2">
-    {#if hasPathHighlight}
+  <div>
+    <div class="flex items-baseline gap-2">
+      <span class="min-w-0 shrink truncate text-sm leading-6 font-medium text-foreground">
+        {#if hasPathHighlight}{@html hlFilename}{:else}{filename}{/if}
+      </span>
+      <span class="min-w-0 flex-1 truncate font-mono text-[0.7rem] text-muted-foreground/70">
+        {#if hasPathHighlight}{@html hlDirPart}{:else}{dirPart}{/if}
+      </span>
       <span
-        class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500"
-        title={index + "/" + result.display_path}>{@html safeIndex + "/" + hlDirPart + hlFilename}</span
-      >
-    {:else}
-      <span
-        class="overflow-hidden text-ellipsis whitespace-nowrap min-w-0 font-mono text-gray-500"
-        title={index + "/" + result.display_path}>{index}/{dirPart}{filename}</span
-      >
-    {/if}
-    <div class="flex gap-1 shrink-0">
-      {#if multiIndex && index}
-        <span class="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-xs shrink-0">{index}</span>
-      {/if}
-      {#if fileSize}
-        <span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-xs shrink-0">{fileSize}</span>
-      {/if}
-      {#if fileType}
-        <span class="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded text-xs shrink-0">{fileType}</span>
-      {/if}
+        class="ml-auto flex shrink-0 items-baseline gap-2 font-mono text-[0.7rem] tabular-nums text-muted-foreground/80"
+        title="Score: {result.score.toFixed(3)}">
+        {#if multiIndex && index}
+          <span class="text-primary/80">{index}</span>
+        {/if}
+        <span class="tracking-wide uppercase">{fileType}</span>
+        <span>{fileSize}</span>
+        <span>{dateLabel}</span>
+      </span>
     </div>
+
+    <p class="m-0 line-clamp-1 text-[0.8rem] leading-5 text-muted-foreground">{@html snippet}</p>
   </div>
 </button>

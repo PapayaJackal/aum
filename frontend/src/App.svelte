@@ -5,6 +5,9 @@
   import Login from "./routes/Login.svelte";
   import Invite from "./routes/Invite.svelte";
   import Search from "./routes/Search.svelte";
+  import ThemeToggle from "./lib/components/app/ThemeToggle.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import LogOutIcon from "@lucide/svelte/icons/log-out";
 
   let hash = $state(window.location.hash || "#/");
   let publicMode = $state(false);
@@ -41,37 +44,63 @@
 
 <svelte:window onhashchange={onHashChange} />
 
+{#snippet wordmark(onclick?: () => void)}
+  <a href="#/" {onclick} class="group flex shrink-0 items-baseline gap-2 no-underline" aria-label="aum — home">
+    <span class="font-display text-2xl leading-none text-foreground transition-transform group-hover:-rotate-6"
+      >&#x0950;</span
+    >
+    <span class="hidden font-display text-sm tracking-[0.28em] text-muted-foreground uppercase sm:inline"
+      >aum</span
+    >
+  </a>
+{/snippet}
+
+{#snippet chrome(inner: () => ReturnType<typeof wordmark>)}
+  <header
+    class="sticky top-0 z-50 flex items-center gap-3 border-b bg-masthead/95 px-4 py-2 text-masthead-foreground backdrop-blur supports-[backdrop-filter]:bg-masthead/80"
+  >
+    {@render inner()}
+  </header>
+{/snippet}
+
 {#if !ready}
   <!-- Wait for config check -->
 {:else if hash.startsWith("#/invite")}
-  <header class="bg-(--color-brand) text-white px-4 py-2 flex items-center gap-3 sticky top-0 z-50">
-    <nav class="flex items-center gap-4 w-full">
-      <a href="#/" class="font-bold text-xl leading-none text-white no-underline shrink-0">&#x0950;</a>
-    </nav>
-  </header>
+  {#snippet inviteBar()}
+    {@render wordmark()}
+    <div class="flex-1"></div>
+    <ThemeToggle />
+  {/snippet}
+  {@render chrome(inviteBar)}
   <main class="px-4"><Invite /></main>
 {:else if hash.startsWith("#/login") && !publicMode}
-  <header class="bg-(--color-brand) text-white px-4 py-2 flex items-center gap-3 sticky top-0 z-50">
-    <nav class="flex items-center gap-4 w-full">
-      <a href="#/" class="font-bold text-xl leading-none text-white no-underline shrink-0">&#x0950;</a>
-    </nav>
-  </header>
+  {#snippet loginBar()}
+    {@render wordmark()}
+    <div class="flex-1"></div>
+    <ThemeToggle />
+  {/snippet}
+  {@render chrome(loginBar)}
   <main class="px-4"><Login /></main>
 {:else}
   <Search>
     {#snippet header(form, clearSearch)}
-      <header class="bg-(--color-brand) text-white px-4 py-2 flex items-center gap-3 sticky top-0 z-50">
-        <a href="#/" onclick={clearSearch} class="font-bold text-xl leading-none text-white no-underline shrink-0"
-          >&#x0950;</a
-        >
+      {#snippet searchBar()}
+        {@render wordmark(clearSearch)}
         {@render form()}
+        <ThemeToggle />
         {#if !publicMode}
-          <button
-            class="bg-transparent border border-gray-500 text-gray-300 px-3 py-1 rounded cursor-pointer shrink-0 text-sm hover:border-white hover:text-white"
-            onclick={logout}>Logout</button
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={logout}
+            class="shrink-0"
           >
+            <LogOutIcon class="size-3.5" />
+            <span class="hidden sm:inline">Logout</span>
+          </Button>
         {/if}
-      </header>
+      {/snippet}
+      {@render chrome(searchBar)}
     {/snippet}
   </Search>
 {/if}

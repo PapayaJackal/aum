@@ -18,6 +18,18 @@
   import IndexSelector from "../components/IndexSelector.svelte";
   import Document from "./Document.svelte";
   import KeyboardHelp from "../components/KeyboardHelp.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Slider } from "$lib/components/ui/slider/index.js";
+  import { Toggle } from "$lib/components/ui/toggle/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
+  import * as Popover from "$lib/components/ui/popover/index.js";
+  import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+  import SearchIcon from "@lucide/svelte/icons/search";
+  import Settings2Icon from "@lucide/svelte/icons/settings-2";
+  import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
+  import SparklesIcon from "@lucide/svelte/icons/sparkles";
 
   let { header }: { header: Snippet<[() => ReturnType<Snippet>, () => void]> } = $props();
 
@@ -62,19 +74,6 @@
   let loading = $state(false);
   let error = $state("");
 
-  let sliderVisible = $state(false);
-  let sliderHideTimer: ReturnType<typeof setTimeout> | undefined;
-  function showSlider() {
-    clearTimeout(sliderHideTimer);
-    sliderVisible = true;
-  }
-  function hideSlider() {
-    clearTimeout(sliderHideTimer);
-    sliderHideTimer = setTimeout(() => {
-      sliderVisible = false;
-    }, 400);
-  }
-
   function updateSearchUrl() {
     const qs = getSearchQs();
     history.replaceState(null, "", qs ? `#/?${qs}` : "#/");
@@ -104,6 +103,17 @@
   });
 
   let joinedIndex = $derived(searchState.selectedIndices.join(","));
+
+  const SORT_OPTIONS = [
+    { value: "relevance", label: "Best match" },
+    { value: "date:desc", label: "Newest first" },
+    { value: "date:asc", label: "Oldest first" },
+    { value: "size:desc", label: "Largest first" },
+    { value: "size:asc", label: "Smallest first" },
+  ];
+  const PAGE_SIZE_OPTIONS = [20, 50, 100];
+
+  let sortLabel = $derived(SORT_OPTIONS.find((o) => o.value === searchState.sortBy)?.label ?? "Best match");
 
   async function doSearch(page: number = 1, resetFacets = true) {
     if (!searchState.query.trim()) return;
@@ -372,10 +382,11 @@
 
   // --- Vim-style keyboard navigation ---
 
-  // Reset mark index when selected document changes.
+  // Reset mark index and preview scroll when the selected document changes.
   $effect(() => {
     const _ = searchState.selectedDocId;
     currentMarkIndex = -1;
+    previewAsideEl?.scrollTo({ top: 0, behavior: "instant" });
   });
 
   function isEditableActive(): boolean {
@@ -474,6 +485,14 @@
       }
     }
 
+    if (!showKeyboardHelp && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      if (!isEditableActive() || document.activeElement === searchInputEl) {
+        e.preventDefault();
+        navigateResult(e.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+    }
+
     // All other vim keys: skip if in editable element or help overlay is open
     if (isEditableActive() || showKeyboardHelp) return;
 
@@ -511,86 +530,109 @@
 </svelte:head>
 
 {#snippet searchForm()}
-  <form class="flex-1 flex gap-2 items-center min-w-0" onsubmit={handleSubmit}>
-    <input
+  <form class="flex min-w-0 flex-1 items-center gap-2" onsubmit={handleSubmit}>
+    <Input
       type="search"
-      placeholder="Search documents..."
+      placeholder="Search documents…"
       bind:value={searchState.query}
-      bind:this={searchInputEl}
-      class="flex-1 px-3 py-[0.45rem] border-none rounded bg-white/95 text-gray-800 text-base min-w-0 focus:outline-2 focus:outline-(--color-accent)"
+      bind:ref={searchInputEl}
+      aria-label="Search documents"
+      class="h-9 min-w-0 flex-1 text-base"
     />
     {#if indices.length > 0}
       <IndexSelector {indices} selectedIndices={searchState.selectedIndices} onchange={handleIndicesChange} />
     {/if}
     {#if hybridEnabled}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="relative shrink-0" onmouseenter={showSlider} onmouseleave={hideSlider}>
-        <label
-          class="flex items-center gap-1.5 text-xs text-white/90 select-none cursor-pointer px-2 py-[0.45rem]"
-          title="Combine keyword and semantic search"
+      <div class="flex shrink-0 items-center gap-0.5">
+        <Toggle
+          size="sm"
+          pressed={searchState.searchType === "hybrid"}
+          onPressedChange={(pressed) => {
+            searchState.searchType = pressed ? "hybrid" : "text";
+            handleSearchTypeChange();
+          }}
+          aria-label="Blend keyword and semantic search"
+          title="Blend keyword and semantic search"
+          class="h-9 gap-1.5 px-2.5 font-mono text-[0.7rem] tracking-wider text-muted-foreground uppercase"
         >
-          <input
-            type="checkbox"
-            class="accent-(--color-accent)"
-            checked={searchState.searchType === "hybrid"}
-            onchange={(e) => {
-              searchState.searchType = e.currentTarget.checked ? "hybrid" : "text";
-              handleSearchTypeChange();
-            }}
-          />
-          Hybrid
-        </label>
-        {#if searchState.searchType === "hybrid" && sliderVisible}
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
-            class="absolute top-full right-0 mt-1 flex items-center gap-1.5 bg-(--color-brand) border border-white/20 rounded px-3 py-2 shadow-lg z-10 whitespace-nowrap text-[10px] text-white/70"
-            onmouseenter={showSlider}
-            onmouseleave={hideSlider}
-          >
-            <span>Keyword</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              class="w-24 accent-(--color-accent)"
-              bind:value={searchState.semanticRatio}
-              oninput={() => savePrefs()}
-              onchange={() => {
-                if (searchState.searched) doSearch(1);
-              }}
-            />
-            <span>Semantic</span>
-          </div>
+          <SparklesIcon class="size-3.5" />Hybrid
+        </Toggle>
+        {#if searchState.searchType === "hybrid"}
+          <Popover.Root>
+            <Popover.Trigger>
+              {#snippet child({ props })}
+                <Button
+                  {...props}
+                  variant="ghost"
+                  size="icon"
+                  class="size-8 text-muted-foreground"
+                >
+                  <Settings2Icon class="size-4" />
+                  <span class="sr-only">Adjust keyword / semantic balance</span>
+                </Button>
+              {/snippet}
+            </Popover.Trigger>
+            <Popover.Content class="w-64" align="end">
+              <p class="m-0 mb-3 font-mono text-[0.7rem] tracking-[0.16em] uppercase text-muted-foreground">
+                Ranking balance
+              </p>
+              <Slider
+                type="single"
+                min={0}
+                max={1}
+                step={0.05}
+                value={searchState.semanticRatio}
+                onValueChange={(v) => {
+                  searchState.semanticRatio = v;
+                  savePrefs();
+                }}
+                onValueCommit={() => {
+                  if (searchState.searched) doSearch(1);
+                }}
+              />
+              <div
+                class="mt-2 flex justify-between font-mono text-[0.65rem] tracking-wider uppercase text-muted-foreground"
+              >
+                <span>Keyword</span>
+                <span>Semantic</span>
+              </div>
+            </Popover.Content>
+          </Popover.Root>
         {/if}
       </div>
     {/if}
-    <button
+    <Button
       type="submit"
       disabled={loading || !searchState.query.trim()}
-      class="px-4 py-[0.45rem] bg-(--color-accent) text-white border-none rounded text-sm cursor-pointer shrink-0 hover:enabled:bg-(--color-accent-hover) disabled:opacity-50 disabled:cursor-not-allowed"
+      class="h-9 shrink-0 gap-1.5"
     >
-      {loading ? "..." : "Search"}
-    </button>
+      <SearchIcon class="size-4" />
+      <span class="hidden sm:inline">{loading ? "Searching…" : "Search"}</span>
+    </Button>
   </form>
 {/snippet}
 
 {@render header(searchForm, clearSearch)}
 
-<main class="px-4">
+<main>
   {#if error}
-    <div class="bg-red-50 text-red-600 p-3 rounded my-3">{error}</div>
+    <div
+      class="border-b border-destructive/25 bg-destructive/10 px-4 py-2.5 text-sm text-destructive"
+      role="alert"
+    >
+      {error}
+    </div>
   {/if}
 
   {#if searchState.searched}
     <div
-      class="flex mt-3"
+      class="flex"
       bind:this={mainContainer}
       style={dragging ? "cursor: col-resize; user-select: none;" : undefined}
     >
       {#if Object.keys(facets).length > 0 && facetVisible && !previewFullscreen}
         <aside
-          class="shrink-0 basis-[220px] max-w-[220px] min-w-0 mr-4 sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
+          class="sticky top-12 h-[calc(100vh-3rem)] min-w-0 shrink-0 basis-[220px] self-start overflow-y-auto border-r border-border"
         >
           <FacetPanel
             {facets}
@@ -602,96 +644,96 @@
       {/if}
 
       <div
-        class="flex-1 min-w-0 {previewFullscreen ? 'hidden' : ''}"
+        class="min-h-[calc(100vh-3rem)] min-w-0 flex-1 {previewFullscreen ? 'hidden' : ''}"
         style={sidebarOpen && !previewFullscreen ? `flex: 0 0 ${resultsSplit}%; max-width: ${resultsSplit}%;` : ""}
       >
-        <div class="flex items-center justify-between gap-3 mb-3 py-1.5 flex-wrap sticky top-10 bg-gray-100 z-10">
+        <div
+          class="sticky top-12 z-10 flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background/95 px-3 py-1.5 backdrop-blur-sm"
+        >
           <div class="flex items-center gap-2">
             {#if Object.keys(facets).length > 0}
-              <button
-                class="px-2 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:bg-blue-50 hover:border-(--color-accent) hover:text-(--color-accent) leading-none"
+              <Button
+                variant="outline"
+                size="sm"
+                class="h-7 gap-1.5 px-2 font-mono text-[0.7rem] tracking-wider uppercase"
                 onclick={() => (facetVisible = !facetVisible)}
                 title={facetVisible ? "Hide filters" : "Show filters"}
               >
-                {#if facetVisible}
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg
-                  >
-                {:else}
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg
-                  >
-                {/if}
-              </button>
+                <SlidersHorizontalIcon class="size-3.5" />
+                {facetVisible ? "Hide" : "Filters"}
+              </Button>
             {/if}
-            <p class="text-gray-400 text-sm m-0">
+            <p class="m-0 font-mono text-xs tracking-[0.14em] text-muted-foreground uppercase tabular-nums">
               {searchState.total} result{searchState.total !== 1 ? "s" : ""}
             </p>
           </div>
           <div class="flex items-center gap-1 flex-wrap">
-            <select
-              class="py-1 px-1.5 border border-gray-300 rounded bg-gray-100 text-sm cursor-pointer"
-              bind:value={searchState.sortBy}
-              onchange={handleSortChange}
+            <Select.Root
+              type="single"
+              value={searchState.sortBy}
+              onValueChange={(v) => {
+                searchState.sortBy = v;
+                handleSortChange();
+              }}
             >
-              <option value="relevance">Best match</option>
-              <option value="date:desc">Newest first</option>
-              <option value="date:asc">Oldest first</option>
-              <option value="size:desc">Largest first</option>
-              <option value="size:asc">Smallest first</option>
-            </select>
-            <button
-              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed"
+              <Select.Trigger size="sm" class="mr-1 bg-card" aria-label="Sort results">{sortLabel}</Select.Trigger>
+              <Select.Content>
+                {#each SORT_OPTIONS as opt}
+                  <Select.Item value={opt.value} label={opt.label} />
+                {/each}
+              </Select.Content>
+            </Select.Root>
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-7 gap-1 px-2 text-xs"
               disabled={searchState.currentPage <= 1 || loading}
-              onclick={() => doSearch(searchState.currentPage - 1, false)}>&lsaquo; Prev</button
+              onclick={() => doSearch(searchState.currentPage - 1, false)}
             >
+              <ChevronLeftIcon class="size-3.5" />Prev
+            </Button>
 
             {#each pageNumbers(searchState.currentPage, totalPages) as p}
               {#if p === "..."}
-                <span class="px-1 py-1 text-gray-400 text-sm">&hellip;</span>
+                <span class="px-1 font-mono text-xs text-muted-foreground">&hellip;</span>
               {:else}
-                <button
-                  class="px-2.5 py-1 text-sm border rounded cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed {p ===
-                  searchState.currentPage
-                    ? 'bg-(--color-accent) text-white border-(--color-accent)'
-                    : 'bg-gray-100 text-gray-800 border-gray-300 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent)'}"
+                <Button
+                  variant={p === searchState.currentPage ? "default" : "outline"}
+                  size="sm"
+                  class="h-7 min-w-7 px-2 font-mono text-xs tabular-nums"
                   disabled={loading}
-                  onclick={() => doSearch(p, false)}>{p}</button
+                  onclick={() => doSearch(p, false)}>{p}</Button
                 >
               {/if}
             {/each}
 
-            <button
-              class="px-2.5 py-1 text-sm bg-gray-100 text-gray-800 border border-gray-300 rounded cursor-pointer shrink-0 hover:enabled:bg-blue-50 hover:enabled:border-(--color-accent) hover:enabled:text-(--color-accent) disabled:opacity-40 disabled:cursor-not-allowed"
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-7 gap-1 px-2 text-xs"
               disabled={searchState.currentPage >= totalPages || loading}
-              onclick={() => doSearch(searchState.currentPage + 1, false)}>Next &rsaquo;</button
+              onclick={() => doSearch(searchState.currentPage + 1, false)}
             >
+              Next<ChevronRightIcon class="size-3.5" />
+            </Button>
 
-            <select
-              class="py-1 px-1.5 border border-gray-300 rounded bg-gray-100 text-sm ml-2 cursor-pointer"
-              bind:value={searchState.pageSize}
-              onchange={handlePageSizeChange}
+            <Select.Root
+              type="single"
+              value={String(searchState.pageSize)}
+              onValueChange={(v) => {
+                searchState.pageSize = Number(v);
+                handlePageSizeChange();
+              }}
             >
-              <option value={20}>20 / page</option>
-              <option value={50}>50 / page</option>
-              <option value={100}>100 / page</option>
-            </select>
+              <Select.Trigger size="sm" class="ml-1 bg-card font-mono tabular-nums" aria-label="Results per page"
+                >{searchState.pageSize} / page</Select.Trigger
+              >
+              <Select.Content>
+                {#each PAGE_SIZE_OPTIONS as n}
+                  <Select.Item value={String(n)} label="{n} / page" />
+                {/each}
+              </Select.Content>
+            </Select.Root>
           </div>
         </div>
         <ResultList results={searchState.results} {multiIndex} {loading} />
@@ -711,19 +753,19 @@
       {#if sidebarOpen}
         <aside
           bind:this={previewAsideEl}
-          class="flex-1 min-w-0 bg-gray-50 border-l border-gray-300 rounded-md shadow-[-2px_0_8px_rgba(0,0,0,0.05)] sticky top-12 self-start max-h-[calc(100vh-3.5rem)] overflow-y-auto"
+          class="sticky top-12 h-[calc(100vh-3rem)] min-w-0 flex-1 self-start overflow-y-auto border-l border-border"
         >
-          {#key searchState.selectedDocId}
-            <Document
-              docId={searchState.selectedDocId}
-              index={searchState.selectedDocIndex}
-              highlightQuery={searchState.submittedQuery}
-              onClose={closeSidebar}
-              onNavigateDoc={navigateDoc}
-              onToggleFullscreen={() => (previewFullscreen = !previewFullscreen)}
-              {previewFullscreen}
-            />
-          {/key}
+          <!-- Not keyed on the doc id: the panel keeps the previous document
+               on screen while the next one loads, instead of blanking. -->
+          <Document
+            docId={searchState.selectedDocId}
+            index={searchState.selectedDocIndex}
+            highlightQuery={searchState.submittedQuery}
+            onClose={closeSidebar}
+            onNavigateDoc={navigateDoc}
+            onToggleFullscreen={() => (previewFullscreen = !previewFullscreen)}
+            {previewFullscreen}
+          />
         </aside>
       {/if}
     </div>
@@ -736,13 +778,16 @@
 
 <style>
   .drag-handle {
-    flex: 0 0 8px;
-    width: 8px;
+    /* Straddles the column rule: 9px of grab area pulled back to zero width in
+       flow, so the two panes still meet edge to edge. */
+    flex: 0 0 9px;
+    width: 9px;
+    margin-inline: -4.5px;
     cursor: col-resize;
     position: sticky;
     top: 3rem;
     align-self: flex-start;
-    height: calc(100vh - 3.5rem);
+    height: calc(100vh - 3rem);
     z-index: 11;
   }
   .drag-handle::after {
@@ -759,10 +804,10 @@
   }
   .drag-handle:hover::after,
   .drag-handle.active::after {
-    background: #4a7cf7;
+    background: var(--primary);
   }
   :global(aside mark.active-mark) {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--highlight-active);
     outline-offset: 1px;
     border-radius: 2px;
   }

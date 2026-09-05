@@ -1,5 +1,8 @@
 <script lang="ts">
   import type { IndexInfo } from "../lib/api";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 
   let {
     indices = [],
@@ -10,9 +13,6 @@
     selectedIndices: string[];
     onchange: (selected: string[]) => void;
   } = $props();
-
-  let open = $state(false);
-  let dropdownEl = $state<HTMLElement | null>(null);
 
   let label = $derived(
     selectedIndices.length === 0
@@ -41,61 +41,41 @@
       onchange(indices.map((i) => i.name));
     }
   }
-
-  function handleClickOutside(e: MouseEvent) {
-    if (dropdownEl && !dropdownEl.contains(e.target as Node)) {
-      open = false;
-    }
-  }
-
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && open) {
-      open = false;
-    }
-  }
 </script>
 
-<svelte:window onclick={handleClickOutside} onkeydown={handleKeydown} />
-
-<div class="relative shrink-0" bind:this={dropdownEl}>
-  <button
-    type="button"
-    class="flex items-center gap-1 px-2 py-[0.45rem] border-none rounded bg-white/90 text-sm cursor-pointer whitespace-nowrap text-gray-800 hover:bg-white"
-    onclick={() => (open = !open)}
+<DropdownMenu.Root>
+  <DropdownMenu.Trigger
+    class="flex shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 py-1.5 text-sm whitespace-nowrap transition-colors hover:bg-accent hover:text-accent-foreground"
   >
-    <span>{label}</span>
-    <span class="text-[0.7rem] text-gray-500">{open ? "\u25B4" : "\u25BE"}</span>
-  </button>
-
-  {#if open}
-    <div
-      class="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-md shadow-lg z-50 min-w-[180px] max-h-[300px] overflow-y-auto py-1"
+    <span class="max-w-[12rem] truncate">{label}</span>
+    <ChevronDownIcon class="size-3.5 opacity-60" />
+  </DropdownMenu.Trigger>
+  <DropdownMenu.Content class="max-h-[320px] min-w-[220px] overflow-y-auto" align="start">
+    <DropdownMenu.Label class="font-mono text-[0.7rem] tracking-[0.16em] uppercase text-muted-foreground"
+      >Datasets</DropdownMenu.Label
     >
-      {#if indices.length > 1}
-        <button
-          type="button"
-          class="block w-full text-left px-3 py-1.5 border-none bg-transparent text-sm text-(--color-accent) cursor-pointer border-b border-b-gray-200 mb-0.5 hover:bg-blue-50"
-          onclick={toggleAll}
-        >
-          {allSelected ? "Deselect all" : "Select all"}
-        </button>
-      {/if}
-      {#each indices as idx}
-        <label class="flex items-center gap-1.5 px-3 py-1.5 cursor-pointer text-sm text-gray-800 hover:bg-gray-100">
-          <input
-            type="checkbox"
-            checked={selectedIndices.includes(idx.name)}
-            onchange={() => toggle(idx.name)}
-            class="m-0 cursor-pointer"
-          />
-          <span class="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{idx.name}</span>
-          {#if idx.has_embeddings}
-            <span class="text-[0.7rem] bg-green-50 text-green-700 px-1.5 py-0.5 rounded shrink-0" title="Has embeddings"
-              >hybrid</span
-            >
-          {/if}
-        </label>
-      {/each}
-    </div>
-  {/if}
-</div>
+    <DropdownMenu.Separator />
+    {#if indices.length > 1}
+      <DropdownMenu.Item closeOnSelect={false} onSelect={toggleAll} class="text-primary">
+        {allSelected ? "Deselect all" : "Select all"}
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator />
+    {/if}
+    {#each indices as idx}
+      <DropdownMenu.CheckboxItem
+        checked={selectedIndices.includes(idx.name)}
+        closeOnSelect={false}
+        onCheckedChange={() => toggle(idx.name)}
+      >
+        <span class="min-w-0 flex-1 truncate">{idx.name}</span>
+        {#if idx.has_embeddings}
+          <Badge
+            variant="outline"
+            class="ml-2 border-primary/30 font-mono text-[0.6rem] tracking-wider text-primary uppercase"
+            title="Has embeddings">hybrid</Badge
+          >
+        {/if}
+      </DropdownMenu.CheckboxItem>
+    {/each}
+  </DropdownMenu.Content>
+</DropdownMenu.Root>

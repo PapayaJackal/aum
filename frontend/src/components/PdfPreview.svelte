@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fetchPreviewBlob } from "../lib/api";
+  import PreviewStatus from "./PreviewStatus.svelte";
   import {
     getDocument as getPdfDocument,
     GlobalWorkerOptions,
@@ -21,6 +22,8 @@
   let loading = $state(true);
   let error = $state("");
   let totalPages = $state(0);
+  // Tracks whether painted pages are on screen (including the outgoing document's).
+  let renderedPageCount = $state(0);
   let containerEl = $state<HTMLDivElement | null>(null);
 
   // Track the PDF document and rendered pages for cleanup.
@@ -40,17 +43,20 @@
   }
 
   $effect(() => {
+    const id = docId;
+    const idx = index;
     loading = true;
     error = "";
-    totalPages = 0;
     let cancelled = false;
 
-    // Clean up previous state.
-    cleanup();
+    // Release the previous document, but leave its already-painted canvases in
+    // the DOM: they stay on screen until the new pages are ready to replace
+    // them, so switching documents never blanks the preview.
+    releaseDocument();
 
     (async () => {
       try {
-        const blob = await fetchPreviewBlob(docId, index);
+        const blob = await fetchPreviewBlob(id, idx);
         if (cancelled) return;
 
         const arrayBuffer = await blob.arrayBuffer();
@@ -76,21 +82,27 @@
         await new Promise((r) => requestAnimationFrame(r));
         if (cancelled || !containerEl) return;
 
+        // Now that the replacement is ready, drop the outgoing pages.
+        containerEl.innerHTML = "";
+        renderedPages.clear();
+        renderedPageCount = 0;
+
         // Create placeholder divs for each page and observe them.
         const pageEls: HTMLDivElement[] = [];
         for (let i = 1; i <= pdf.numPages; i++) {
           const pageDiv = document.createElement("div");
-          pageDiv.className = "pdf-page mb-2 flex justify-center";
+          pageDiv.className = "pdf-page flex justify-center";
           pageDiv.dataset.page = String(i);
 
           // Create canvas for this page.
           const canvas = document.createElement("canvas");
-          canvas.className = "max-w-full h-auto";
+          canvas.className = "h-auto max-w-full rounded-sm shadow-[0_2px_10px_-6px_oklch(0_0_0/0.5)]";
           pageDiv.appendChild(canvas);
           containerEl.appendChild(pageDiv);
           pageEls.push(pageDiv);
           renderedPages.set(i, canvas);
         }
+        renderedPageCount = pageEls.length;
 
         // Use IntersectionObserver for lazy rendering.
         const rendered = new Set<number>();
@@ -121,17 +133,26 @@
         if (!cancelled) {
           error = err instanceof Error ? err.message : "Failed to load PDF";
           loading = false;
+          totalPages = 0;
+          containerEl?.replaceChildren();
+          renderedPages.clear();
+          renderedPageCount = 0;
         }
       }
     })();
 
     return () => {
       cancelled = true;
-      cleanup();
+      releaseDocument();
     };
   });
 
-  function cleanup(): void {
+  // Canvases are only torn out of the DOM when the preview itself unmounts;
+  // a document switch replaces them in place once the new pages exist.
+  $effect(() => () => cleanup());
+
+  /** Tear down the pdf.js document and observer, leaving rendered canvases alone. */
+  function releaseDocument(): void {
     if (observer) {
       observer.disconnect();
       observer = null;
@@ -140,7 +161,12 @@
       pdfDoc.destroy();
       pdfDoc = null;
     }
+  }
+
+  function cleanup(): void {
+    releaseDocument();
     renderedPages.clear();
+    renderedPageCount = 0;
     // Clear page containers from the DOM.
     if (containerEl) {
       containerEl.innerHTML = "";
@@ -148,11 +174,11 @@
   }
 </script>
 
-{#if loading}
-  <div class="flex items-center justify-center py-12 text-gray-400 text-sm">Loading PDF...</div>
-{:else if error}
-  <div class="bg-red-50 text-red-600 p-3 rounded text-sm">{error}</div>
-{:else}
-  <div class="text-xs text-gray-400 mb-2 text-center">{totalPages} page{totalPages === 1 ? "" : "s"}</div>
+<PreviewStatus {loading} {error} label="PDF" shape="page" hasContent={renderedPageCount > 0} />
+
+{#if !error && renderedPageCount > 0}
+  <p class="m-0 mb-2 text-center font-mono text-[0.7rem] tracking-[0.16em] uppercase text-muted-foreground">
+    {totalPages} page{totalPages === 1 ? "" : "s"}
+  </p>
 {/if}
-<div bind:this={containerEl} class="bg-gray-100 rounded"></div>
+<div bind:this={containerEl} class="flex flex-col gap-2 rounded-md bg-muted/50 [&:not(:empty)]:p-2"></div>
