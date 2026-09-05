@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { isAuthenticated, clearAuth, isPublicMode, setPublicMode } from "./lib/auth";
+  import { isAuthenticated, clearAuth, setPublicMode } from "./lib/auth";
   import { getProviders } from "./lib/api";
   import Login from "./routes/Login.svelte";
   import Invite from "./routes/Invite.svelte";
