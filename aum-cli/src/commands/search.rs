@@ -72,6 +72,12 @@ pub async fn run(
     backend: &dyn SearchBackend,
     tracker: &JobTracker,
 ) -> anyhow::Result<()> {
+    if let Some(ratio) = args.semantic_ratio {
+        anyhow::ensure!(
+            ratio.is_finite() && (0.0..=1.0).contains(&ratio),
+            "semantic_ratio must be between 0 and 1"
+        );
+    }
     let indices: Vec<String> = args
         .index
         .split(',')
@@ -118,7 +124,7 @@ pub async fn run(
         include_facets: false,
     };
 
-    let results: Vec<_> = if args.hybrid {
+    let results: Vec<_> = if args.hybrid && args.semantic_ratio != Some(0.0) {
         let model_info = validate_embeddings_for_indices(tracker, &indices).await?;
         let embedder = build_embedder(config, &model_info)?;
 

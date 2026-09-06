@@ -210,7 +210,7 @@ impl EmbedPipeline {
         &self,
         total: u64,
         stream: impl futures::Stream<
-            Item = Result<Vec<crate::search::types::SearchResult>, SearchError>,
+            Item = Result<Vec<crate::search::types::EmbeddingDocument>, SearchError>,
         > + Unpin
         + Send
         + 'static,
@@ -262,7 +262,7 @@ impl EmbedPipeline {
         job_id: &str,
         total: u64,
         stream: impl futures::Stream<
-            Item = Result<Vec<crate::search::types::SearchResult>, SearchError>,
+            Item = Result<Vec<crate::search::types::EmbeddingDocument>, SearchError>,
         > + Unpin
         + Send
         + 'static,
@@ -336,7 +336,7 @@ impl EmbedPipeline {
     /// embed dispatcher through the channel.
     async fn scroll_source(
         mut stream: impl futures::Stream<
-            Item = Result<Vec<crate::search::types::SearchResult>, SearchError>,
+            Item = Result<Vec<crate::search::types::EmbeddingDocument>, SearchError>,
         > + Unpin,
         tx: mpsc::Sender<EmbedItem>,
         max_chunk_chars: usize,
@@ -353,7 +353,7 @@ impl EmbedPipeline {
                 }
             };
             for doc in batch {
-                let chunks = chunk_text(&doc.snippet, max_chunk_chars, overlap_chars);
+                let chunks = chunk_text(&doc.content, max_chunk_chars, overlap_chars);
                 let item = EmbedItem {
                     doc_id: doc.doc_id,
                     chunks,
@@ -633,5 +633,31 @@ impl EmbedPipeline {
             in_flight: in_flight_count,
             in_flight_paths,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::types::EmbeddingDocument;
+
+    #[tokio::test]
+    async fn embedding_source_chunks_evidence_beyond_display_snippet() -> anyhow::Result<()> {
+        let evidence = "Restore deleted objects from the recovery vault.";
+        let content = format!("{}\n\n{evidence}", "intro ".repeat(60));
+        let source = futures::stream::iter(vec![Ok(vec![EmbeddingDocument {
+            doc_id: "manual".into(),
+            display_path: "manual.txt".into(),
+            content,
+        }])]);
+        let (tx, mut rx) = mpsc::channel(1);
+        EmbedPipeline::scroll_source(source, tx, 200, 0).await;
+        let item = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("missing embedding input"))?;
+        assert!(item.chunks.len() > 1);
+        assert!(item.chunks.iter().any(|chunk| chunk.contains(evidence)));
+        Ok(())
     }
 }

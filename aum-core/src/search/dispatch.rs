@@ -14,7 +14,8 @@ use crate::ingest::sink::{BatchSink, ExistenceChecker, RecordErrorFn};
 use crate::models::Document;
 use crate::search::backend::SearchBackend;
 use crate::search::types::{
-    BatchIndexResult, FacetMap, FilterMap, SearchError, SearchRequest, SearchResult,
+    BatchIndexResult, EmbeddingDocument, FacetMap, FilterMap, SearchError, SearchRequest,
+    SearchResult,
 };
 
 // ---------------------------------------------------------------------------
@@ -267,7 +268,7 @@ impl SearchBackend for AumBackend {
         &self,
         index: &str,
         batch_size: usize,
-    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+    ) -> BoxStream<'static, Result<Vec<EmbeddingDocument>, SearchError>> {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.scroll_unembedded(index, batch_size),
@@ -298,7 +299,7 @@ impl SearchBackend for AumBackend {
         index: &str,
         doc_ids: &[String],
         batch_size: usize,
-    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+    ) -> BoxStream<'static, Result<Vec<EmbeddingDocument>, SearchError>> {
         match self {
             #[cfg(feature = "meilisearch")]
             AumBackend::Meilisearch(b) => b.scroll_documents(index, doc_ids, batch_size),

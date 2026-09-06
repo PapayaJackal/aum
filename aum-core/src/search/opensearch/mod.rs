@@ -26,14 +26,15 @@ use crate::ingest::sink::{BatchSink, ExistenceChecker};
 use crate::models::Document;
 use crate::search::backend::SearchBackend;
 use crate::search::types::{
-    BatchIndexResult, FacetMap, FilterMap, SearchError, SearchRequest, SearchResult, SortSpec,
+    BatchIndexResult, EmbeddingDocument, FacetMap, FilterMap, SearchError, SearchRequest,
+    SearchResult, SortSpec,
 };
 
 use meta::build_doc_body;
 use parse::{parse_hit, parse_hits};
 use query::{
-    build_facet_aggs, build_filter_clauses, build_highlight, build_knn_query, build_sort_clause,
-    build_text_query, parse_facets,
+    build_facet_aggs, build_filter_clauses, build_highlight, build_sort_clause, build_text_query,
+    parse_facets,
 };
 use settings::{META_FIELD_TYPES, PATH_ANALYZER, build_index_body};
 
@@ -73,11 +74,6 @@ pub struct OpenSearchBackend {
     client: OpenSearch,
     max_highlight_offset: u64,
 }
-
-#[allow(clippy::doc_markdown)]
-/// Name of the search pipeline registered on every aum OpenSearch index to
-/// perform RRF fusion between the BM25 and k-NN sub-queries of a hybrid query.
-const RRF_PIPELINE: &str = "aum-rrf-pipeline";
 
 impl OpenSearchBackend {
     /// Create a new backend from config.
@@ -177,9 +173,7 @@ impl SearchBackend for OpenSearchBackend {
         &'a self,
         request: SearchRequest<'a>,
         vector: &'a [f32],
-        // Ignored: RRF fusion is performed by the search pipeline (rank_constant
-        // fixed at 60), not by a tunable weighted blend.
-        _semantic_ratio: f32,
+        semantic_ratio: f32,
     ) -> BoxStream<'a, Result<SearchResult, SearchError>> {
         results_stream(async move {
             execute_hybrid_search(
@@ -187,6 +181,7 @@ impl SearchBackend for OpenSearchBackend {
                 request.indices,
                 request.query,
                 vector,
+                semantic_ratio,
                 request.limit,
                 request.offset,
                 request.filters,
@@ -419,7 +414,7 @@ impl SearchBackend for OpenSearchBackend {
         &self,
         index: &str,
         batch_size: usize,
-    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+    ) -> BoxStream<'static, Result<Vec<EmbeddingDocument>, SearchError>> {
         let client = self.client.clone();
         let index = index.to_owned();
 
@@ -492,7 +487,7 @@ impl SearchBackend for OpenSearchBackend {
         index: &str,
         doc_ids: &[String],
         batch_size: usize,
-    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+    ) -> BoxStream<'static, Result<Vec<EmbeddingDocument>, SearchError>> {
         if doc_ids.is_empty() {
             return futures::stream::empty().boxed();
         }
@@ -514,7 +509,7 @@ impl SearchBackend for OpenSearchBackend {
                     "query": { "ids": { "values": page_ids } },
                     "size": batch_size,
                 });
-                let result = search_raw(&client, &[&index], body).await;
+                let result = fetch_embedding_documents(&client, &index, body).await;
                 let exhausted = end >= doc_ids.len();
                 match result {
                     Err(e) => Some((Err(e), (offset, true))),
@@ -650,8 +645,6 @@ async fn initialize_index(
     vector_dimension: Option<u32>,
     max_highlight_offset: u64,
 ) -> Result<(), SearchError> {
-    ensure_rrf_pipeline(client).await?;
-
     // Check whether the index already exists.
     let exists_resp = client
         .indices()
@@ -699,48 +692,6 @@ async fn initialize_index(
         vector = vector_dimension.is_some(),
         "created opensearch index"
     );
-    Ok(())
-}
-
-#[allow(clippy::doc_markdown)]
-/// Register (or overwrite) the cluster-wide search pipeline that applies
-/// Reciprocal Rank Fusion to hybrid query results. Idempotent — `PUT` replaces
-/// any existing pipeline with the same name.
-///
-/// This uses OpenSearch 2.19's native RRF normalization technique so that
-/// hybrid search works out of the box without client-side fusion or paid
-/// features.
-async fn ensure_rrf_pipeline(client: &OpenSearch) -> Result<(), SearchError> {
-    let body = json!({
-        "description": "RRF fusion for aum hybrid search (BM25 + k-NN)",
-        "phase_results_processors": [
-            {
-                "score-ranker-processor": {
-                    "combination": {
-                        "technique": "rrf"
-                    }
-                }
-            }
-        ]
-    });
-
-    let path = format!("/_search/pipeline/{RRF_PIPELINE}");
-    let resp = client
-        .send::<JsonBody<Value>, ()>(
-            opensearch::http::Method::Put,
-            &path,
-            opensearch::http::headers::HeaderMap::new(),
-            None,
-            Some(JsonBody::new(body)),
-            None,
-        )
-        .await
-        .map_err(SearchError::OpenSearch)?;
-
-    resp.error_for_status_code()
-        .map_err(SearchError::OpenSearch)?;
-
-    tracing::info!(pipeline = RRF_PIPELINE, "registered RRF search pipeline");
     Ok(())
 }
 
@@ -829,6 +780,7 @@ async fn execute_text_search(
         "query": text_query,
         "size":  limit,
         "from":  offset,
+        "_source": {"excludes": ["chunks.embedding"]},
         "highlight": build_highlight(max_highlight_offset),
     });
 
@@ -850,6 +802,7 @@ async fn execute_hybrid_search(
     indices: &[String],
     query: &str,
     vector: &[f32],
+    semantic_ratio: f32,
     limit: usize,
     offset: usize,
     filters: &FilterMap,
@@ -857,21 +810,34 @@ async fn execute_hybrid_search(
     include_facets: bool,
     max_highlight_offset: u64,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    let filter_clauses = build_filter_clauses(filters);
-    let text_query = build_text_query(query, &filter_clauses);
-    let knn_query = build_knn_query(vector, limit, &filter_clauses);
-    let highlight = build_highlight(max_highlight_offset);
-
-    let mut body = json!({
-        "query": {
-            "hybrid": {
-                "queries": [text_query, knn_query]
-            }
-        },
-        "size":      limit,
-        "from":      offset,
-        "highlight": highlight,
-    });
+    if !semantic_ratio.is_finite() || !(0.0..=1.0).contains(&semantic_ratio) {
+        return Err(SearchError::Internal(
+            "semantic_ratio must be between 0 and 1".into(),
+        ));
+    }
+    if semantic_ratio == 0.0 {
+        return execute_text_search(
+            client,
+            indices,
+            query,
+            limit,
+            offset,
+            filters,
+            sort,
+            include_facets,
+            max_highlight_offset,
+        )
+        .await;
+    }
+    let mut body = query::build_hybrid_body(
+        query,
+        vector,
+        semantic_ratio,
+        limit,
+        offset,
+        filters,
+        max_highlight_offset,
+    )?;
 
     if let Some(clause) = sort.and_then(build_sort_clause) {
         body["sort"] = clause;
@@ -881,22 +847,7 @@ async fn execute_hybrid_search(
     }
 
     let index_names: Vec<&str> = indices.iter().map(String::as_str).collect();
-    let path = format!("/{}/_search", index_names.join(","));
-    let query = [("search_pipeline", RRF_PIPELINE)];
-    let resp = client
-        .send::<JsonBody<Value>, _>(
-            opensearch::http::Method::Post,
-            &path,
-            opensearch::http::headers::HeaderMap::new(),
-            Some(&query),
-            Some(JsonBody::new(body)),
-            None,
-        )
-        .await
-        .map_err(SearchError::OpenSearch)?;
-
-    let body = read_search_body(resp).await?;
-    let (hits, _total) = parse_hits(&body);
+    let (hits, _total) = send_search(client, &index_names, body).await?;
     Ok(hits)
 }
 
@@ -954,14 +905,50 @@ async fn search_raw(
 // Unembedded pagination
 // ---------------------------------------------------------------------------
 
-/// Fetch a page of unembedded documents using cursor-based `search_after`
-/// pagination, sorted by `_id`.
+/// Read full stored text for embedding without the presentation hit parser.
+async fn fetch_embedding_documents(
+    client: &OpenSearch,
+    index: &str,
+    mut body: Value,
+) -> Result<Vec<EmbeddingDocument>, SearchError> {
+    body["_source"] = json!(["display_path", "content"]);
+    let response = client
+        .search(SearchParts::Index(&[index]))
+        .body(body)
+        .send()
+        .await
+        .map_err(SearchError::OpenSearch)?;
+    let body = read_search_body(response).await?;
+    body["hits"]["hits"]
+        .as_array()
+        .ok_or_else(|| SearchError::Internal("Missing embedding document hits".into()))?
+        .iter()
+        .map(|hit| {
+            let doc_id = hit["_id"]
+                .as_str()
+                .ok_or_else(|| SearchError::Internal("Missing embedding document id".into()))?;
+            let content = hit["_source"]["content"].as_str().ok_or_else(|| {
+                SearchError::Internal(format!("Missing content for embedding document {doc_id}"))
+            })?;
+            Ok(EmbeddingDocument {
+                doc_id: doc_id.to_owned(),
+                display_path: hit["_source"]["display_path"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned(),
+                content: content.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Fetch unembedded documents using cursor-based `search_after` pagination.
 async fn fetch_unembedded_cursor(
     client: &OpenSearch,
     index: &str,
     limit: usize,
     search_after: Option<&str>,
-) -> Result<Vec<SearchResult>, SearchError> {
+) -> Result<Vec<EmbeddingDocument>, SearchError> {
     let mut body = json!({
         "query": { "term": { "has_embeddings": false } },
         "size": limit,
@@ -970,7 +957,7 @@ async fn fetch_unembedded_cursor(
     if let Some(cursor) = search_after {
         body["search_after"] = json!([cursor]);
     }
-    search_raw(client, &[index], body).await
+    fetch_embedding_documents(client, index, body).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1007,4 +994,277 @@ fn count_bulk_failures(resp: &Value) -> u64 {
                 })
                 .count() as u64
         })
+}
+
+#[cfg(test)]
+mod hybrid_tests {
+    use super::*;
+    use opensearch::http::transport::Transport;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    #[tokio::test]
+    async fn embedding_scrolls_preserve_full_content_without_highlights() -> anyhow::Result<()> {
+        use futures::TryStreamExt as _;
+        let server = MockServer::start().await;
+        let content = format!(
+            "{} Evidence after the old snippet limit: restore from snapshots.",
+            "文".repeat(250)
+        );
+        Mock::given(method("POST"))
+            .and(path("/docs/_search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "hits": {"hits": [{"_id": "long-document", "_source": {
+                    "display_path": "manual.txt", "content": content
+                }, "highlight": {"content": ["short highlighted snippet"]}}]}
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let backend = OpenSearchBackend {
+            client: OpenSearch::new(Transport::single_node(&server.uri())?),
+            max_highlight_offset: 1_000_000,
+        };
+        let first = backend
+            .scroll_unembedded("docs", 10)
+            .try_next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing initial batch"))?;
+        let retry = backend
+            .scroll_documents("docs", &["long-document".into()], 10)
+            .try_next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing retry batch"))?;
+        assert_eq!(first[0].content, content);
+        assert_eq!(retry[0].content, content);
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("missing requests"))?;
+        for request in requests {
+            let body: Value = serde_json::from_slice(&request.body)?;
+            assert_eq!(body["_source"], json!(["display_path", "content"]));
+        }
+        Ok(())
+    }
+
+    /// Run against an expendable local engine; creates and deletes its own index.
+    #[tokio::test]
+    #[ignore = "requires OpenSearch 3.6 at AUM_TEST_OPENSEARCH_URL"]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "self-contained live ranking scenario and cleanup"
+    )]
+    async fn live_hybrid_ranking_endpoints_filters_and_pages() -> anyhow::Result<()> {
+        let url = std::env::var("AUM_TEST_OPENSEARCH_URL")?;
+        let name = format!("aum-quality-test-{}", std::process::id());
+        let http = reqwest::Client::new();
+        let mut mapping = settings::build_index_body(Some(2), 1_000_000);
+        mapping["settings"]["number_of_shards"] = json!(1);
+        mapping["settings"]["number_of_replicas"] = json!(0);
+        http.put(format!("{url}/{name}"))
+            .json(&mapping)
+            .send()
+            .await?
+            .error_for_status()?;
+        let result = async {
+            for (id, content, vector, mime) in [
+                ("lexical", "budget", [0.0, 1.0], "application/pdf"),
+                ("semantic", "spending plan", [1.0, 0.0], "text/plain"),
+                (
+                    "second",
+                    "financial outlook",
+                    [0.9, 0.435],
+                    "application/pdf",
+                ),
+                ("third", "financial forecast", [0.8, 0.6], "application/pdf"),
+            ] {
+                http.put(format!("{url}/{name}/_doc/{id}"))
+                    .json(&json!({"content": content, "display_path": id,
+                        "chunks": [{"embedding": vector}], "meta": {"content_type": mime}}))
+                    .send()
+                    .await?
+                    .error_for_status()?;
+            }
+            http.post(format!("{url}/{name}/_refresh"))
+                .send()
+                .await?
+                .error_for_status()?;
+            let client = OpenSearch::new(Transport::single_node(&url)?);
+            let indices = vec![name.clone()];
+            let filters = FilterMap::new();
+            for (ratio, expected) in [
+                (0.0, "lexical"),
+                (0.01, "lexical"),
+                (0.99, "semantic"),
+                (1.0, "semantic"),
+            ] {
+                let hits = execute_hybrid_search(
+                    &client,
+                    &indices,
+                    "budget",
+                    &[1.0, 0.0],
+                    ratio,
+                    1,
+                    0,
+                    &filters,
+                    None,
+                    false,
+                    1_000_000,
+                )
+                .await?;
+                anyhow::ensure!(
+                    hits.first().is_some_and(|h| h.doc_id == expected),
+                    "ratio {ratio}: expected {expected}, got {hits:?}"
+                );
+            }
+            for ratio in [0.99, 1.0] {
+                let hits = execute_hybrid_search(
+                    &client,
+                    &indices,
+                    "budget",
+                    &[1.0, 0.0],
+                    ratio,
+                    1,
+                    1,
+                    &filters,
+                    None,
+                    false,
+                    1_000_000,
+                )
+                .await?;
+                anyhow::ensure!(
+                    hits.first().is_some_and(|h| h.doc_id == "second"),
+                    "second page: {hits:?}"
+                );
+            }
+            let mut filters = FilterMap::new();
+            filters.insert("File Type".into(), vec!["PDF".into()]);
+            let hits = execute_hybrid_search(
+                &client,
+                &indices,
+                "budget",
+                &[1.0, 0.0],
+                0.99,
+                1,
+                0,
+                &filters,
+                None,
+                false,
+                1_000_000,
+            )
+            .await?;
+            anyhow::ensure!(
+                hits.first().is_some_and(|h| h.doc_id == "second"),
+                "filtered: {hits:?}"
+            );
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        http.delete(format!("{url}/{name}"))
+            .send()
+            .await?
+            .error_for_status()?;
+        result
+    }
+
+    #[tokio::test]
+    async fn hybrid_requests_preserve_weights_filters_and_pagination() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/docs/_search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "hits": {"total": {"value": 1}, "hits": [{
+                    "_index": "docs", "_id": "semantic-match", "_score": 0.01,
+                    "_source": {"content": "A relevant paraphrase", "display_path": "note.txt"}
+                }]}
+            })))
+            .expect(4)
+            .mount(&server)
+            .await;
+        let client = OpenSearch::new(Transport::single_node(&server.uri())?);
+        let mut filters = FilterMap::new();
+        filters.insert("File Type".into(), vec!["PDF".into()]);
+        for ratio in [0.0, 0.25, 0.75, 1.0] {
+            let hits = execute_hybrid_search(
+                &client,
+                &["docs".into()],
+                "budget",
+                &[1.0, 0.0],
+                ratio,
+                20,
+                20,
+                &filters,
+                None,
+                false,
+                1000,
+            )
+            .await?;
+            assert_eq!(hits[0].doc_id, "semantic-match");
+        }
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no requests"))?;
+        let bodies: Vec<Value> = requests
+            .iter()
+            .map(wiremock::Request::body_json)
+            .collect::<Result<_, _>>()?;
+        assert!(bodies[0].pointer("/query/bool").is_some());
+        assert!(bodies[0].get("search_pipeline").is_none());
+        for (body, weights) in [
+            (&bodies[1], json!([0.75, 0.25])),
+            (&bodies[2], json!([0.25, 0.75])),
+        ] {
+            assert_eq!(body.pointer("/search_pipeline/phase_results_processors/0/score-ranker-processor/combination/parameters/weights"), Some(&weights));
+            assert_eq!(
+                body.pointer("/query/hybrid/pagination_depth"),
+                Some(&json!(1000))
+            );
+            assert_eq!(
+                body.pointer("/query/hybrid/queries/1/nested/query/knn/chunks.embedding/k"),
+                Some(&json!(1000))
+            );
+            assert_eq!(body.pointer("/query/hybrid/queries/1/nested/query/knn/chunks.embedding/filter/bool/filter/0/terms/meta.content_type"), Some(&json!(["application/pdf"])));
+            assert_eq!(body["from"], 20);
+            assert_eq!(body["size"], 20);
+        }
+        assert!(bodies[3].pointer("/query/nested/query/knn").is_some());
+        assert!(bodies[3].get("search_pipeline").is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_ratios_fail_before_search() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        let client = OpenSearch::new(Transport::single_node(&server.uri())?);
+        for ratio in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert!(
+                execute_hybrid_search(
+                    &client,
+                    &["docs".into()],
+                    "query",
+                    &[1.0],
+                    ratio,
+                    20,
+                    0,
+                    &FilterMap::new(),
+                    None,
+                    false,
+                    1000
+                )
+                .await
+                .is_err()
+            );
+        }
+        assert!(
+            server
+                .received_requests()
+                .await
+                .is_some_and(|r| r.is_empty())
+        );
+        Ok(())
+    }
 }
