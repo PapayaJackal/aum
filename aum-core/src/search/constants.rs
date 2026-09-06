@@ -72,13 +72,13 @@ pub static METADATA_KEY_ALIASES: phf::Map<&'static str, &'static str> = phf::phf
     "dc:description" => "Description",
     "dc:language" => "Language",
     "language" => "Language",
-    "Message-From" => "From",
-    "Message-To" => "To",
-    "Message-CC" => "CC",
-    "Message-Subject" => "Subject",
-    "Message:Raw-Header:Message-ID" => "Message ID",
-    "Message:Raw-Header:In-Reply-To" => "In Reply To",
-    "Message:Raw-Header:References" => "References",
+    "message:from" => "From",
+    "message:to" => "To",
+    "message:cc" => "CC",
+    "message:bcc" => "BCC",
+    "message:raw-header:Message-ID" => "Message ID",
+    "message:raw-header:In-Reply-To" => "In Reply To",
+    "message:raw-header:References" => "References",
 };
 
 // ---------------------------------------------------------------------------
@@ -87,15 +87,14 @@ pub static METADATA_KEY_ALIASES: phf::Map<&'static str, &'static str> = phf::phf
 
 /// Tika metadata keys that are too noisy or internal to show in the UI.
 pub static HIDDEN_METADATA_KEYS: phf::Set<&'static str> = phf::phf_set! {
-    "X-TIKA:EXCEPTION:warn",
-    "X-TIKA:EXCEPTION:runtime",
-    "X-TIKA:content",
-    "X-TIKA:embedded_resource_path",
-    "X-TIKA:content_handler",
-    "X-TIKA:content_handler_type",
-    "X-TIKA:parse_time_millis",
-    "X-TIKA:Parsed-By",
-    "X-TIKA:Parsed-By-Full-Set",
+    "tk:exception:warn",
+    "tk:content",
+    "tk:embedded-resource-path",
+    "tk:content-handler-type",
+    "tk:parse-time-millis",
+    "tk:parsed-by",
+    "tk:parsed-by-full-set",
+    "tk:resource-name",
     "tiff:BitsPerSample",
     "tiff:ImageLength",
     "tiff:ImageWidth",
@@ -128,7 +127,6 @@ pub static HIDDEN_METADATA_KEYS: phf::Set<&'static str> = phf::phf_set! {
     "exif:Saturation",
     "exif:Contrast",
     "exif:GainControl",
-    "resourceName",
 };
 
 // ---------------------------------------------------------------------------

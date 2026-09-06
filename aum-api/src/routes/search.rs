@@ -63,10 +63,9 @@ fn meta_str(meta: &HashMap<String, serde_json::Value>, key: &str) -> String {
 
 /// Metadata keys excluded from API responses.
 const EXCLUDED_META_PREFIXES: &[&str] = &[
-    "X-TIKA:",
-    "X-Parsed-By",
+    "tk:",
     "pdf:",
-    "access_permission:",
+    "access-permission:",
     "dc:",
     "dcterms:",
     "meta:",

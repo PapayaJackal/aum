@@ -41,9 +41,9 @@ document search platform, look at
 ## Requirements
 
 - Rust 1.91+ (to build from source)
+- Apache Tika 4.0+
 - OpenSearch 3.6 (the Docker Compose version), or Meilisearch 1.x+ with
   `--features meilisearch`
-- Apache Tika 3.x
 - Node.js 22+ (to build the frontend)
 - Optional: Ollama or an OpenAI-compatible API for embeddings
 
@@ -233,6 +233,11 @@ concurrency = 4
 
 Instances are selected via round-robin. Unhealthy instances are
 automatically taken out of rotation and retried after a cooldown.
+
+Aum sends OCR and plain-text handler settings through Tika 4's per-request
+configuration endpoint. External Tika instances must enable
+`server.allowPerRequestConfig`; the Compose service mounts the included
+[`tika-config.json`](tika-config.json) with this setting enabled.
 
 ## Hybrid search
 

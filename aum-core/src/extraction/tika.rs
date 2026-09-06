@@ -1,14 +1,14 @@
 //! Apache Tika document extraction backend.
 //!
 //! Uses Tika's HTTP API:
-//! - `PUT /rmeta/text` for recursive text and metadata extraction.
-//! - `PUT /unpack` to retrieve direct-child embedded files; called recursively
+//! - `POST /rmeta/config` for recursive text and metadata extraction.
+//! - `POST /unpack` to retrieve direct-child embedded files; called recursively
 //!   on each extracted entry so nested attachments are also available.
 
 use async_zip::tokio::read::fs::ZipFileReader; // crate name: async_zip
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
-use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
+use reqwest::header::{ACCEPT, HeaderValue};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,9 +27,9 @@ use crate::models::{Document, MetadataValue};
 // Tika metadata key constants
 // ---------------------------------------------------------------------------
 
-const TIKA_CONTENT_KEY: &str = "X-TIKA:content";
-const EMBEDDED_RESOURCE_PATH_KEY: &str = "X-TIKA:embedded_resource_path";
-const RESOURCE_NAME_KEY: &str = "resourceName";
+const TIKA_CONTENT_KEY: &str = "tk:content";
+const EMBEDDED_RESOURCE_PATH_KEY: &str = "tk:embedded-resource-path";
+const RESOURCE_NAME_KEY: &str = "tk:resource-name";
 /// Maximum characters of an HTTP error body included in [`ExtractionError::RmetaHttp`].
 const RMETA_ERROR_BODY_LIMIT: usize = 512;
 
@@ -38,11 +38,10 @@ fn is_tika_internal(key: &str) -> bool {
         key,
         TIKA_CONTENT_KEY
             | EMBEDDED_RESOURCE_PATH_KEY
-            | "X-TIKA:content_handler"
-            | "X-TIKA:content_handler_type"
-            | "X-TIKA:parse_time_millis"
-            | "X-TIKA:Parsed-By"
-            | "X-TIKA:Parsed-By-Full-Set"
+            | "tk:content-handler-type"
+            | "tk:parse-time-millis"
+            | "tk:parsed-by"
+            | "tk:parsed-by-full-set"
     )
 }
 
@@ -88,7 +87,7 @@ pub(crate) fn condense_whitespace(text: &str) -> String {
 
 /// Normalise a raw Tika metadata map into the aum domain model.
 ///
-/// Internal `X-TIKA:*` keys are filtered out. JSON arrays become
+/// Internal `tk:*` keys are filtered out. JSON arrays become
 /// [`MetadataValue::List`]; all other values become [`MetadataValue::Single`].
 pub(crate) fn normalize_metadata(raw: &Map<String, Value>) -> HashMap<String, MetadataValue> {
     raw.iter()
@@ -227,23 +226,29 @@ impl TikaExtractor {
         )
     }
 
-    fn tika_headers(&self) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        if self.config.ocr_enabled {
-            if let Ok(val) = HeaderValue::from_str(&self.config.ocr_language) {
-                headers.insert("X-Tika-OCRLanguage", val);
+    /// Build the Tika 4 per-request parser configuration.
+    ///
+    /// Tika 4 removed the `X-Tika-OCR*` headers, so OCR settings must be sent
+    /// as JSON through the multipart `/config` endpoints. The handler is
+    /// pinned to text because Tika 4 otherwise defaults recursive content to
+    /// Markdown.
+    fn tika_request_config(&self) -> Value {
+        serde_json::json!({
+            "basic-content-handler-factory": {
+                "type": "TEXT"
+            },
+            "tesseract-ocr-parser": {
+                "skipOcr": !self.config.ocr_enabled,
+                "language": self.config.ocr_language
             }
-        } else {
-            headers.insert("X-Tika-OCRskipOcr", HeaderValue::from_static("true"));
-        }
-        headers
+        })
     }
 
     // -----------------------------------------------------------------------
-    // /rmeta/text
+    // /rmeta/config
     // -----------------------------------------------------------------------
 
-    /// Call `PUT /rmeta/text` and stream back individual metadata parts.
+    /// Call `POST /rmeta/config` and stream back individual metadata parts.
     ///
     /// Each JSON array element is parsed and yielded individually via a
     /// channel, so memory is bounded to a single part at a time rather
@@ -257,7 +262,7 @@ impl TikaExtractor {
         let stream = async_stream::try_stream! {
             let resp = self.send_tika_request(
                 file_path,
-                "rmeta/text",
+                "rmeta/config",
                 "application/json",
                 |path, source| ExtractionError::RmetaConnection { path, source },
             ).await?;
@@ -308,8 +313,7 @@ impl TikaExtractor {
         map_error: fn(PathBuf, reqwest::Error) -> ExtractionError,
     ) -> Result<reqwest::Response, ExtractionError> {
         let max_retries = self.config.max_retries;
-        let mut headers = self.tika_headers();
-        headers.insert(ACCEPT, HeaderValue::from_static(accept));
+        let config_json = self.tika_request_config().to_string();
 
         for attempt in 0..=max_retries {
             // Re-open the file on each attempt since the body stream is consumed.
@@ -317,16 +321,32 @@ impl TikaExtractor {
                 .await
                 .map_err(|e| io_error(file_path, e))?;
 
+            let file_name = file_path.file_name().map_or_else(
+                || "document".to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            let file_part =
+                reqwest::multipart::Part::stream(stream_file_body(file)).file_name(file_name);
+            let config_part = reqwest::multipart::Part::text(config_json.clone())
+                .mime_str("application/json")
+                .map_err(|e| map_error(file_path.to_path_buf(), e))?;
+            let form = reqwest::multipart::Form::new()
+                .part("file", file_part)
+                .part("config", config_part);
+
             let result = self
                 .client
-                .put(self.tika_url(endpoint))
-                .headers(headers.clone())
-                .body(stream_file_body(file))
+                .post(self.tika_url(endpoint))
+                .header(ACCEPT, HeaderValue::from_static(accept))
+                .multipart(form)
                 .send()
                 .await;
 
             match result {
-                Ok(resp) if resp.status().is_server_error() => {
+                Ok(resp)
+                    if resp.status().is_server_error()
+                        || resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS =>
+                {
                     if attempt < max_retries {
                         let backoff = self.retry_backoff(attempt);
                         tracing::warn!(
@@ -408,7 +428,7 @@ impl TikaExtractor {
     // /unpack + zip extraction
     // -----------------------------------------------------------------------
 
-    /// Stream `PUT /unpack` to a temp zip file, returning it or `None` on 204.
+    /// Stream `POST /unpack` to a temp zip file, returning it or `None` on 204.
     ///
     /// Unlike `/unpack/all` which flattens the entire tree, `/unpack` returns
     /// only direct children.  We call it recursively on each extracted entry
@@ -830,7 +850,7 @@ fn is_retryable_reqwest_error(e: &reqwest::Error) -> bool {
 /// Serde visitor that sends each JSON array element through a channel.
 ///
 /// Used by [`TikaExtractor::spawn_rmeta_parser`] to stream Tika's
-/// `/rmeta/text` response one part at a time instead of deserialising the
+/// `/rmeta/config` response one part at a time instead of deserialising the
 /// entire array into memory.
 struct RmetaElementVisitor<'a>(
     &'a tokio::sync::mpsc::Sender<Result<Map<String, Value>, ExtractionError>>,
@@ -1106,12 +1126,21 @@ mod tests {
     use anyhow::Context as _;
     use serde_json::json;
     use tempfile::TempDir;
-    use wiremock::matchers::{body_bytes, method, path};
+    use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use futures::TryStreamExt as _;
 
     use super::*;
+
+    fn body_bytes(needle: &'static [u8]) -> impl wiremock::Match {
+        move |request: &wiremock::Request| {
+            request
+                .body
+                .windows(needle.len())
+                .any(|window| window == needle)
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -1265,11 +1294,11 @@ mod tests {
     fn normalize_metadata_strips_internal_keys() {
         let mut raw = Map::new();
         raw.insert(TIKA_CONTENT_KEY.to_owned(), json!("text"));
-        raw.insert("X-TIKA:Parsed-By".to_owned(), json!(["p"]));
+        raw.insert("tk:parsed-by".to_owned(), json!(["p"]));
         raw.insert("dc:title".to_owned(), json!("Doc"));
         let meta = normalize_metadata(&raw);
         assert!(!meta.contains_key(TIKA_CONTENT_KEY));
-        assert!(!meta.contains_key("X-TIKA:Parsed-By"));
+        assert!(!meta.contains_key("tk:parsed-by"));
         assert!(meta.contains_key("dc:title"));
     }
 
@@ -1301,10 +1330,10 @@ mod tests {
     #[tokio::test]
     async fn extract_simple_document() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
-                "X-TIKA:content": "  Hello world  ",
+                "tk:content": "  Hello world  ",
                 "dc:title": "My Doc",
             }])))
             .mount(&server)
@@ -1323,7 +1352,7 @@ mod tests {
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].content, "Hello world");
         assert_eq!(docs[0].source_path, source);
-        assert!(!docs[0].metadata.contains_key("X-TIKA:content"));
+        assert!(!docs[0].metadata.contains_key("tk:content"));
 
         // No /unpack call for a simple document.
         let reqs = server
@@ -1331,14 +1360,18 @@ mod tests {
             .await
             .context("request recording disabled")?;
         assert_eq!(reqs.len(), 1);
+        let request_body = String::from_utf8_lossy(&reqs[0].body);
+        assert!(request_body.contains(r#""type":"TEXT""#));
+        assert!(request_body.contains(r#""skipOcr":true"#));
+        assert!(request_body.contains(r#""language":"eng""#));
         Ok(())
     }
 
     #[tokio::test]
     async fn extract_empty_rmeta_gives_one_empty_doc() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
             .mount(&server)
             .await;
@@ -1361,8 +1394,8 @@ mod tests {
     #[tokio::test]
     async fn extract_rmeta_http_error() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(500).set_body_string("error"))
             .mount(&server)
             .await;
@@ -1383,12 +1416,12 @@ mod tests {
     #[tokio::test]
     async fn extract_internal_keys_stripped() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
-                "X-TIKA:content": "text",
-                "X-TIKA:content_handler": "h",
-                "X-TIKA:parse_time_millis": "10",
+                "tk:content": "text",
+                "tk:content-handler-type": "h",
+                "tk:parse-time-millis": "10",
                 "dc:title": "kept",
             }])))
             .mount(&server)
@@ -1404,8 +1437,8 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await?;
 
-        assert!(!docs[0].metadata.contains_key("X-TIKA:content_handler"));
-        assert!(!docs[0].metadata.contains_key("X-TIKA:parse_time_millis"));
+        assert!(!docs[0].metadata.contains_key("tk:content-handler-type"));
+        assert!(!docs[0].metadata.contains_key("tk:parse-time-millis"));
         assert!(docs[0].metadata.contains_key("dc:title"));
         Ok(())
     }
@@ -1413,11 +1446,11 @@ mod tests {
     #[tokio::test]
     async fn extract_content_truncated() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_json(json!([{"X-TIKA:content": "abcdefghij1234567890"}])),
+                    .set_body_json(json!([{"tk:content": "abcdefghij1234567890"}])),
             )
             .mount(&server)
             .await;
@@ -1451,11 +1484,10 @@ mod tests {
     async fn extract_content_truncation_is_char_safe() -> anyhow::Result<()> {
         // 7 multibyte chars, limit 3 → "こんに"
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!([{"X-TIKA:content": "こんにちは世界"}])),
+                ResponseTemplate::new(200).set_body_json(json!([{"tk:content": "こんにちは世界"}])),
             )
             .mount(&server)
             .await;
@@ -1483,19 +1515,19 @@ mod tests {
         let zip_bytes = make_zip_bytes(&[("attach.txt", b"attachment content")]).await?;
 
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                {"X-TIKA:content": "email body"},
+                {"tk:content": "email body"},
                 {
-                    "X-TIKA:content": "attachment text",
-                    "X-TIKA:embedded_resource_path": "/attach.txt",
-                    "resourceName": "attach.txt",
+                    "tk:content": "attachment text",
+                    "tk:embedded-resource-path": "/attach.txt",
+                    "tk:resource-name": "attach.txt",
                 }
             ])))
             .mount(&server)
             .await;
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -1527,15 +1559,15 @@ mod tests {
     #[tokio::test]
     async fn extract_unpack_204_keeps_both_parts() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                {"X-TIKA:content": "email body"},
-                {"X-TIKA:content": "part", "X-TIKA:embedded_resource_path": "/part.txt"},
+                {"tk:content": "email body"},
+                {"tk:content": "part", "tk:embedded-resource-path": "/part.txt"},
             ])))
             .mount(&server)
             .await;
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .respond_with(ResponseTemplate::new(204))
             .mount(&server)
@@ -1560,16 +1592,16 @@ mod tests {
     #[tokio::test]
     async fn extract_unpack_failure_drops_embedded() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                {"X-TIKA:content": "container"},
-                {"X-TIKA:content": "e1", "X-TIKA:embedded_resource_path": "/a.txt"},
-                {"X-TIKA:content": "e2", "X-TIKA:embedded_resource_path": "/b.txt"},
+                {"tk:content": "container"},
+                {"tk:content": "e1", "tk:embedded-resource-path": "/a.txt"},
+                {"tk:content": "e2", "tk:embedded-resource-path": "/b.txt"},
             ])))
             .mount(&server)
             .await;
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .respond_with(ResponseTemplate::new(500).set_body_string("error"))
             .mount(&server)
@@ -1606,18 +1638,18 @@ mod tests {
         let inner_zip = make_zip_bytes(&[("inner.txt", b"deep")]).await?;
 
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                {"X-TIKA:content": "outer"},
-                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/inner.zip"},
-                {"X-TIKA:content": "deep", "X-TIKA:embedded_resource_path": "/inner.zip/inner.txt"},
+                {"tk:content": "outer"},
+                {"tk:content": "", "tk:embedded-resource-path": "/inner.zip"},
+                {"tk:content": "deep", "tk:embedded-resource-path": "/inner.zip/inner.txt"},
             ])))
             .mount(&server)
             .await;
         // Match unpack calls by request body (the file content sent to Tika).
         // First /unpack sends the source file ("data") → returns inner.zip.
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .and(body_bytes(b"data" as &[u8]))
             .respond_with(
@@ -1628,7 +1660,7 @@ mod tests {
             .mount(&server)
             .await;
         // Second /unpack sends extracted inner.zip ("fake zip data") → returns inner.txt.
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .and(body_bytes(b"fake zip data" as &[u8]))
             .respond_with(
@@ -1661,9 +1693,9 @@ mod tests {
     async fn extract_empty_file_no_error() -> anyhow::Result<()> {
         // Zero-byte file: empty content but no EmptyExtraction error.
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"X-TIKA:content": ""}])))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"tk:content": ""}])))
             .mount(&server)
             .await;
 
@@ -1692,17 +1724,17 @@ mod tests {
             make_zip_bytes(&[("a.bin", b"a"), ("b.bin", b"b"), ("c.bin", b"c")]).await?;
 
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                {"X-TIKA:content": ""},
-                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/a.bin"},
-                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/b.bin"},
-                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/c.bin"},
+                {"tk:content": ""},
+                {"tk:content": "", "tk:embedded-resource-path": "/a.bin"},
+                {"tk:content": "", "tk:embedded-resource-path": "/b.bin"},
+                {"tk:content": "", "tk:embedded-resource-path": "/c.bin"},
             ])))
             .mount(&server)
             .await;
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -1736,18 +1768,18 @@ mod tests {
         let zip_bytes = make_zip_bytes(&[("file.txt", b"nested")]).await?;
 
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                {"X-TIKA:content": "container"},
+                {"tk:content": "container"},
                 {
-                    "X-TIKA:content": "nested",
-                    "X-TIKA:embedded_resource_path": "/file.txt",
+                    "tk:content": "nested",
+                    "tk:embedded-resource-path": "/file.txt",
                 }
             ])))
             .mount(&server)
             .await;
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -1784,19 +1816,19 @@ mod tests {
         let zip_bytes = make_zip_bytes(&[("attach.pdf", b"content")]).await?;
 
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                {"X-TIKA:content": "email"},
+                {"tk:content": "email"},
                 {
-                    "X-TIKA:content": "attach",
-                    "X-TIKA:embedded_resource_path": "/attach.pdf",
-                    "resourceName": "attach.pdf",
+                    "tk:content": "attach",
+                    "tk:embedded-resource-path": "/attach.pdf",
+                    "tk:resource-name": "attach.pdf",
                 }
             ])))
             .mount(&server)
             .await;
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -1841,21 +1873,21 @@ mod tests {
         let inner_zip = make_zip_bytes(&[("document.pdf", b"pdf content")]).await?;
 
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                {"X-TIKA:content": "outer email"},
-                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/attach.eml"},
+                {"tk:content": "outer email"},
+                {"tk:content": "", "tk:embedded-resource-path": "/attach.eml"},
                 {
-                    "X-TIKA:content": "pdf text",
-                    "X-TIKA:embedded_resource_path": "/attach.eml/document.pdf",
+                    "tk:content": "pdf text",
+                    "tk:embedded-resource-path": "/attach.eml/document.pdf",
                 },
             ])))
             .mount(&server)
             .await;
         // Match unpack calls by request body (the file content sent to Tika).
         // First /unpack sends the source file ("raw") → returns attach.eml.
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .and(body_bytes(b"raw" as &[u8]))
             .respond_with(
@@ -1866,7 +1898,7 @@ mod tests {
             .mount(&server)
             .await;
         // Second /unpack sends extracted attach.eml ("inner email") → returns document.pdf.
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .and(body_bytes(b"inner email" as &[u8]))
             .respond_with(
@@ -1928,19 +1960,19 @@ mod tests {
         let inner_zip_2 = make_zip_bytes(&[("report.pdf", b"pdf2")]).await?;
 
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                {"X-TIKA:content": "email body"},
-                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/embedded-1"},
+                {"tk:content": "email body"},
+                {"tk:content": "", "tk:embedded-resource-path": "/embedded-1"},
                 {
-                    "X-TIKA:content": "invoice text",
-                    "X-TIKA:embedded_resource_path": "/embedded-1/invoice.pdf",
+                    "tk:content": "invoice text",
+                    "tk:embedded-resource-path": "/embedded-1/invoice.pdf",
                 },
-                {"X-TIKA:content": "", "X-TIKA:embedded_resource_path": "/embedded-2"},
+                {"tk:content": "", "tk:embedded-resource-path": "/embedded-2"},
                 {
-                    "X-TIKA:content": "report text",
-                    "X-TIKA:embedded_resource_path": "/embedded-2/report.pdf",
+                    "tk:content": "report text",
+                    "tk:embedded-resource-path": "/embedded-2/report.pdf",
                 },
             ])))
             .mount(&server)
@@ -1948,7 +1980,7 @@ mod tests {
 
         // Match unpack calls by request body (the file content sent to Tika).
         // First /unpack sends the source file ("raw email") → returns both children.
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .and(body_bytes(b"raw email" as &[u8]))
             .respond_with(
@@ -1959,7 +1991,7 @@ mod tests {
             .mount(&server)
             .await;
         // Second /unpack sends extracted embedded-1 ("mime part 1") → returns invoice.pdf.
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .and(body_bytes(b"mime part 1" as &[u8]))
             .respond_with(
@@ -1970,7 +2002,7 @@ mod tests {
             .mount(&server)
             .await;
         // Third /unpack sends extracted embedded-2 ("mime part 2") → returns report.pdf.
-        Mock::given(method("PUT"))
+        Mock::given(method("POST"))
             .and(path("/unpack"))
             .and(body_bytes(b"mime part 2" as &[u8]))
             .respond_with(
@@ -2021,18 +2053,18 @@ mod tests {
         let server = MockServer::start().await;
 
         // First two calls return 503, third returns 200.
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(wiremock::ResponseTemplate::new(503))
             .up_to_n_times(2)
             .expect(2)
             .mount(&server)
             .await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(
                 wiremock::ResponseTemplate::new(200)
-                    .set_body_json(json!([{"X-TIKA:content": "hello"}])),
+                    .set_body_json(json!([{"tk:content": "hello"}])),
             )
             .expect(1)
             .mount(&server)
@@ -2062,8 +2094,8 @@ mod tests {
     #[tokio::test]
     async fn send_tika_request_exhausts_retries_on_persistent_503() -> anyhow::Result<()> {
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/rmeta/text"))
+        Mock::given(method("POST"))
+            .and(path("/rmeta/config"))
             .respond_with(wiremock::ResponseTemplate::new(503))
             .mount(&server)
             .await;

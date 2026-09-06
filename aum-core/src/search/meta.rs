@@ -48,26 +48,22 @@ pub(super) static META_SOURCE_KEYS: &[(&str, &[&str])] = &[
         ],
     ),
     ("file_size", &["Content-Length"]),
-    (
-        "message_id",
-        &["Message:Raw-Header:Message-ID", "Message-ID"],
-    ),
-    (
-        "in_reply_to",
-        &["Message:Raw-Header:In-Reply-To", "In-Reply-To"],
-    ),
-    (
-        "references",
-        &["Message:Raw-Header:References", "References"],
-    ),
+    ("message_id", &["message:raw-header:Message-ID"]),
+    ("in_reply_to", &["message:raw-header:In-Reply-To"]),
+    ("references", &["message:raw-header:References"]),
 ];
 
 /// Email header keys whose values are collected into the deduplicated `email_addresses` facet.
 pub(super) static EMAIL_HEADER_KEYS: &[&str] =
-    &["Message-From", "Message-To", "Message-CC", "Message-BCC"];
+    &["message:from", "message:to", "message:cc", "message:bcc"];
+
+static EMAIL_FROM_KEYS: &[&str] = &["message:from"];
+static EMAIL_TO_KEYS: &[&str] = &["message:to"];
+static EMAIL_CC_KEYS: &[&str] = &["message:cc"];
+static EMAIL_BCC_KEYS: &[&str] = &["message:bcc"];
 
 /// Candidate Tika keys for the email subject line.
-pub(super) static EMAIL_SUBJECT_KEYS: &[&str] = &["Message-Subject", "dc:subject", "subject"];
+pub(super) static EMAIL_SUBJECT_KEYS: &[&str] = &["dc:subject", "subject"];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -137,13 +133,13 @@ pub struct IndexedMeta {
     pub references: Vec<String>,
     /// Deduplicated email addresses from From/To/CC/BCC headers (for faceting).
     pub email_addresses: Vec<String>,
-    /// Raw display values from the `Message-From` header.
+    /// Raw display values from the email `From` header.
     pub email_from: Vec<String>,
-    /// Raw display values from the `Message-To` header.
+    /// Raw display values from the email `To` header.
     pub email_to: Vec<String>,
-    /// Raw display values from the `Message-CC` header.
+    /// Raw display values from the email `Cc` header.
     pub email_cc: Vec<String>,
-    /// Raw display values from the `Message-BCC` header.
+    /// Raw display values from the email `Bcc` header.
     pub email_bcc: Vec<String>,
     /// Email subject line.
     pub email_subject: Option<String>,
@@ -208,16 +204,18 @@ pub fn extract_indexed_meta<S: std::hash::BuildHasher>(
     }
 
     // Per-header display values for rendering.
-    for (key, dest) in [
-        ("Message-From", &mut out.email_from),
-        ("Message-To", &mut out.email_to),
-        ("Message-CC", &mut out.email_cc),
-        ("Message-BCC", &mut out.email_bcc),
-    ] {
-        if let Some(val) = metadata.get(key) {
-            *dest = as_string_list(val).into_owned();
-        }
-    }
+    out.email_from = first_match(metadata, EMAIL_FROM_KEYS)
+        .map(|value| as_string_list(value).into_owned())
+        .unwrap_or_default();
+    out.email_to = first_match(metadata, EMAIL_TO_KEYS)
+        .map(|value| as_string_list(value).into_owned())
+        .unwrap_or_default();
+    out.email_cc = first_match(metadata, EMAIL_CC_KEYS)
+        .map(|value| as_string_list(value).into_owned())
+        .unwrap_or_default();
+    out.email_bcc = first_match(metadata, EMAIL_BCC_KEYS)
+        .map(|value| as_string_list(value).into_owned())
+        .unwrap_or_default();
 
     // Subject line.
     for key in EMAIL_SUBJECT_KEYS {
@@ -275,20 +273,44 @@ mod tests {
 
     #[test]
     fn extract_message_id_normalised() {
-        let m = meta(&[("Message:Raw-Header:Message-ID", " <abc@example.com> ")]);
+        let m = meta(&[("message:raw-header:Message-ID", " <abc@example.com> ")]);
         let out = extract_indexed_meta(&m);
         assert_eq!(out.message_id.as_deref(), Some("abc@example.com"));
+    }
+
+    #[test]
+    fn extract_tika_4_email_fields() {
+        let m = meta(&[
+            ("message:from", "Alice <alice@example.com>"),
+            ("message:to", "Bob <bob@example.com>"),
+            ("message:raw-header:Message-ID", "<msg-2@example.com>"),
+            ("message:raw-header:In-Reply-To", "<msg-1@example.com>"),
+            (
+                "message:raw-header:References",
+                "<msg-0@example.com> <msg-1@example.com>",
+            ),
+            ("dc:subject", "Subject"),
+        ]);
+        let out = extract_indexed_meta(&m);
+
+        assert_eq!(out.message_id.as_deref(), Some("msg-2@example.com"));
+        assert_eq!(out.in_reply_to.as_deref(), Some("msg-1@example.com"));
+        assert_eq!(out.references, ["msg-0@example.com", "msg-1@example.com"]);
+        assert_eq!(out.email_from, ["Alice <alice@example.com>"]);
+        assert_eq!(out.email_to, ["Bob <bob@example.com>"]);
+        assert_eq!(out.email_subject.as_deref(), Some("Subject"));
+        assert_eq!(out.email_addresses.len(), 2);
     }
 
     #[test]
     fn extract_email_addresses_deduped() {
         let mut md: HashMap<String, MetadataValue> = HashMap::new();
         md.insert(
-            "Message-From".into(),
+            "message:from".into(),
             MetadataValue::Single("Alice <alice@example.com>".into()),
         );
         md.insert(
-            "Message-To".into(),
+            "message:to".into(),
             MetadataValue::List(vec![
                 "bob@example.com".into(),
                 "Alice <alice@example.com>".into(),
@@ -307,11 +329,11 @@ mod tests {
     fn extract_email_addresses_case_insensitive_dedup() {
         let mut md: HashMap<String, MetadataValue> = HashMap::new();
         md.insert(
-            "Message-From".into(),
+            "message:from".into(),
             MetadataValue::Single("ALICE@EXAMPLE.COM".into()),
         );
         md.insert(
-            "Message-To".into(),
+            "message:to".into(),
             MetadataValue::Single("alice@example.com".into()),
         );
         let out = extract_indexed_meta(&md);
