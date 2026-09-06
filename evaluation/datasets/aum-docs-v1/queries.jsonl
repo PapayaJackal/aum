@@ -1,0 +1,14 @@
+{"_id":"q01-exact-policy","text":"expense policy 2025","category":"exact_title_and_path","purpose":"An exact policy name should retain a high lexical rank."}
+{"_id":"q02-home-broadband","text":"Can I be repaid for broadband while working from home?","category":"paraphrase","purpose":"Tests semantic matching against wording that differs from the policy."}
+{"_id":"q03-mfa-vpn","text":"MFA requirements for VPN","category":"acronym_and_exact_term","purpose":"Tests expansion of a common security acronym while preserving exact terms."}
+{"_id":"q04-laptop-approval","text":"Who approves a new laptop purchase?","category":"paraphrase","purpose":"Tests an approval question whose answer uses procurement vocabulary."}
+{"_id":"q05-aurora-go-live","text":"Aurora go-live readiness","category":"entity_and_release_language","purpose":"Tests project-name and release-readiness retrieval."}
+{"_id":"q06-aurora-outage","text":"Why did the Aurora service go down after deployment?","category":"incident_paraphrase","purpose":"Tests semantic incident retrieval against a deployment-related distractor."}
+{"_id":"q07-object-restore","text":"restore object storage after accidental deletion","category":"technical_task","purpose":"Tests task-oriented technical retrieval."}
+{"_id":"q08-http-429","text":"API 429 throttling","category":"exact_technical_term","purpose":"Tests exact error-code and rate-limit matching."}
+{"_id":"q09-adoption-leave","text":"maternity or adoption leave duration","category":"synonym_and_policy","purpose":"Tests a policy query that uses a term absent from the source title."}
+{"_id":"q10-account-retention","text":"how long do we keep customer information after account closure?","category":"question_paraphrase","purpose":"Tests retention-policy retrieval while separating legal retention from backup recovery."}
+{"_id":"q11-nimbus-renewal","text":"renew the Nimbus Analytics contract","category":"entity_and_email","purpose":"Tests named-vendor retrieval across an email and a planning document."}
+{"_id":"q12-slow-dashboard","text":"customers say dashboard page takes too long","category":"user_language","purpose":"Tests customer-language paraphrase and a negative API distractor."}
+{"_id":"q13-conference-hotel","text":"reimbursement for hotel after conference","category":"expense_paraphrase","purpose":"Tests travel-expense specificity against a general policy."}
+{"_id":"q14-security-course","text":"security course deadline","category":"email_subject_and_concept","purpose":"Tests deadline retrieval with a related security-policy document."}
