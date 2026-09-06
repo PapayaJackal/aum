@@ -6,7 +6,8 @@ use futures::stream::BoxStream;
 
 use crate::models::Document;
 use crate::search::types::{
-    BatchIndexResult, FacetMap, FilterMap, SearchError, SearchRequest, SearchResult,
+    BatchIndexResult, EmbeddingDocument, FacetMap, FilterMap, SearchError, SearchRequest,
+    SearchResult,
 };
 
 // ---------------------------------------------------------------------------
@@ -117,7 +118,7 @@ pub trait SearchBackend: Send + Sync {
         &self,
         index: &str,
         batch_size: usize,
-    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>>;
+    ) -> BoxStream<'static, Result<Vec<EmbeddingDocument>, SearchError>>;
 
     /// Bulk-update embedding vectors for a set of document IDs.
     ///
@@ -134,8 +135,7 @@ pub trait SearchBackend: Send + Sync {
     /// Stream batches of documents by their IDs.
     ///
     /// Used by embed retry to re-embed specific documents that failed previously.
-    /// Each returned batch contains up to `batch_size` results with their `snippet`
-    /// field populated with the full document content.
+    /// Each returned batch contains up to `batch_size` documents with full content.
     /// The returned stream is `'static` — implementations must clone/own all
     /// state so the stream can be sent to a spawned task.
     fn scroll_documents(
@@ -143,7 +143,7 @@ pub trait SearchBackend: Send + Sync {
         index: &str,
         doc_ids: &[String],
         batch_size: usize,
-    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>>;
+    ) -> BoxStream<'static, Result<Vec<EmbeddingDocument>, SearchError>>;
 
     /// Return the subset of `doc_ids` that already exist in the given index.
     ///

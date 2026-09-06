@@ -2,7 +2,7 @@
 
 A document search engine with optional hybrid (keyword + vector) search. It
 extracts text and metadata from documents using Apache Tika, indexes them in
-Meilisearch, and serves a web UI for searching across your corpus.
+OpenSearch (or optionally Meilisearch), and serves a web UI for searching across your corpus.
 
 This is a personal project used to iterate on ideas around document search
 and retrieval. It is not production software. If you need a production-grade
@@ -14,7 +14,7 @@ document search platform, look at
 
 - Ingest directories of documents (PDF, Office, email, archives) with
   automatic text extraction and recursive unpacking of nested files
-- Full-text search powered by Meilisearch
+- Full-text search powered by OpenSearch or Meilisearch
 - Optional hybrid search combining BM25 keyword scoring with vector
   similarity (via Ollama or any OpenAI-compatible embedding API), with
   an adjustable semantic ratio slider in the UI
@@ -41,7 +41,8 @@ document search platform, look at
 ## Requirements
 
 - Rust 1.91+ (to build from source)
-- OpenSearch 2.x+, or Meilisearch 1.x+ with `--features meilisearch`
+- OpenSearch 3.6 (the Docker Compose version), or Meilisearch 1.x+ with
+  `--features meilisearch`
 - Apache Tika 3.x
 - Node.js 22+ (to build the frontend)
 - Optional: Ollama or an OpenAI-compatible API for embeddings
@@ -238,6 +239,23 @@ automatically taken out of rotation and retried after a cooldown.
 Embedding documents for hybrid search requires either a running
 [Ollama](https://ollama.com/) instance or an API key for an
 OpenAI-compatible embedding service.
+
+On OpenSearch, hybrid search uses weighted reciprocal rank fusion (RRF):
+`semantic_ratio` controls the vector weight and `1 - semantic_ratio` controls
+the keyword weight. Zero runs keyword search without requesting embeddings;
+one runs vector search only. Intermediate values use a per-request pipeline,
+so concurrent users can choose different weights. Use the OpenSearch 3.6
+version pinned in Docker Compose for these features.
+
+Fusion and vector retrieval consider at least 1,000 candidates per shard,
+independent of page size, and expand for pages beyond that window up to
+`offset + limit = 10,000`. This trades additional retrieval work for a broader
+candidate pool. Rankings can change when paging beyond the initial window.
+API totals and facets currently describe keyword matches, including during
+hybrid search; they are not a count of all semantic matches.
+
+See [search quality assessment](docs/search-quality.md) and
+[relevance evaluation datasets](evaluation/README.md) for testing and limitations.
 
 ### Using Ollama
 

@@ -1,0 +1,8 @@
+Customer data retention notice
+
+We retain customer account information for seven years after account closure
+when it is needed for tax, contractual, or legal obligations. We delete or
+anonymise data that is no longer needed under the retention schedule.
+
+Backup copies follow a separate rolling recovery window and are not used to
+extend the legal retention period.
