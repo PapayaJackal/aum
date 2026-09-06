@@ -29,6 +29,17 @@ pub struct SearchResult {
     pub index: String,
 }
 
+/// Full document input for embedding, separate from highlighted search snippets.
+#[derive(Debug, Clone)]
+pub struct EmbeddingDocument {
+    /// Unique indexed document identifier.
+    pub doc_id: String,
+    /// Human-readable path for progress reporting.
+    pub display_path: String,
+    /// Complete stored document text, without highlighting or snippet truncation.
+    pub content: String,
+}
+
 // ---------------------------------------------------------------------------
 // Batch indexing result
 // ---------------------------------------------------------------------------

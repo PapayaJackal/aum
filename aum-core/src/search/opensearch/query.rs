@@ -130,14 +130,14 @@ pub(super) fn build_sort_clause(sort: &SortSpec) -> Option<Value> {
 /// Build an OpenSearch bool query for full-text search.
 ///
 /// Matches on `content` and `display_path`, with filename matches boosted above
-/// body matches so that a file named `budget.xlsx` ranks ahead of a document
-/// that merely mentions "budget" in its body. This mirrors the Meilisearch
-/// backend, where `display_path` is first in `searchable_attributes` and
-/// therefore wins ties via the `attribute` ranking rule.
+/// body matches. Terms are optional within each field so natural-language
+/// questions do not lose candidates because of an absent word. Filename
+/// matches retain their boost, favoring a file named `budget.xlsx` over a
+/// document that merely mentions "budget" in its body.
 pub(super) fn build_text_query(query: &str, filter_clauses: &[Value]) -> Value {
     let should = json!([
-        { "match": { "content":      { "query": query, "operator": "and" } } },
-        { "match": { "display_path": { "query": query, "operator": "and", "boost": 2 } } },
+        { "match": { "content":      { "query": query, "operator": "or" } } },
+        { "match": { "display_path": { "query": query, "operator": "or", "boost": 2 } } },
     ]);
     if filter_clauses.is_empty() {
         json!({
@@ -164,7 +164,7 @@ pub(super) fn build_text_query(query: &str, filter_clauses: &[Value]) -> Value {
 /// The k-NN query is wrapped in a `nested` query because `chunks` is a nested
 /// field; scoring uses `max` so the best-matching chunk determines the
 /// document's vector score. When filter clauses are present they are applied
-/// to the k-NN stage via the `filter` parameter (post-filter semantics).
+/// to the k-NN stage via the `filter` parameter during candidate selection.
 pub(super) fn build_knn_query(vector: &[f32], limit: usize, filter_clauses: &[Value]) -> Value {
     let mut knn = json!({
         "vector": vector,
@@ -182,6 +182,53 @@ pub(super) fn build_knn_query(vector: &[f32], limit: usize, filter_clauses: &[Va
             }
         }
     })
+}
+
+/// Keep the fusion pool independent of ordinary UI page sizes. Beyond this
+/// window, expand to the requested page (up to the engine's k-NN limit).
+const HYBRID_CANDIDATES: usize = 1000;
+
+#[allow(clippy::too_many_arguments)]
+#[expect(clippy::float_cmp, reason = "one is the explicit vector-only endpoint")]
+pub(super) fn build_hybrid_body(
+    query: &str,
+    vector: &[f32],
+    ratio: f32,
+    limit: usize,
+    offset: usize,
+    filters: &FilterMap,
+    max_highlight_offset: u64,
+) -> Result<Value, crate::search::types::SearchError> {
+    let end = offset.saturating_add(limit);
+    if end > 10_000 {
+        return Err(crate::search::types::SearchError::Internal(
+            "Hybrid search supports offset + limit up to 10000".into(),
+        ));
+    }
+    let depth = HYBRID_CANDIDATES.max(end);
+    let clauses = build_filter_clauses(filters);
+    let knn = build_knn_query(vector, depth, &clauses);
+    let mut body = json!({
+        "size": limit, "from": offset,
+        "_source": {"excludes": ["chunks.embedding"]},
+        "highlight": build_highlight(max_highlight_offset),
+    });
+    if ratio == 1.0 {
+        body["query"] = knn;
+    } else {
+        body["query"] = json!({"hybrid": {
+            "queries": [build_text_query(query, &clauses), knn],
+            "pagination_depth": depth
+        }});
+        // Per-request weights avoid races between concurrent users' sliders.
+        body["search_pipeline"] = json!({"phase_results_processors": [{
+            "score-ranker-processor": {"combination": {
+                "technique": "rrf", "rank_constant": 60,
+                "parameters": {"weights": [1.0 - ratio, ratio]}
+            }}
+        }]});
+    }
+    Ok(body)
 }
 
 #[allow(clippy::doc_markdown)]
@@ -288,6 +335,18 @@ mod tests {
         DOC_TYPE_ATTACHMENT, FACET_CREATED, FACET_DOCUMENT_TYPE, FACET_FILE_TYPE,
     };
     use crate::search::types::SortSpec;
+
+    #[test]
+    fn hybrid_candidate_pool_covers_later_pages_and_bounds_engine_limits() -> anyhow::Result<()> {
+        let filters = FilterMap::new();
+        for (offset, expected) in [(0, 1000), (20, 1000), (1000, 1020)] {
+            let body = build_hybrid_body("query", &[1.0], 0.5, 20, offset, &filters, 1000)?;
+            assert_eq!(body["query"]["hybrid"]["pagination_depth"], expected);
+        }
+        assert!(build_hybrid_body("q", &[1.0], 0.5, 20, 9990, &filters, 1000).is_err());
+        assert!(build_hybrid_body("q", &[1.0], 0.5, 20, usize::MAX, &filters, 1000).is_err());
+        Ok(())
+    }
 
     #[test]
     fn filter_clauses_empty_for_empty_map() {

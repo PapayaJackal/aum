@@ -25,7 +25,8 @@ use crate::search::constants::{
     FACET_FIELDS, HIGHLIGHT_POST_TAG, HIGHLIGHT_PRE_TAG, REVERSE_FACET_FIELDS,
 };
 use crate::search::types::{
-    BatchIndexResult, FacetMap, FilterMap, SearchError, SearchRequest, SearchResult, SortSpec,
+    BatchIndexResult, EmbeddingDocument, FacetMap, FilterMap, SearchError, SearchRequest,
+    SearchResult, SortSpec,
 };
 
 use batching::{MAX_PAYLOAD_BYTES, split_by_payload_size};
@@ -283,13 +284,15 @@ impl SearchBackend for MeilisearchBackend {
         &self,
         index: &str,
         batch_size: usize,
-    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+    ) -> BoxStream<'static, Result<Vec<EmbeddingDocument>, SearchError>> {
         scroll_cursor(
             &self.client,
             index.to_owned(),
             "has_embeddings = false".to_owned(),
             batch_size,
         )
+        .map(|batch| batch.map(embedding_documents))
+        .boxed()
     }
 
     fn scroll_documents(
@@ -297,7 +300,7 @@ impl SearchBackend for MeilisearchBackend {
         index: &str,
         doc_ids: &[String],
         batch_size: usize,
-    ) -> BoxStream<'static, Result<Vec<SearchResult>, SearchError>> {
+    ) -> BoxStream<'static, Result<Vec<EmbeddingDocument>, SearchError>> {
         if doc_ids.is_empty() {
             return futures::stream::empty().boxed();
         }
@@ -330,7 +333,7 @@ impl SearchBackend for MeilisearchBackend {
             }
         });
 
-        stream.boxed()
+        stream.map(|batch| batch.map(embedding_documents)).boxed()
     }
 
     #[instrument(skip(self, updates), fields(index, update_count = updates.len()))]
@@ -896,4 +899,15 @@ async fn fetch_filter_page(
         .iter()
         .filter_map(|h| parse_hit(&h.result, index, None, None))
         .collect())
+}
+
+/// Unformatted Meilisearch scroll hits contain full content in `snippet`.
+fn embedding_documents(hits: Vec<SearchResult>) -> Vec<EmbeddingDocument> {
+    hits.into_iter()
+        .map(|hit| EmbeddingDocument {
+            doc_id: hit.doc_id,
+            display_path: hit.display_path,
+            content: hit.snippet,
+        })
+        .collect()
 }

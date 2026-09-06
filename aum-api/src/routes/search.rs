@@ -190,19 +190,7 @@ pub async fn search(
     OptionalUser(user): OptionalUser,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, ApiError> {
-    if params.q.is_empty() {
-        return Err(ApiError::BadRequest(
-            "Query parameter 'q' is required".into(),
-        ));
-    }
-    if params.limit == 0 || params.limit > 200 {
-        return Err(ApiError::BadRequest(
-            "limit must be between 1 and 200".into(),
-        ));
-    }
-    if params.offset > 100_000 {
-        return Err(ApiError::BadRequest("offset must be at most 100000".into()));
-    }
+    validate_search_params(&params, state.config.search_backend)?;
 
     let indices = resolve_indices(&params.index, &state.config.server.default_index);
     futures::future::try_join_all(
@@ -228,7 +216,10 @@ pub async fn search(
         offset: params.offset,
         filters: &filters,
         sort,
-        include_facets,
+        // Search streams contain hits only; count_fut below supplies facets.
+        // Avoid computing and discarding a second set of aggregations,
+        // particularly on the expensive hybrid query.
+        include_facets: false,
     };
 
     // Hoist vector outside the match so it lives long enough for the stream.
@@ -236,6 +227,9 @@ pub async fn search(
     let ratio;
     let stream = match params.search_type {
         SearchType::Text => state.backend.search_text(request),
+        SearchType::Hybrid if params.semantic_ratio == Some(0.0) => {
+            state.backend.search_text(request)
+        }
         SearchType::Hybrid => {
             vector = embed_query(&state, &indices, &params.q).await?;
             ratio = params.semantic_ratio.unwrap_or(0.5);
@@ -289,6 +283,46 @@ pub async fn search(
         total,
         facets,
     }))
+}
+
+/// Validate search input before model lookup or backend requests.
+fn validate_search_params(
+    params: &SearchParams,
+    backend: aum_core::config::SearchBackendType,
+) -> Result<(), ApiError> {
+    if params.q.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "Query parameter 'q' is required".into(),
+        ));
+    }
+    if params.limit == 0 || params.limit > 200 {
+        return Err(ApiError::BadRequest(
+            "limit must be between 1 and 200".into(),
+        ));
+    }
+    if params.offset > 100_000 {
+        return Err(ApiError::BadRequest("offset must be at most 100000".into()));
+    }
+
+    if let Some(ratio) = params.semantic_ratio
+        && (!ratio.is_finite() || !(0.0..=1.0).contains(&ratio))
+    {
+        return Err(ApiError::BadRequest(
+            "semantic_ratio must be between 0 and 1".into(),
+        ));
+    }
+
+    if matches!(params.search_type, SearchType::Hybrid)
+        && params.semantic_ratio != Some(0.0)
+        && matches!(backend, aum_core::config::SearchBackendType::OpenSearch)
+        && params.offset.saturating_add(params.limit) > 10_000
+    {
+        return Err(ApiError::BadRequest(
+            "Hybrid search supports offset + limit up to 10000".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Sort the values of a facet by count descending, returning just the value strings.
@@ -361,10 +395,14 @@ async fn embed_query(
             })?;
 
         if let Some(ref existing) = model_info {
-            if existing.model != info.model || existing.backend != info.backend {
+            if existing.model != info.model
+                || existing.backend != info.backend
+                || existing.dimension != info.dimension
+                || existing.query_prefix != info.query_prefix
+            {
                 return Err(ApiError::BadRequest(format!(
                     "Embedding model mismatch: index '{}' uses '{}/{}' but index '{idx}' uses '{}/{}'. \
-                     Hybrid search requires all indices to use the same embedding model.",
+                     Hybrid search requires matching model, backend, dimensions, and query prefix.",
                     indices[0], existing.backend, existing.model, info.backend, info.model,
                 )));
             }
@@ -774,4 +812,47 @@ pub async fn preview_document(
         .header("Content-Security-Policy", csp)
         .body(body)
         .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+#[cfg(test)]
+mod search_validation_tests {
+    use super::*;
+    use aum_core::config::SearchBackendType;
+
+    #[test]
+    fn rejects_invalid_ratios_and_blank_queries() -> anyhow::Result<()> {
+        let mut params: SearchParams = serde_json::from_value(serde_json::json!({"q": "budget"}))?;
+        for ratio in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            params.semantic_ratio = Some(ratio);
+            assert!(matches!(
+                validate_search_params(&params, SearchBackendType::OpenSearch),
+                Err(ApiError::BadRequest(_))
+            ));
+        }
+        params.semantic_ratio = Some(0.5);
+        params.q = "  \n ".into();
+        assert!(matches!(
+            validate_search_params(&params, SearchBackendType::OpenSearch),
+            Err(ApiError::BadRequest(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_window_limit_applies_only_to_opensearch_vector_requests() -> anyhow::Result<()> {
+        let mut params: SearchParams = serde_json::from_value(serde_json::json!({
+            "q": "budget", "type": "hybrid", "offset": 9990, "limit": 20
+        }))?;
+        assert!(matches!(
+            validate_search_params(&params, SearchBackendType::OpenSearch),
+            Err(ApiError::BadRequest(_))
+        ));
+        assert!(validate_search_params(&params, SearchBackendType::Meilisearch).is_ok());
+        params.semantic_ratio = Some(0.0);
+        assert!(validate_search_params(&params, SearchBackendType::OpenSearch).is_ok());
+        params.semantic_ratio = Some(1.0);
+        params.offset = 9980;
+        assert!(validate_search_params(&params, SearchBackendType::OpenSearch).is_ok());
+        Ok(())
+    }
 }
