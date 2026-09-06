@@ -12,9 +12,12 @@ services:
 
   tika:
     restart: "always"
-    image: docker.io/apache/tika:3.3.0.0-full
+    image: docker.io/apache/tika:4.0.0-1-full
+    command: -c /tika-config.json
     ports:
       - "9998:9998"
+    volumes:
+      - ./tika-config.json:/tika-config.json:ro
 
   opensearch:
     restart: "always"
