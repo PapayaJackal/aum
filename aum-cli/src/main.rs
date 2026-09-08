@@ -28,6 +28,10 @@ struct Cli {
 enum Commands {
     /// Display the resolved configuration.
     Config,
+    /// Create a starter configuration and first administrator.
+    Setup(commands::setup::SetupArgs),
+    /// Check local files and supporting services.
+    Doctor,
     /// List all search indices and their document counts.
     Indices,
     /// Create or update a search index.
@@ -83,6 +87,9 @@ async fn run() -> anyhow::Result<()> {
     // Load config and initialise the global MultiProgress before starting the
     // tracing subscriber, so all log output is routed through indicatif and
     // never corrupts an active progress bar.
+    if let Commands::Setup(args) = &cli.command {
+        return commands::setup::run(args).await;
+    }
     let config = aum_core::config::load_config().unwrap_or_else(|e| {
         eprintln!("error: failed to load config: {e}");
         std::process::exit(1);
@@ -98,6 +105,8 @@ async fn run() -> anyhow::Result<()> {
     debug!("configuration loaded");
 
     match cli.command {
+        Commands::Setup(_) => unreachable!(),
+        Commands::Doctor => commands::doctor::run(&config).await?,
         Commands::Config => {
             commands::config::run(&config);
         }

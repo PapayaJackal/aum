@@ -13,3 +13,5 @@ result
 frontend/tests/test-results/
 frontend/test-results/
 frontend/playwright-report/
+/aum.toml
+/documents/

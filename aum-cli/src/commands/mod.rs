@@ -12,3 +12,6 @@ pub mod resume;
 pub mod retry;
 pub mod search;
 pub mod user;
+
+pub mod doctor;
+pub mod setup;
