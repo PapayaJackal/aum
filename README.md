@@ -51,7 +51,7 @@ mkdir -p documents
 docker compose build aum
 docker compose run --rm --no-deps aum setup --admin admin --generate-password
 docker compose up -d --wait
-docker compose exec aum doctor
+docker compose exec aum aum doctor
 ```
 
 Save the generated password, then log in at `http://localhost:8000` as `admin`.
@@ -61,9 +61,12 @@ again preserves the configuration and existing administrator credentials.
 Ingest your documents and try a search:
 
 ```sh
-docker compose exec aum ingest documents /documents
-docker compose exec aum search documents "your search phrase"
+docker compose exec aum aum ingest documents /documents
+docker compose exec aum aum search documents "your search phrase"
 ```
+
+Newly ingested documents may take a few seconds to appear in search while
+OpenSearch refreshes its index.
 
 The documents mount is read-only. To use another directory, set
 `AUM_DOCUMENTS_DIR=/absolute/path/to/documents` before running Compose. Keep that
