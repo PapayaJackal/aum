@@ -2,7 +2,7 @@
 
 A document search engine with optional hybrid (keyword + vector) search. It
 extracts text and metadata from documents using Apache Tika, indexes them in
-OpenSearch (or optionally Meilisearch), and serves a web UI for searching across your corpus.
+OpenSearch (or Meilisearch), and serves a web UI for searching across your corpus.
 
 This is a personal project used to iterate on ideas around document search
 and retrieval. It is not production software. If you need a production-grade
@@ -38,54 +38,81 @@ document search platform, look at
 - CLI-first administration
 - All application state stored in a single portable SQLite database
 
-## Requirements
+## Getting started (Docker Compose)
 
-- Rust 1.91+ (to build from source)
-- Apache Tika 4.0+
-- OpenSearch 3.6 (the Docker Compose version), or Meilisearch 1.x+ with
-  `--features meilisearch`
-- Node.js 22+ (to build the frontend)
-- Optional: Ollama or an OpenAI-compatible API for embeddings
-
-## Getting started
-
-Start the supporting services (OpenSearch and Tika) with Docker Compose:
+Install Docker with Docker Compose, then clone this repository. Rust and Node
+are only needed for building directly from source; Docker builds the bundled app.
+The first image build can take several minutes. Allow memory for OpenSearch's
+1 GiB heap plus Tika and the application.
 
 ```sh
-docker compose up -d
+mkdir -p documents
+# Put the documents you want to search in ./documents.
+docker compose build aum
+docker compose run --rm --no-deps aum setup --admin admin --generate-password
+docker compose up -d --wait
+docker compose exec aum aum doctor
 ```
 
-Build the frontend:
+Save the generated password, then log in at `http://localhost:8000` as `admin`.
+Setup creates a starter configuration and the first administrator. Running it
+again preserves the configuration and existing administrator credentials.
+
+Ingest your documents and try a search:
 
 ```sh
+docker compose exec aum aum ingest documents /documents
+docker compose exec aum aum search documents "your search phrase"
+```
+
+Newly ingested documents may take a few seconds to appear in search while
+OpenSearch refreshes its index.
+
+The documents mount is read-only. To use another directory, set
+`AUM_DOCUMENTS_DIR=/absolute/path/to/documents` before running Compose. Keep that
+value set for subsequent Compose commands. Application state and search data
+persist in named volumes. `docker compose down` stops the stack without deleting
+them; adding `--volumes` deletes the stored data.
+
+The local stack exposes the UI, OpenSearch, and Tika only on localhost. It disables
+OpenSearch authentication and is intended for local use.
+
+If startup fails, run `docker compose logs opensearch tika aum`. If OpenSearch
+reports a `vm.max_map_count` bootstrap error, increase that host kernel setting
+as directed in its error message and restart the stack. `aum doctor` prints
+individual PASS/FAIL checks and exits nonzero when a required check fails.
+
+## Building from source
+
+Requirements: Rust 1.91+, Node.js 22.12+, a C toolchain, pkg-config, OpenSSL and
+SQLite development libraries, plus OpenSearch and Apache Tika. The Compose file
+pins the supporting service versions used by the local stack.
+
+```sh
+docker compose up -d --wait opensearch tika
 cd frontend && npm ci && npm run build && cd ..
+cargo build --release --locked
+./target/release/aum setup
+./target/release/aum doctor
+./target/release/aum serve
 ```
 
-Build the binaries:
+`aum setup` prompts for an administrator username and password. For unattended
+setup, use `aum setup --admin admin --generate-password` and save the printed
+password. Run source-build commands from the repository root so the configuration,
+data directory, and frontend assets resolve consistently.
+
+Then, in another terminal:
 
 ```sh
-cargo build --release
+./target/release/aum ingest documents /path/to/documents
 ```
 
-Create an admin user:
-
-```sh
-./target/release/aum user create admin --admin --generate-password
-```
-
-Start the server:
-
-```sh
-./target/release/aum-api serve
-```
-
-The web UI will be available at `http://localhost:8000`.
-
-Ingest a directory of documents:
-
-```sh
-./target/release/aum ingest <index> /path/to/documents
-```
+For a portable binary with the frontend embedded, build with
+`cargo build --release --locked --features bundle-frontend`.
+Meilisearch is an alternative backend: build with
+`--features meilisearch` and set `AUM_SEARCH_BACKEND=meilisearch`.
+Embeddings are optional; see Hybrid search below.
 
 ## NixOS
 
@@ -98,9 +125,8 @@ nix build
 ./result/bin/aum --help
 ```
 
-The first build requires discovering the npm dependency hash. Run
-`nix build .#frontend` — it will fail and print the correct hash; paste it
-into the `fetchNpmDeps.hash` field in `flake.nix`, then run `nix build` again.
+The frontend dependency hash is included in the flake; no source edits are
+needed for a normal build.
 
 ### NixOS module
 
@@ -119,7 +145,7 @@ inputs.aum.url = "github:PapayaJackal/aum";
     settings = {
       server.base_url = "https://search.example.com";
       server.port = 8000;
-      meilisearch.url = "http://localhost:7700";
+      opensearch.url = "http://localhost:9200";
       auth.public_mode = false;
     };
   };
@@ -156,7 +182,11 @@ aum reads configuration from these sources, in order of priority:
 
 1. Environment variables with the `AUM_` prefix
 2. An `aum.toml` file in the working directory
-3. A `.env` file in the working directory
+3. Compiled-in defaults
+
+The application does not load `.env` files. Export `AUM_*` variables in your
+shell or put settings in `aum.toml`. Docker Compose uses `.env` for its own
+interpolation; it does not automatically pass those variables to aum.
 
 Run `aum config` to print the resolved configuration.
 
@@ -190,6 +220,8 @@ Key settings:
 All administration is done through the CLI. The web UI is only for
 searching.
 
+- `aum setup` -- Create starter configuration and the first administrator
+- `aum doctor` -- Check data-directory writes, frontend assets, search, and Tika
 - `aum serve` -- Start the web server
 - `aum ingest <index> <directory>` -- Ingest documents from a directory
 - `aum resume [job_id]` -- Resume an interrupted ingest or embedding job
@@ -222,11 +254,11 @@ distribute extraction across them with per-instance concurrency limits:
 
 ```toml
 # aum.toml
-[[tika_instances]]
+[[tika.instances]]
 url = "http://tika1:9998"
 concurrency = 4
 
-[[tika_instances]]
+[[tika.instances]]
 url = "http://tika2:9998"
 concurrency = 4
 ```

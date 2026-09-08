@@ -11,6 +11,7 @@ name = "aum"
 path = "src/main.rs"
 
 [features]
+meilisearch = ["aum-core/meilisearch"]
 dhat-heap = ["dep:dhat"]
 bundle-frontend = ["aum-api/bundle-frontend"]
 
@@ -32,3 +33,6 @@ owo-colors = { workspace = true }
 dhat = { workspace = true, optional = true }
 rpassword = { workspace = true }
 aum-api = { path = "../aum-api" }
+
+reqwest.workspace = true
+tempfile.workspace = true
