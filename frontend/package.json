@@ -11,7 +11,7 @@
     "test": "npm --prefix tests test"
   },
   "dependencies": {
-    "@lucide/svelte": "^1.41.0",
+    "@lucide/svelte": "^1.42.0",
     "bits-ui": "^2.19.0",
     "clsx": "^2.1.1",
     "dompurify": "^3.4.14",
