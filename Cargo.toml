@@ -62,7 +62,7 @@ utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 ammonia = "4"
 mime_guess = "2"
-mailparse = "0.16"
+mailparse = "0.17"
 regex = "1"
 base64ct = { version = "1", features = ["alloc"] }
 proc-macro2 = "1"
